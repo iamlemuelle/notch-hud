@@ -187,3 +187,93 @@ empty, and follows the same symlink, backup, permission and temp-file rules.
 
 `scripts/uninstall-login.sh [plist]` runs `launchctl bootout gui/<uid>/com.lem.notch-hud` (failure ignored), deletes the
 plist if present, and exits 0, also when nothing was installed.
+
+## 7. Now Playing (`src-tauri/src/media.rs`)
+
+Read-only in this version: the panel shows what is playing. Play, pause, next and seek come with click routing.
+
+### Sources, in order
+
+1. **Adapter** (primary). The vendored `mediaremote-adapter` (see `vendor/VENDORED.md`), built by
+   `scripts/build-adapter.sh` into a directory holding `mediaremote-adapter.pl`, `MediaRemoteAdapter.framework` and
+   `MediaRemoteAdapterTestClient`. That directory is `$NOTCH_MEDIA_ADAPTER` if set and non-empty, else `../adapter`
+   next to the running binary (`src-tauri/target/adapter` for both build profiles). It reports any app macOS lists
+   as Now Playing, browsers included, so YouTube in Chrome or Safari shows up as that browser.
+   - Usable when `/usr/bin/perl <dir>/mediaremote-adapter.pl <dir>/MediaRemoteAdapter.framework
+     <dir>/MediaRemoteAdapterTestClient test` exits 0 within 5 s.
+   - Then runs `... stream --micros --no-diff --debounce=100` and reads one JSON object per stdout line.
+2. **AppleScript** (fallback, when the adapter is not usable). Every 2 s, for each of Music (`pgrep -x Music`) and
+   Spotify (`pgrep -x Spotify`) that is running, one `osascript` call prints one tab-separated line per app:
+   `<music|spotify>\t<playing|paused|stopped>\t<title>\t<artist>\t<album>\t<duration s>\t<position s>\t<artwork url or empty>`.
+   Stderr containing `-1743` means Automation access was refused: health `denied`, no retry until the next poll.
+
+When the adapter stream exits, the provider waits `backoff(attempt)` (1 s doubling, capped at 60 s, attempt resets
+after a stream that lived 60 s or more), runs `test` again and picks a source again. A panic inside the provider is
+caught; it logs `media: Failed: <reason>` to stderr and restarts under the same backoff. When the adapter is not
+usable it logs `media: adapter Failed (<reason>), using AppleScript` once per switch.
+
+### Model
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Track {
+    pub title: String,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub app: String,                 // app_name(...)
+    pub bundle_id: String,
+    pub playing: bool,
+    pub duration_ms: Option<u64>,
+    pub elapsed_ms: Option<u64>,     // position at elapsed_at_ms
+    pub elapsed_at_ms: Option<u64>,  // Unix epoch milliseconds
+    pub artwork: Option<String>,     // "data:<mime>;base64,<data>" or an https URL
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Via { Adapter, Applescript, None }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Health { Ok, Denied, Failed }
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Media { pub via: Via, pub health: Health, pub track: Option<Track> }
+```
+
+### Pure functions
+
+- `parse_adapter_line(line: &str) -> Result<Option<Track>, String>`. Input is one stream line,
+  `{"type":"data","diff":false,"payload":{...}}`. `Err` for invalid JSON, a `type` other than `"data"`, or
+  `diff: true`. `Ok(None)` for an empty payload or one without a non-empty `title`. Otherwise `Ok(Some)` with:
+  `bundle_id` = `bundleIdentifier`; `app` = `app_name(bundleIdentifier, parentApplicationBundleIdentifier)`;
+  `playing` = `playing` (false if absent); `duration_ms` = `durationMicros / 1000`; `elapsed_ms` =
+  `elapsedTimeMicros / 1000`; `elapsed_at_ms` = `timestampEpochMicros / 1000` (each `None` if absent);
+  `artwork` = `data:<artworkMimeType>;base64,<artworkData>` only when both are present and non-empty.
+  Real recorded lines are in `tests/media/fixtures/adapter-stream.jsonl`.
+- `app_name(bundle_id: &str, parent: Option<&str>) -> String`. Looks up `parent` when given, else `bundle_id`:
+  `com.apple.Music` Apple Music, `com.spotify.client` Spotify, `com.google.Chrome` Chrome, `com.apple.Safari`
+  Safari, `company.thebrowser.Browser` Arc, `org.mozilla.firefox` Firefox, `com.microsoft.edgemac` Edge,
+  `com.brave.Browser` Brave, `com.apple.podcasts` Podcasts, `com.apple.QuickTimePlayerX` QuickTime Player.
+  Anything else returns the looked-up identifier unchanged.
+- `parse_applescript(out: &str, now_ms: u64) -> Option<Track>`. Reads the lines above. Picks the first `playing`
+  line, else the first `paused` line; `stopped`, malformed lines (fewer than 8 fields, unknown app, unparsable
+  numbers) and empty titles are skipped. `music` maps to `com.apple.Music` / Apple Music, `spotify` to
+  `com.spotify.client` / Spotify. Seconds become milliseconds (rounded); `elapsed_at_ms` = `now_ms`; empty artist,
+  album or artwork become `None`.
+- `applescript_denied(stderr: &str) -> bool`: true when `stderr` contains `-1743`.
+- `backoff(attempt: u32) -> std::time::Duration`: `min(2^attempt, 60)` seconds.
+
+### App and UI
+
+- The app keeps the latest `Media` and emits `media` with it whenever it changes; the `media` command returns it
+  (`null` before the first update).
+- Expanded height adds 108 pt when `track` is set, or 22 pt when `track` is null and `health` is `denied`:
+  `44 + extra + 22 * max(rows.len(), 1) + 14`.
+- Collapsed right ear: `⚠ <attention>` when `attention > 0` (unchanged), else, when a track is set, its artwork
+  (18 pt square, or 26 × 15 pt when the artwork is at least 1.3 times wider than tall) and four equalizer bars while
+  playing or a pause glyph while paused.
+- Expanded: below the ear band, the artwork (64 pt square, or 112 × 63 pt when wide), title, artist and app name,
+  then a progress bar with elapsed and remaining time (`h:mm:ss` from one hour) that the page advances while
+  playing: `elapsed_ms + (now - elapsed_at_ms)`, clamped to `duration_ms`. Session rows follow. With `denied`, one
+  muted line: `Music access is off: allow notch-hud in System Settings, Privacy & Security, Automation`.
