@@ -85,6 +85,15 @@ drv() {
   return 0
 }
 
+# Hovers the panel open again before a step, so each step starts from an expanded panel whatever the cursor did since.
+rehover() {
+  local out rc
+  out="$("$drive" hover "$app" 2>&1)"; rc=$?
+  [ "$rc" -eq 2 ] && { echo "SKIP $out"; exit 2; }
+  [ "$rc" -ne 0 ] && { flunk "panel expands again before $1"; echo "$out"; }
+  return 0
+}
+
 # Checks that the frontmost app is still the one the test started with and that no `act` failed.
 steady() {
   local name="$1" now
@@ -106,23 +115,26 @@ expect() {
 mark() { fm="$(lines "$fxlog")"; am="$(lines "$applog")"; }
 
 # 1. play/pause pauses, then plays again.
-mark; drv click "$app" "$x_play" "$y_ctl" || flunk "click play/pause"
+rehover pause; mark; drv click "$app" "$x_play" "$y_ctl" || flunk "click play/pause"
 expect "pause" 'fixture: toggle paused' 'media: act toggle ok' 'media: adapter ok paused "Ctl Song"'
 
-mark; drv click "$app" "$x_play" "$y_ctl" || flunk "click play/pause again"
+rehover play; mark; drv click "$app" "$x_play" "$y_ctl" || flunk "click play/pause again"
 expect "play" 'fixture: toggle playing' 'media: act toggle ok' 'media: adapter ok playing "Ctl Song"'
 
 # 2. next switches to the second track.
-mark; drv click "$app" "$x_next" "$y_ctl" || flunk "click next"
+rehover next; mark; drv click "$app" "$x_next" "$y_ctl" || flunk "click next"
 expect "next" 'fixture: next "Ctl Song II"' 'media: act next ok' 'media: adapter ok playing "Ctl Song II"'
 
 # 3. previous straight away (shown elapsed is under 3 s) is a real previous, not a restart.
-mark; drv click "$app" "$x_prev" "$y_ctl" || flunk "click previous"
+rehover previous; mark; drv click "$app" "$x_prev" "$y_ctl" || flunk "click previous"
 expect "previous" 'fixture: previous "Ctl Song"' 'media: act previous ok' 'media: adapter ok playing "Ctl Song"'
 
 # 4. a drag on the seek bar from 25 % to 50 % sends exactly one seek, near 50 % of 223000 ms.
-mark
-drv drag "$app" $((bar_left + bar_w / 4)) $((bar_left + bar_w / 2)) "$y_bar" 12 || flunk "drag seek bar"
+rehover seek; mark
+"$drive" drag "$app" $((bar_left + bar_w / 4)) $((bar_left + bar_w / 2)) "$y_bar" 12 2>"$tmp/drag.log"; rc=$?
+[ "$rc" -eq 2 ] && { echo "SKIP $(cat "$tmp/drag.log")"; exit 2; }
+[ "$rc" -ne 0 ] && flunk "drag seek bar"
+sed 's/^/note: /' "$tmp/drag.log"
 if wait_for "$applog" 5 'media: act seek ' "$am"; then
   sleep 1
   seeks="$(tail -n +$((am + 1)) "$applog" | grep -E '^media: act seek [0-9]+ ok$')"

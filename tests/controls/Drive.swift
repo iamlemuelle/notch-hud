@@ -40,7 +40,10 @@ func panel(of pid: Int32) -> CGRect? {
 // The test is only valid when the click lands on the test app's own window.
 func requireTopmost(_ pid: Int32, at p: CGPoint) {
     guard let top = windows().first(where: { $0.bounds.contains(p) }) else { die(2, "no window under (\(p.x), \(p.y))") }
-    if top.pid != pid { die(2, "the window under (\(Int(p.x)), \(Int(p.y))) belongs to pid \(top.pid), not the test app \(pid): another notch-hud on top?") }
+    if top.pid != pid {
+        let cursor = CGEvent(source: nil)?.location ?? .zero
+        die(2, "the window under (\(Int(p.x)), \(Int(p.y))) belongs to pid \(top.pid), not the test app \(pid) (its panel: \(panel(of: pid).map { "\($0)" } ?? "none"), cursor at \(cursor)): another notch-hud on top, or the panel collapsed?")
+    }
 }
 
 func post(_ type: CGEventType, _ p: CGPoint) {
@@ -49,6 +52,11 @@ func post(_ type: CGEventType, _ p: CGPoint) {
     }
     if type != .mouseMoved { e.setIntegerValueField(.mouseEventClickState, value: 1) }
     e.post(tap: .cghidEventTap)
+}
+
+// Front-to-back owners of the windows under p, for diagnostics.
+func stack(at p: CGPoint) -> String {
+    windows().filter { $0.bounds.contains(p) }.prefix(3).map { "\($0.pid)@\($0.layer) \(Int($0.bounds.width))x\(Int($0.bounds.height))" }.joined(separator: " > ")
 }
 
 func pump(_ s: Double) { RunLoop.current.run(until: Date().addingTimeInterval(s)) }
@@ -121,13 +129,17 @@ case "drag":
     let x0 = num(3), x1 = num(4), y = num(5), steps = max(10, Int(num(6)))
     requireTopmost(pid, at: CGPoint(x: x0, y: y))
     post(.mouseMoved, CGPoint(x: x0, y: y)); pump(0.15)
-    post(.leftMouseDown, CGPoint(x: x0, y: y)); pump(0.08)
+    let start = CGPoint(x: x0, y: y), end = CGPoint(x: x1, y: y)
+    FileHandle.standardError.write("drag: before down: \(stack(at: start))\n".data(using: .utf8)!)
+    post(.leftMouseDown, start); pump(0.08)
+    FileHandle.standardError.write("drag: after down: \(stack(at: start))\n".data(using: .utf8)!)
     for i in 1...steps {
         post(.leftMouseDragged, CGPoint(x: x0 + (x1 - x0) * Double(i) / Double(steps), y: y))
         pump(0.03)
     }
     pump(0.08)
-    post(.leftMouseUp, CGPoint(x: x1, y: y)); pump(0.1)
+    FileHandle.standardError.write("drag: before up: \(stack(at: end))\n".data(using: .utf8)!)
+    post(.leftMouseUp, end); pump(0.1)
 
 default:
     die(2, "unknown command \(a[1])")
