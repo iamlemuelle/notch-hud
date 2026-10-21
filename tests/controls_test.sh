@@ -99,7 +99,7 @@ steady() {
   local name="$1" now
   now="$("$drive" front)"
   if [ "$now" = "$front0" ]; then pass "$name: frontmost app unchanged ($front0)"; else flunk "$name: frontmost app changed from [$front0] to [$now]"; fi
-  if grep -q 'media: act .* failed' "$applog"; then flunk "$name: an act failed"; grep 'media: act .* failed' "$applog"; fi
+  if tail -n +$((am + 1)) "$applog" | grep -q 'media: act .* failed'; then flunk "$name: an act failed"; tail -n +$((am + 1)) "$applog" | grep 'media: act .* failed'; fi
 }
 
 # step <name> <fixture line> <app line>...: the caller has already done the click and set $fm and $am marks.
@@ -148,6 +148,11 @@ fi
 fxseek="$(tail -n +$((fm + 1)) "$fxlog" | grep -E '^fixture: seek [0-9.]+$' | tail -n 1 | awk '{print $3}')"
 if [ -n "$fxseek" ] && awk -v s="$fxseek" 'BEGIN { exit !(s >= 100 && s <= 123) }'; then pass "seek: fixture seeked to $fxseek s"; else flunk "seek: fixture seek [$fxseek] s, want 100..123"; fi
 steady "seek"
+
+# 4b. once the shown elapsed is over 3 s, previous restarts the track: a seek to 0, not a previous track.
+sleep 3.5
+rehover restart; mark; drv click "$app" "$x_prev" "$y_ctl" || flunk "click previous (restart)"
+expect "restart" 'fixture: seek 0.0' 'media: act seek 0 ok'
 
 # 5. the test app was never activated, and nothing else was either.
 sleep 0.5
