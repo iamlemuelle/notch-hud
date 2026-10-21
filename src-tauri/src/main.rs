@@ -121,6 +121,11 @@ fn adopt_panel(mtm: MainThreadMarker, window: &WebviewWindow) {
     PANEL.with(|p| *p.borrow_mut() = Some(panel));
 }
 
+/// Main thread only. The panel's frame, or `None` before it exists.
+fn panel_frame() -> Option<NSRect> {
+    PANEL.with(|p| p.borrow().as_ref().map(|panel| panel.frame()))
+}
+
 fn notched_screen(mtm: MainThreadMarker) -> Option<Notch> {
     NSScreen::screens(mtm).iter().find_map(|s| Notch::read(&s))
 }
@@ -192,16 +197,15 @@ fn place_soon(app: &AppHandle) {
 // The webview gets no mouse events while this non-key window belongs to a background app,
 // so hover is decided natively from the global cursor position, against the shape the page shows.
 fn track_hover(app: &AppHandle) {
-    let Some(mtm) = MainThreadMarker::new() else { return };
-    let Some(notch) = notched_screen(mtm) else { return };
+    let Some(frame) = panel_frame() else { return };
     let Some(layout) = *LAYOUT.lock().unwrap_or_else(|e| e.into_inner()) else { return };
     let hit = SURFACE.lock().unwrap_or_else(|e| e.into_inner()).hit;
-    let frame = notch.rect(layout::shape_size(&layout, hit));
+    // Every rect shares the window's horizontal center and top edge, so the hit rect follows from the frame.
+    let size = layout::shape_size(&layout, hit);
+    let center = frame.origin.x + frame.size.width / 2.0;
+    let top = frame.origin.y + frame.size.height;
     let p = NSEvent::mouseLocation();
-    let over = p.x >= frame.origin.x
-        && p.x <= frame.origin.x + frame.size.width
-        && p.y >= frame.origin.y
-        && p.y <= frame.origin.y + frame.size.height;
+    let over = (p.x - center).abs() <= size.width / 2.0 && p.y <= top && p.y >= top - size.height;
     // A press that starts inside a grown shape keeps hover on until release, so a seek drag that overshoots the
     // bar does not collapse the panel. A press that starts elsewhere is never latched.
     let down = NSEvent::pressedMouseButtons() & 1 != 0;
