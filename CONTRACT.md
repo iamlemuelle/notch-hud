@@ -148,8 +148,7 @@ The app calls it before each `read_dir`.
   collection behavior and no shadow as above, a clear background and `opaque = false`. The Tauri window's content view
   (the webview) is moved into it, the Tauri window itself is never shown, and the webview is built with
   `accept_first_mouse(true)`. Every frame read and set (placement, hover) is the panel's. After startup no code holds
-  the Tauri `WebviewWindow`: the threads hold an `AppHandle` (for `emit` and `run_on_main_thread`), so no window API
-  can reach the hidden window by mistake. Effect: a click reaches the
+  the Tauri `WebviewWindow`: the threads hold an `AppHandle` (for `emit` and `run_on_main_thread`), not the window. Effect: a click reaches the
   page on the first press, and the frontmost app does not change (the app is never activated). Measured on macOS 27
   (click spike, 2026-10-22): a plain window, a non-activating style mask on it, or swapping its class to an `NSPanel`
   subclass after creation all activate the app on click; only a panel created as non-activating does not.
@@ -380,7 +379,10 @@ pub enum Route {
     bar takes no presses.
   - Optimistic changes (toggle, the restart seek, a released drag) are pending until one of: a `media` event that
     agrees with them (toggle: its `playing` equals the shown `playing`; seek: its elapsed time at arrival is within
-    2 s of the shown one), `act` rejecting, or 2 s passing. Until then a `media` event that disagrees is recorded but
+    2 s of the shown one), the `act` call that made
+    that change rejecting (a late rejection of an earlier call leaves a newer change alone), or a deadline passing: 2 s
+    when the shown media came through the adapter (it reports within about 100 ms), 5 s when it came through
+    AppleScript (one poll period is 2 s plus up to two `osascript` calls). Until then a `media` event that disagrees is recorded but
     not shown, so a poll that started before the click does not flip the card back. When the pending change ends, the
     page shows the latest `media` it received. A `media` event with no track, or a different title, always shows at
     once and ends any pending change.
