@@ -562,3 +562,56 @@ fn sessions_dir_env_handling() {
         None => std::env::remove_var("HOME"),
     }
 }
+
+#[test]
+fn contract_read_dir_caps_at_50_files() {
+    let d = tmp("contract-50");
+    for i in 0..51u64 {
+        let id = format!("c{i:02}");
+        write_json(&d, &format!("{id}.json"), &id, NOW - 1000 + i);
+    }
+    let mut ids: Vec<String> = read_dir(&d).into_iter().map(|r| r.session_id).collect();
+    assert_eq!(ids.len(), 50);
+    ids.sort();
+    assert!(!ids.contains(&"c00".to_string()));
+    assert!(ids.contains(&"c01".to_string()));
+    assert!(ids.contains(&"c50".to_string()));
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn contract_summarize_caps_at_6_rows() {
+    let recs: Vec<Record> = (0..7u64)
+        .map(|i| rec(&format!("r{i}"), &format!("/p/r{i}"), "Stop", NOW - i))
+        .collect();
+    let s = summarize(&recs, NOW);
+    assert_eq!(s.total, 7);
+    assert_eq!(s.rows.len(), 6);
+}
+
+#[test]
+fn contract_ttl_is_10800_seconds() {
+    let recs = [
+        rec("keep", "/p/keep", "Stop", NOW - 10800),
+        rec("drop", "/p/drop", "Stop", NOW - 10801),
+    ];
+    let s = summarize(&recs, NOW);
+    assert_eq!(s.total, 1);
+    assert_eq!(s.rows[0].label, "keep");
+
+    let d = tmp("contract-ttl");
+    write_json(&d, "keep.json", "keep", NOW - 10800);
+    write_json(&d, "drop.json", "drop", NOW - 10801);
+    prune(&d, NOW);
+    assert!(d.join("keep.json").exists());
+    assert!(!d.join("drop.json").exists());
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn contract_quiet_decay_is_600_seconds() {
+    let at = summarize(&[rec("s", "/p/proj", "PreToolUse", NOW - 600)], NOW);
+    assert_eq!(at.rows[0].status, Status::Working);
+    let past = summarize(&[rec("s", "/p/proj", "PreToolUse", NOW - 601)], NOW);
+    assert_eq!(past.rows[0].status, Status::Waiting);
+}
