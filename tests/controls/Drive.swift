@@ -6,7 +6,7 @@
 //   drive warp <x> <y>              moves the cursor without a click
 //   drive front                     prints "<pid> <bundle id>" of the frontmost app
 //   drive watch                     prints "watching", then one "activated <pid> <bundle id>" line per app activation
-//   drive hover <pid>               moves onto the app's panel and waits until it is 420 x 226; prints "x0=<n>"
+//   drive hover <pid>               moves onto the app's panel and waits until it is 420 x 254; prints "x0=<n>"
 //   drive click <pid> <x> <y>       a left click
 //   drive drag <pid> <x0> <x1> <y> <steps>   press at x0, drag in <steps> moves to x1, release
 //
@@ -111,10 +111,10 @@ case "hover":
         pump(0.1)
         if let r = panel(of: pid) {
             last = r
-            if abs(r.width - 420) < 0.5 && abs(r.height - 226) < 0.5 { out("x0=\(Int(r.minX.rounded()))"); exit(0) }
+            if abs(r.width - 420) < 0.5 && abs(r.height - 254) < 0.5 { out("x0=\(Int(r.minX.rounded()))"); exit(0) }
         }
     }
-    die(1, "panel did not reach 420 x 226 on hover; last bounds \(last)")
+    die(1, "panel did not reach 420 x 254 on hover; last bounds \(last)")
 
 case "click":
     let pid = pidArg()
