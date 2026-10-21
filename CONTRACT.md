@@ -215,9 +215,11 @@ track stays on screen, then waits `backoff(attempt)` (1 s doubling, capped at 60
 resets `attempt` to 0 so the next wait is 1 s), runs `test` again and picks a source again.
 
 Every adapter process (`test` and `stream`) runs in its own process group under a watchdog that holds a pipe from
-the app: when the app exits for any reason, SIGKILL included, the pipe closes and the watchdog ends the whole group,
-the adapter's test client too. Stopping a child early (a `test` timeout, a read error) sends SIGTERM to the group,
-then SIGKILL after 3 s. A panic inside the provider is
+the app: when the app exits for any reason, SIGKILL included, the pipe closes and the watchdog stops the adapter.
+Stopping a child early (a `test` timeout, a read error, the provider unwinding) uses the same stop. A stop first
+lists the adapter's direct children (the adapter's test client runs in a process group of its own, measured on
+macOS 27.0.1), sends SIGTERM to the adapter's group and to those children, waits up to 5 s (longer than the
+adapter's own 3 s cleanup), then sends SIGKILL to whatever of them is left. A panic inside the provider is
 caught; it logs `media: Failed: <reason>` to stderr and restarts under the same backoff. When the adapter is not
 usable it logs `media: adapter Failed (<reason>), using AppleScript` once per switch, polls AppleScript, and runs
 `test` again every 60 s, switching back to the adapter when it passes.
