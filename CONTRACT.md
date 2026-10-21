@@ -162,3 +162,28 @@ The app calls it before each `read_dir`.
 Running it twice leaves one registration per event. All other hooks are kept.
 `scripts/uninstall-hooks.sh [settings.json]` removes exactly those groups, drops an event key that our removal left
 empty, and follows the same symlink, backup, permission and temp-file rules.
+
+## 6. Login item
+
+`scripts/install-login.sh [plist]` (default `~/Library/LaunchAgents/com.lem.notch-hud.plist`) starts the app at login:
+
+- The binary is `$NOTCH_HUD_BIN` if set, else this repo's `src-tauri/target/release/notch-hud`, as an absolute path.
+  When it is not an executable file, print `notch-hud: build first: cd src-tauri && cargo build --release` to stderr,
+  exit 1, write nothing, and call `launchctl` not at all.
+- A binary path containing `&`, `<` or `>` would break the plist's XML: print a message to stderr and exit 1, writing
+  nothing.
+- Writes the plist through a temp file in the same directory that `plutil -lint` must accept, then `mv`, mode 0644,
+  creating the directory if missing. Keys: `Label` `com.lem.notch-hud`; `ProgramArguments` `[<binary>]`; `RunAtLoad`
+  true; `KeepAlive` `{SuccessfulExit: false}` (restart after a crash, not after a clean exit such as "no notched
+  display"); `ProcessType` `Interactive`; `StandardErrorPath` `$HOME/Library/Logs/notch-hud.log`.
+- Then runs `launchctl bootout gui/<uid>/com.lem.notch-hud` (its failure, meaning "not loaded", is ignored), with
+  `<uid>` from `id -u`. `bootout` returns before the old service is gone, and a `bootstrap` while it is still there
+  fails with exit 5 (seen on macOS 27.0.1). So the script polls `launchctl print gui/<uid>/com.lem.notch-hud` every
+  0.1 s until it exits non-zero, for at most 5 s. If the service is still there after 5 s, it prints
+  `notch-hud: old login item did not stop` to stderr and exits 1 without calling `bootstrap`. Otherwise it runs
+  `launchctl bootstrap gui/<uid> <plist>`. A failing bootstrap makes the script exit non-zero. `launchctl` is found
+  on `PATH`.
+- On success prints one line, `notch-hud: login item installed: <plist>`. Running it again rewrites and reloads.
+
+`scripts/uninstall-login.sh [plist]` runs `launchctl bootout gui/<uid>/com.lem.notch-hud` (failure ignored), deletes the
+plist if present, and exits 0, also when nothing was installed.

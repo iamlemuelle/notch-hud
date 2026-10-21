@@ -44,8 +44,11 @@ cd src-tauri && cargo build --release && cd ..
 file's permissions, follows a symlink, and running it twice registers each event once. `scripts/uninstall-hooks.sh`
 removes exactly what it added.
 
-To start the panel at login, point a LaunchAgent at `src-tauri/target/release/notch-hud`, with `RunAtLoad` and
-`KeepAlive` set to restart it only after a crash (`SuccessfulExit` false).
+To start the panel at login, run `./scripts/install-login.sh` after building. It writes
+`~/Library/LaunchAgents/com.lem.notch-hud.plist` and loads it now. launchd restarts the app after a crash but not after
+a clean exit, so a Mac without a notch doesn't relaunch it in a loop. Errors go to `~/Library/Logs/notch-hud.log`. After
+a rebuild, run `launchctl kickstart -k gui/$(id -u)/com.lem.notch-hud` to load the new binary.
+`./scripts/uninstall-login.sh` stops it and removes the plist.
 
 ## Tests
 
