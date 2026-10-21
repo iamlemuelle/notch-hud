@@ -3,3 +3,4 @@ src-tauri/gen/
 shot*.png
 check-bin
 .DS_Store
+.claude/
