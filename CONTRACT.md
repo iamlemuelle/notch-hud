@@ -154,15 +154,31 @@ The app calls it before each `read_dir`.
   subclass after creation all activate the app on click; only a panel created as non-activating does not.
 - Page load: when `$NOTCH_TRACE` is set and non-empty, the app logs `page: loaded` to stderr once the page has finished
   loading, so a check knows when the page can take clicks.
-- Expanded size: width 420, height `44 + 22 * max(rows.len(), 1) + 14` pt, top edge at the screen top, centered on the notch.
+- Expanded size: width 420, height `196 + 18 + 4 + 22 * shown_rows + 14` pt, top edge at the screen top, centered on
+  the notch. `shown_rows = max(1, min(total, 4) + (1 if total > 4 else 0))`: up to four session rows, a "N more" row
+  when there are more, and the "No Claude Code sessions" row when there are none. The music block above the sessions
+  is always there (it shows "Nothing playing" without a track), so the height does not depend on `Media`.
 
 ## 4. UI (`dist/index.html`)
 
-- Collapsed left ear: a dot and `total`. Dot color: amber `#f5a623` when `attention > 0`; else green `#34d058` when
-  `working > 0`; else gray `#8b8b8b`.
-- Collapsed right ear: `⚠ <attention>` in amber when `attention > 0`, else empty.
-- Expanded: one line per row, `<label> — <status text>`. Status text: `needs permission: <detail>` (or
-  `needs permission`), `needs your input`, `error`, `working`, `done`, `waiting for you`. No rows: `no Claude Code sessions`.
+The approved prototype (https://claude.ai/artifact/96cCAcQdoj6VVTnpDFEdCa) is the visual reference; this section and
+section 7 "App and UI" are its static part (no motion). Colors: text `#f5f5f5`, muted `#8b8b8b`, amber `#f5a623`
+(attention), green `#34d058` (working), gray `#8b8b8b` (idle); the pill is pure black. Font: the system UI font.
+
+- Collapsed (305 x 32 on a 185 pt notch: the notch plus a 60 pt ear each side), left ear: an 8 pt dot and `total`,
+  600 12 px tabular, at 0.82 opacity (1 while expanded). Dot: amber with a 6 px glow of its color when
+  `attention > 0`; else green with glow when `working > 0`; else gray, no glow.
+- Collapsed right ear: Now Playing only (section 7). Attention shows on the dot only; there is no `⚠ N`.
+- Expanded, the session section starts 196 pt below the panel top, 16 pt from the left, 388 pt wide:
+  - header row, 18 pt tall, 600 11 px muted: `Claude Code` on the left; on the right `<attention> need you`
+    (`needs you` when 1) in amber when `attention > 0`, else `<working> working` when `working > 0`, else `All quiet`.
+  - 4 pt gap, then one 22 pt row per session for the first four rows: an 8 pt dot (as the left ear's, by that row's
+    status: amber for `needs_permission`, `needs_input`, `error`; green for `working`; gray otherwise), 8 pt gap, the
+    label (500 12 px, ellipsis), and the status text right-aligned (muted; amber for `needs_permission`,
+    `needs_input`, `error`; ellipsis past 170 pt). Status text: `needs permission: <detail>` (or `needs permission`),
+    `needs your input`, `error`, `working`, `done`, `waiting for you`.
+  - when `total > 4`, one more muted row: `<total - 4> more`. With no sessions, one muted row:
+    `No Claude Code sessions`.
 
 ## 5. Install
 
@@ -348,24 +364,41 @@ pub enum Route {
 - The app keeps the latest `Media` and emits `media` with it whenever it changes; the `media` command returns it
   (`null` before the first update). When `$NOTCH_TRACE` is set and non-empty, each change is also logged to stderr as
   `media: <via> <health> <playing|paused> "<title>" (<app>)`, or `media: <via> <health> nothing` without a track.
-- Expanded height adds 146 pt when `track` is set, or 22 pt when `track` is null and `health` is `denied`:
-  `44 + extra + 22 * max(rows.len(), 1) + 14`.
-- Right ear while collapsed: `⚠ <attention>` when `attention > 0` (unchanged), else, when a track is set, its artwork
-  (18 pt square, or 26 × 15 pt when the artwork is at least 1.3 times wider than tall) and four equalizer bars while
-  playing or a pause glyph while paused.
-- Expanded: the right ear's media hides (the artwork is in the card instead); below the ear band, the artwork (64 pt square, or 112 × 63 pt when wide), title, artist and app name,
-  then a seek bar with elapsed and remaining time (`h:mm:ss` from one hour) that the page advances only while
-  expanded and playing: `elapsed_ms + (now - elapsed_at_ms)`, clamped to `duration_ms`. Under it, the controls.
-  Session rows follow.
-- Card geometry (approved prototype), in pt from the card's top-left; the card starts 44 pt below the panel top, 18 pt
-  in from each side (384 pt wide), and is 138 pt tall:
-  - artwork at (0, 0); text at left 76 (124 when wide), as before.
-  - seek row: top 72, height 16, three columns `46px 1fr 46px` with 6 pt gaps: elapsed, the bar, `-remaining` (right
-    aligned), 11 px muted tabular figures. The bar's hit area is the full 16 pt row height; it draws a 4 pt track
-    (`rgba(245,245,245,0.16)`, radius 2) with a `#f5f5f5` fill, and a 10 pt white knob at the position while dragging.
-  - controls row: top 98, height 40, centered, 18 pt gaps: previous (34 pt circle, transparent), play/pause (40 pt
-    circle, `#f5f5f5` background, black glyph: pause while playing, play while paused), next (34 pt circle). Glyphs are
-    16 pt SVGs. `aria-label`s: `Previous track`, `Pause` or `Play`, `Next track`.
+- The expanded height does not depend on `Media` (section 3).
+- Tint: one color per artwork, used by the equalizer bars, the seek fill and the card glow. It is the average color of
+  the artwork's pixels (drawn into a small canvas; an https artwork is loaded with `crossOrigin = "anonymous"` for
+  this), lifted toward white until `0.2126 r + 0.7152 g + 0.0722 b >= 110`. With no artwork, or one that can't be read
+  (a CORS failure), the tint is `rgb(245,245,245)`. The visible artwork never depends on the tint load succeeding.
+- Right ear while collapsed, in pt from the collapsed panel's left edge: nothing without a track. With a track: its
+  artwork, 18 x 18 at (253, 7), radius 4 (26 x 15 at (251, 8.5), radius 3, when the artwork is at least 1.3 times
+  wider than tall), at opacity 1 while playing and 0.6 while paused; then, while playing, four tinted equalizer bars
+  (3 pt wide, 14 pt tall, 2 pt gaps, scaling from the bottom) starting at x 278 (282 when wide), top 9; while paused,
+  a 12 pt muted pause glyph at x 280 (284 when wide), top 10. With `prefers-reduced-motion`, the bars hold still.
+  While expanded, the right ear shows nothing (the artwork is in the card).
+- Expanded music block, in pt from the expanded panel's top-left (420 wide), always shown:
+  - artwork at (32, 44), 64 x 64, radius 13, with a 1 pt inner hairline `rgba(255,255,255,0.09)`; when wide,
+    112 x 63, radius 8. Without artwork (or without a track), a `#161616` placeholder with two muted rings.
+  - glow: behind the artwork, a radial gradient of the tint (`rgba(tint, 0.34)` at the center, `rgba(tint, 0.08)` at
+    60 %, transparent beyond), 170 x 125 pt radii centered at the artwork's center, faded out over the top 30 pt
+    below the ear band so the band stays pure black. No glow without a track.
+  - text at left 92, top 46, width 262 (left 142, width 232 when wide): title 600 14 px / 18 px (ellipsis; when wide,
+    13.5 px / 17 px clamped to two lines); artist 500 12 px / 16 px `rgba(245,245,245,0.62)`, 2 pt below; source row
+    5 pt below, 500 11 px / 14 px muted: a 5 pt tint dot and the app name.
+  - while playing, four tinted equalizer bars at (384, 50), as the ear's.
+  - seek row at (16, 116), 388 wide, 16 tall, three columns `46px 1fr 46px` with 6 pt gaps: elapsed, the bar,
+    `-remaining` (right aligned), 500 11 px muted tabular figures (`h:mm:ss` from one hour). The bar's hit area is the
+    full 16 pt row; it draws a 4 pt track (`rgba(245,245,245,0.16)`, radius 2, at 6 pt from the row top) with a fill
+    of `color-mix(in srgb, <tint> 55%, #fff)`, and while dragging the track scales to 1.5x its height and a 10 pt
+    white knob shows at the position. The page advances the time only while expanded and playing:
+    `elapsed_ms + (now - elapsed_at_ms)`, clamped to `duration_ms`.
+  - controls row at (0, 142), 420 wide, 40 tall, centered, 18 pt gaps: previous (34 pt circle, transparent, opacity
+    0.86), play/pause (40 pt circle, `#f5f5f5` background, black glyph: pause while playing, play while paused), next
+    (34 pt circle). Glyphs are 16 pt SVGs. `aria-label`s: `Previous track`, `Pause` or `Play`, `Next track`.
+  - without a track the block keeps its place: placeholder artwork, the title `Nothing playing` and, as the artist
+    line (wrapping, 15 px line height), `Play something in Apple Music or Spotify and it shows up here.`; no source
+    row, no bars, no glow; the seek row is hidden; the three buttons are disabled (opacity 0.3; play/pause on a
+    `#2a2a2a` circle with a `#777` glyph) and send nothing. With `health` `denied` and no track, the title is
+    `Music access is off` and the artist line `Turn on notch-hud in System Settings, Privacy & Security, Automation.`
 - Control behavior (the page calls `invoke('act', { action })`):
   - Play/pause sends `{kind: "toggle"}` and flips the shown state at once (when pausing, the shown position freezes at
     the current elapsed time).
@@ -387,5 +420,4 @@ pub enum Route {
     page shows the latest `media` it received. A `media` event with no track, or a different title, always shows at
     once and ends any pending change.
   - The play/pause glyphs are static markup switched by a class, so re-rendering never replaces the element under a
-    press. With `denied`, one
-  muted line: `Music access is off: allow notch-hud in System Settings, Privacy & Security, Automation`.
+    press.
