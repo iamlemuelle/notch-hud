@@ -60,6 +60,8 @@
   .cb { width: 34px; height: 34px; border: 0; padding: 0; border-radius: 50%; background: transparent; color: #f5f5f5;
     display: grid; place-items: center; opacity: 0.86; cursor: default; }
   .cb.main { width: 40px; height: 40px; background: #f5f5f5; color: #000; opacity: 1; }
+  .cb .i-play, .cb.paused .i-pause { display: none; }
+  .cb.paused .i-play { display: block; }
   .cb:active { transform: scale(0.92); }
 </style>
 </head>
@@ -79,9 +81,9 @@
       <div id="cardText"><div id="cardTitle"></div><div id="cardArtist"></div><div id="cardApp"></div></div>
       <div id="prog"><span id="tEl"></span><div id="bar"><div class="track"><div id="fill"></div></div><div id="knob"></div></div><span id="tRem"></span></div>
       <div class="controls">
-        <button type="button" class="cb" id="btnPrev" aria-label="Previous track"></button>
-        <button type="button" class="cb main" id="btnMain" aria-label="Pause"></button>
-        <button type="button" class="cb" id="btnNext" aria-label="Next track"></button>
+        <button type="button" class="cb" id="btnPrev" aria-label="Previous track"><svg viewBox="0 0 16 16" width="16" height="16"><rect x="2" y="3" width="2" height="10" rx=".8" fill="currentColor"/><path d="M13.4 3.3v9.4c0 .45-.5.72-.88.47L5.3 8.47a.56.56 0 0 1 0-.94l7.22-4.7c.38-.25.88.02.88.47z" fill="currentColor"/></svg></button>
+        <button type="button" class="cb main" id="btnMain" aria-label="Pause"><svg class="i-pause" viewBox="0 0 16 16" width="16" height="16"><rect x="3.6" y="2.8" width="3" height="10.4" rx="1" fill="currentColor"/><rect x="9.4" y="2.8" width="3" height="10.4" rx="1" fill="currentColor"/></svg><svg class="i-play" viewBox="0 0 16 16" width="16" height="16"><path d="M4.4 2.9v10.2c0 .5.55.8.97.53l7.85-5.1a.62.62 0 0 0 0-1.06L5.37 2.37c-.42-.27-.97.03-.97.53z" fill="currentColor"/></svg></button>
+        <button type="button" class="cb" id="btnNext" aria-label="Next track"><svg viewBox="0 0 16 16" width="16" height="16"><path d="M2.6 3.3v9.4c0 .45.5.72.88.47l7.22-4.7a.56.56 0 0 0 0-.94L3.48 2.83c-.38-.25-.88.02-.88.47z" fill="currentColor"/><rect x="12" y="3" width="2" height="10" rx=".8" fill="currentColor"/></svg></button>
       </div>
     </div>
     <div id="denied">Music access is off: allow notch-hud in System Settings, Privacy &amp; Security, Automation</div>
@@ -97,12 +99,6 @@
     needs_permission: (detail) => detail ? 'needs permission: ' + detail : 'needs permission',
   };
   const $ = (id) => document.getElementById(id);
-  const ICON_PREV = '<svg viewBox="0 0 16 16" width="16" height="16"><rect x="2" y="3" width="2" height="10" rx=".8" fill="currentColor"/><path d="M13.4 3.3v9.4c0 .45-.5.72-.88.47L5.3 8.47a.56.56 0 0 1 0-.94l7.22-4.7c.38-.25.88.02.88.47z" fill="currentColor"/></svg>';
-  const ICON_NEXT = '<svg viewBox="0 0 16 16" width="16" height="16"><path d="M2.6 3.3v9.4c0 .45.5.72.88.47l7.22-4.7a.56.56 0 0 0 0-.94L3.48 2.83c-.38-.25-.88.02-.88.47z" fill="currentColor"/><rect x="12" y="3" width="2" height="10" rx=".8" fill="currentColor"/></svg>';
-  const ICON_PLAY = '<svg viewBox="0 0 16 16" width="16" height="16"><path d="M4.4 2.9v10.2c0 .5.55.8.97.53l7.85-5.1a.62.62 0 0 0 0-1.06L5.37 2.37c-.42-.27-.97.03-.97.53z" fill="currentColor"/></svg>';
-  const ICON_PAUSE = '<svg viewBox="0 0 16 16" width="16" height="16"><rect x="3.6" y="2.8" width="3" height="10.4" rx="1" fill="currentColor"/><rect x="9.4" y="2.8" width="3" height="10.4" rx="1" fill="currentColor"/></svg>';
-  $('btnPrev').innerHTML = ICON_PREV;
-  $('btnNext').innerHTML = ICON_NEXT;
   // media: the latest the app sent. shown: what the card draws, which is media plus any optimistic change.
   let media = null;
   let shown = null;
@@ -166,7 +162,7 @@
     $('cardTitle').textContent = t.title;
     $('cardArtist').textContent = t.artist || '';
     $('cardApp').textContent = t.app;
-    $('btnMain').innerHTML = t.playing ? ICON_PAUSE : ICON_PLAY;
+    $('btnMain').classList.toggle('paused', !t.playing);
     $('btnMain').setAttribute('aria-label', t.playing ? 'Pause' : 'Play');
     syncClock();
   }
