@@ -165,7 +165,7 @@ pub fn backoff(attempt: u32) -> Duration {
 
 // ---- Provider: processes and timing. Everything above is pure. ----
 
-const ADAPTER_TEST_TIMEOUT: Duration = Duration::from_secs(5);
+const ADAPTER_ONESHOT_TIMEOUT: Duration = Duration::from_secs(5);
 const OSASCRIPT_TIMEOUT: Duration = Duration::from_secs(3);
 const STREAM_HEALTHY_AFTER: Duration = Duration::from_secs(60);
 const APPLESCRIPT_POLL: Duration = Duration::from_secs(2);
@@ -319,14 +319,19 @@ fn test_adapter(dir: &Path) -> Result<(), String> {
     if !script.is_file() {
         return Err(format!("{} not found", script.display()));
     }
-    let mut cmd = adapter_command(dir, &["test"]);
+    run_adapter_once(dir, &["test"], "test")
+}
+
+/// Runs the adapter with `args` to completion within `ADAPTER_ONESHOT_TIMEOUT`; errors are prefixed with `what`.
+fn run_adapter_once(dir: &Path, args: &[&str], what: &str) -> Result<(), String> {
+    let mut cmd = adapter_command(dir, args);
     cmd.stdout(Stdio::null()).stderr(Stdio::null());
-    let mut group = Group::spawn(cmd).map_err(|e| format!("test did not start: {e}"))?;
-    match wait_deadline(&mut group.child, ADAPTER_TEST_TIMEOUT) {
+    let mut group = Group::spawn(cmd).map_err(|e| format!("{what} did not start: {e}"))?;
+    match wait_deadline(&mut group.child, ADAPTER_ONESHOT_TIMEOUT) {
         Ok(Some(status)) if status.success() => Ok(()),
-        Ok(Some(status)) => Err(format!("test {status}")),
-        Ok(None) => Err(format!("test timed out after {} s", ADAPTER_TEST_TIMEOUT.as_secs())),
-        Err(e) => Err(format!("test wait: {e}")),
+        Ok(Some(status)) => Err(format!("{what} {status}")),
+        Ok(None) => Err(format!("{what} timed out after {} s", ADAPTER_ONESHOT_TIMEOUT.as_secs())),
+        Err(e) => Err(format!("{what} wait: {e}")),
     }
 }
 
@@ -447,8 +452,6 @@ pub enum Route {
     Script { app: &'static str, script: String },
 }
 
-const ADAPTER_SEND_TIMEOUT: Duration = Duration::from_secs(5);
-
 pub fn parse_action(v: &Value) -> Result<Action, String> {
     let action: Action = serde_json::from_value(v.clone()).map_err(|e| e.to_string())?;
     // serde's internally tagged enums let unit variants ignore extra fields, so the check is made here.
@@ -507,15 +510,7 @@ pub fn apply(route: &Route) -> Result<(), String> {
     match route {
         Route::Adapter(args) => {
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
-            let mut cmd = adapter_command(&adapter_dir(), &args);
-            cmd.stdout(Stdio::null()).stderr(Stdio::null());
-            let mut group = Group::spawn(cmd).map_err(|e| format!("adapter did not start: {e}"))?;
-            match wait_deadline(&mut group.child, ADAPTER_SEND_TIMEOUT) {
-                Ok(Some(status)) if status.success() => Ok(()),
-                Ok(Some(status)) => Err(format!("adapter {status}")),
-                Ok(None) => Err(format!("adapter timed out after {} s", ADAPTER_SEND_TIMEOUT.as_secs())),
-                Err(e) => Err(format!("adapter wait: {e}")),
-            }
+            run_adapter_once(&adapter_dir(), &args, "adapter")
         }
         Route::Script { app, script } => {
             if !running(app) {
