@@ -76,7 +76,11 @@ fn place(window: &WebviewWindow, expanded: bool) {
     let Some(mtm) = MainThreadMarker::new() else { return };
     let Some(notch) = notched_screen(mtm) else { return };
     let rows = expanded.then(latest_row_count);
-    ns_window(window).setFrame_display(notch.panel(rows), true);
+    let target = notch.panel(rows);
+    let ns = ns_window(window);
+    if ns.frame() != target {
+        ns.setFrame_display(target, true);
+    }
 }
 
 // The webview gets no mouse events while this non-key window belongs to a background app,
@@ -99,6 +103,8 @@ fn poll_sessions(window: &WebviewWindow) {
     let dir = sessions_dir();
     prune(&dir, now);
     let summary = summarize(&read_dir(&dir), now);
+    let replace = window.clone();
+    let _ = window.run_on_main_thread(move || place(&replace, EXPANDED_NOW.load(Ordering::Relaxed)));
     {
         let mut latest = LATEST.lock().unwrap_or_else(|e| e.into_inner());
         if latest.as_ref() == Some(&summary) {
