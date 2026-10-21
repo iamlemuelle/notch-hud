@@ -73,10 +73,15 @@ a rebuild, run `launchctl kickstart -k gui/$(id -u)/com.lem.notch-hud` to load t
 cd src-tauri && cargo test && cd ..   # status rules: grouping, priority, decay, pruning, contract values
 ./tests/hook_test.sh                  # the hook against real payloads in a temp directory
 ./tests/install_test.sh               # the installer against temp copies of settings.json
+./tests/login_test.sh                 # the login item scripts against a fake launchctl
 ./tests/media_test.sh                 # Now Playing end to end: a fixture player through the real adapter, then the fallback
 ./tests/controls_test.sh              # real clicks on the controls drive the fixture player; the front app must not change
 ./check.sh                            # end to end on the real screen, needs Screen Recording permission
 ```
+
+CI (`.github/workflows/ci.yml`) runs the first four on macOS 15 for every pull request and every push to `main`.
+`media_test.sh`, `controls_test.sh` and `check.sh` run only locally, because all three launch the app, which exits
+without a notched display. `check.sh` also needs Screen Recording permission.
 
 `controls_test.sh` posts mouse events, so the terminal running it needs Accessibility, and you must leave the mouse
 alone for the ~20 s it runs: real input moves the pointer out from under it. It exits 2 (skipped) when it can't post
