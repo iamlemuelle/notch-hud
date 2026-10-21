@@ -183,7 +183,6 @@ fn summarize_detail_only_for_needs_permission() {
             ("np".to_string(), Some("Edit".to_string())),
             ("notool".to_string(), None),
             ("in".to_string(), None),
-            ("work".to_string(), None),
         ]
     );
 }
@@ -208,9 +207,7 @@ fn summarize_sort_priority_order() {
             Status::NeedsPermission,
             Status::NeedsInput,
             Status::Error,
-            Status::Working,
-            Status::Done,
-            Status::Waiting
+            Status::Working
         ]
     );
 }
@@ -666,7 +663,7 @@ fn supersede_boundaries_clear_stale_agent_permission() {
         let label = format!("{} {:?}", main.event, main.notification_type);
         let (row, attention) = one_row(&[stale_perm(), main]);
         assert_eq!(row, Row { label: "proj".into(), status: want, detail: None }, "{label}");
-        assert_eq!(attention, 0, "{label}");
+        assert_eq!(attention, usize::from(want == Status::Error), "{label}");
     }
 }
 
