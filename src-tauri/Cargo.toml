@@ -1,0 +1,14 @@
+[package]
+name = "notch-spike"
+version = "0.0.1"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["custom-protocol", "macos-private-api"] }
+serde = { version = "1", features = ["derive"] }
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSGeometry"] }
+objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSScreen", "NSWindow", "NSResponder", "NSGraphics"] }

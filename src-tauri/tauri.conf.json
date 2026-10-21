@@ -1,0 +1,13 @@
+{
+  "productName": "notch-spike",
+  "version": "0.0.1",
+  "identifier": "dev.lem.notchspike",
+  "build": { "frontendDist": "../dist" },
+  "app": {
+    "withGlobalTauri": true,
+    "macOSPrivateApi": true,
+    "windows": [],
+    "security": { "csp": null }
+  },
+  "bundle": { "active": false }
+}
