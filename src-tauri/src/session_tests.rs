@@ -1,6 +1,7 @@
 use super::*;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, UNIX_EPOCH};
 
 const NOW: u64 = 1_800_000_000;
 
@@ -9,10 +10,30 @@ fn rec(id: &str, cwd: &str, event: &str, ts: u64) -> Record {
         session_id: id.to_string(),
         cwd: cwd.to_string(),
         event: event.to_string(),
+        agent_id: None,
         notification_type: None,
         tool_name: None,
         ts,
     }
+}
+
+fn sub(id: &str, agent: &str, cwd: &str, event: &str, ts: u64) -> Record {
+    Record { agent_id: Some(agent.to_string()), ..rec(id, cwd, event, ts) }
+}
+
+fn set_mtime(path: &Path, secs: u64) {
+    let f = fs::OpenOptions::new().write(true).open(path).unwrap();
+    f.set_modified(UNIX_EPOCH + Duration::from_secs(secs)).unwrap();
+}
+
+fn write_json(dir: &Path, file: &str, id: &str, mtime: u64) {
+    let p = dir.join(file);
+    fs::write(&p, json_for(id)).unwrap();
+    set_mtime(&p, mtime);
+}
+
+fn mtime_secs(path: &Path) -> u64 {
+    fs::metadata(path).unwrap().modified().unwrap().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
 
 fn notif(nt: &str) -> Record {
@@ -41,9 +62,11 @@ fn status_of_event_table() {
         ("PostToolUse", Some(Status::Working)),
         ("PostToolUseFailure", Some(Status::Working)),
         ("PermissionRequest", Some(Status::NeedsPermission)),
+        ("PermissionDenied", Some(Status::Waiting)),
         ("Stop", Some(Status::Done)),
         ("StopFailure", Some(Status::Error)),
         ("SessionEnd", None),
+        ("SubagentStop", None),
         ("Bogus", None),
         ("", None),
     ];
@@ -230,6 +253,150 @@ fn summarize_truncates_but_counts_everything() {
 }
 
 #[test]
+fn summarize_working_subagent_cannot_hide_needs_permission() {
+    let mut perm = sub("s", "ag1", "/p/proj", "PermissionRequest", NOW - 20);
+    perm.tool_name = Some("Bash".into());
+    let recs = [rec("s", "/p/proj", "PreToolUse", NOW - 5), perm];
+    let s = summarize(&recs, NOW);
+    assert_eq!(
+        s,
+        Summary {
+            rows: vec![Row { label: "proj".into(), status: Status::NeedsPermission, detail: Some("Bash".into()) }],
+            total: 1,
+            attention: 1,
+            working: 0,
+        }
+    );
+}
+
+#[test]
+fn summarize_main_permission_beats_newer_subagent_working() {
+    let mut perm = rec("s", "/p/proj", "PermissionRequest", NOW - 20);
+    perm.tool_name = Some("Edit".into());
+    let recs = [perm, sub("s", "ag1", "/p/proj", "PreToolUse", NOW - 1)];
+    let s = summarize(&recs, NOW);
+    assert_eq!(
+        s.rows,
+        vec![Row { label: "proj".into(), status: Status::NeedsPermission, detail: Some("Edit".into()) }]
+    );
+    assert_eq!((s.total, s.attention, s.working), (1, 1, 0));
+}
+
+#[test]
+fn summarize_main_done_with_working_subagent_is_working() {
+    let recs = [
+        rec("s", "/p/proj", "Stop", NOW - 30),
+        sub("s", "ag1", "/p/proj", "PreToolUse", NOW - 2),
+    ];
+    let s = summarize(&recs, NOW);
+    assert_eq!(s.rows, vec![Row { label: "proj".into(), status: Status::Working, detail: None }]);
+    assert_eq!((s.total, s.attention, s.working), (1, 0, 1));
+}
+
+#[test]
+fn summarize_counts_sessions_not_records() {
+    let mut elicit = sub("s", "ag2", "/p/proj", "Notification", NOW);
+    elicit.notification_type = Some("elicitation_dialog".into());
+    let recs = [
+        rec("s", "/p/proj", "PermissionRequest", NOW),
+        sub("s", "ag1", "/p/proj", "PermissionRequest", NOW),
+        elicit,
+        rec("t", "/p/other", "Stop", NOW),
+        sub("t", "ag1", "/p/other", "Stop", NOW),
+    ];
+    let s = summarize(&recs, NOW);
+    assert_eq!((s.total, s.attention, s.working), (2, 1, 0));
+    assert_eq!(s.rows.len(), 2);
+}
+
+#[test]
+fn summarize_session_ts_is_max_over_group() {
+    // Session "a" has an old main record and a newer subagent record, so it sorts before "b".
+    let recs = [
+        rec("a", "/p/a", "Stop", 100),
+        sub("a", "ag1", "/p/a", "Stop", 300),
+        rec("b", "/p/b", "Stop", 200),
+    ];
+    let labels: Vec<String> = summarize(&recs, 400).rows.into_iter().map(|r| r.label).collect();
+    assert_eq!(labels, vec!["a", "b"]);
+}
+
+#[test]
+fn summarize_quiet_decay_boundary() {
+    let at = summarize(&[rec("s", "/p/proj", "PreToolUse", NOW - QUIET_SECS)], NOW);
+    assert_eq!(at.rows[0].status, Status::Working);
+    assert_eq!(at.working, 1);
+
+    let past = summarize(&[rec("s", "/p/proj", "PreToolUse", NOW - QUIET_SECS - 1)], NOW);
+    assert_eq!(past.rows[0].status, Status::Waiting);
+    assert_eq!(past.working, 0);
+    assert_eq!(past.total, 1);
+    assert_eq!(past.attention, 0);
+}
+
+#[test]
+fn summarize_decay_uses_session_ts_not_record_ts() {
+    // The Working main record is stale but a Done subagent record is fresh: Working wins, ts is the fresh one.
+    let recs = [
+        rec("s", "/p/proj", "PreToolUse", NOW - QUIET_SECS - 500),
+        sub("s", "ag1", "/p/proj", "Stop", NOW - 3),
+    ];
+    let s = summarize(&recs, NOW);
+    assert_eq!(s.rows[0].status, Status::Working);
+    assert_eq!(s.working, 1);
+}
+
+#[test]
+fn summarize_decay_applies_only_to_working() {
+    let recs = [
+        rec("d", "/p/done", "Stop", NOW - QUIET_SECS - 1),
+        rec("p", "/p/perm", "PermissionRequest", NOW - QUIET_SECS - 1),
+    ];
+    let statuses: Vec<Status> = summarize(&recs, NOW).rows.iter().map(|r| r.status).collect();
+    assert_eq!(statuses, vec![Status::NeedsPermission, Status::Done]);
+}
+
+#[test]
+fn summarize_cwd_from_main_record() {
+    let recs = [
+        sub("s", "ag1", "/p/worktree-sub", "PermissionRequest", NOW),
+        rec("s", "/p/mainproj", "PreToolUse", NOW - 1),
+    ];
+    let s = summarize(&recs, NOW);
+    assert_eq!(s.rows[0].label, "mainproj");
+    assert_eq!(s.rows[0].status, Status::NeedsPermission);
+}
+
+#[test]
+fn summarize_cwd_from_status_record_without_main() {
+    let recs = [
+        sub("s", "ag1", "/p/quiet", "Stop", NOW),
+        sub("s", "ag2", "/p/loud", "PermissionRequest", NOW - 10),
+    ];
+    let s = summarize(&recs, NOW);
+    assert_eq!(s.rows[0].label, "loud");
+    assert_eq!(s.rows[0].status, Status::NeedsPermission);
+}
+
+#[test]
+fn summarize_permission_denied_is_waiting() {
+    let s = summarize(&[rec("s", "/p/proj", "PermissionDenied", NOW)], NOW);
+    assert_eq!(s.rows, vec![Row { label: "proj".into(), status: Status::Waiting, detail: None }]);
+    assert_eq!((s.total, s.attention, s.working), (1, 0, 0));
+}
+
+#[test]
+fn summarize_duplicate_labels_across_grouped_sessions() {
+    let recs = [
+        rec("aaaa1111", "/one/app", "Stop", NOW),
+        sub("aaaa1111", "ag1", "/one/app", "Stop", NOW),
+        rec("bbbb2222", "/two/app", "Stop", NOW - 1),
+    ];
+    let labels: Vec<String> = summarize(&recs, NOW).rows.into_iter().map(|r| r.label).collect();
+    assert_eq!(labels, vec!["app · aaaa", "app · bbbb"]);
+}
+
+#[test]
 fn read_dir_missing_returns_empty() {
     let d = std::env::temp_dir().join(format!("notch-session-tests-{}-missing", std::process::id()));
     let _ = fs::remove_dir_all(&d);
@@ -237,35 +404,52 @@ fn read_dir_missing_returns_empty() {
 }
 
 #[test]
-fn read_dir_parses_skips_and_sorts() {
+fn read_dir_parses_skips_and_ties_by_name() {
     let d = tmp("readdir");
-    fs::write(d.join("b.json"), json_for("b")).unwrap();
-    fs::write(d.join("a.json"), json_for("a")).unwrap();
-    fs::write(d.join("bad.json"), "{not json").unwrap();
-    fs::write(d.join("notes.txt"), json_for("txt")).unwrap();
-    fs::write(d.join("c.json.tmp"), json_for("tmp")).unwrap();
+    for f in ["b.json", "a.json", "bad.json", "notes.txt", "c.json.tmp"] {
+        let id = f.split('.').next().unwrap();
+        let body = if f == "bad.json" { "{not json".to_string() } else { json_for(id) };
+        fs::write(d.join(f), body).unwrap();
+        set_mtime(&d.join(f), NOW);
+    }
+    fs::create_dir(d.join("dir.json")).unwrap();
     let got = read_dir(&d);
-    assert_eq!(
-        got,
-        vec![
-            Record {
-                session_id: "a".into(),
-                cwd: "/x/a".into(),
-                event: "Stop".into(),
-                notification_type: None,
-                tool_name: None,
-                ts: 100
-            },
-            Record {
-                session_id: "b".into(),
-                cwd: "/x/b".into(),
-                event: "Stop".into(),
-                notification_type: None,
-                tool_name: None,
-                ts: 100
-            },
-        ]
-    );
+    let want = |id: &str| Record {
+        session_id: id.into(),
+        cwd: format!("/x/{id}"),
+        event: "Stop".into(),
+        agent_id: None,
+        notification_type: None,
+        tool_name: None,
+        ts: 100,
+    };
+    assert_eq!(got, vec![want("a"), want("b")]);
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn read_dir_orders_by_mtime_descending() {
+    let d = tmp("mtime-order");
+    write_json(&d, "a.json", "a", NOW - 30);
+    write_json(&d, "b.json", "b", NOW - 10);
+    write_json(&d, "c.json", "c", NOW - 20);
+    let ids: Vec<String> = read_dir(&d).into_iter().map(|r| r.session_id).collect();
+    assert_eq!(ids, vec!["b", "c", "a"]);
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn read_dir_parses_agent_id() {
+    let d = tmp("agent-id");
+    fs::write(
+        d.join("s.ag1.json"),
+        r#"{"session_id":"s","agent_id":"ag1","cwd":"/c","event":"PreToolUse","notification_type":null,"tool_name":"Read","ts":9}"#,
+    )
+    .unwrap();
+    let got = read_dir(&d);
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].agent_id.as_deref(), Some("ag1"));
+    assert_eq!(got[0].session_id, "s");
     let _ = fs::remove_dir_all(&d);
 }
 
@@ -292,17 +476,63 @@ fn read_dir_optional_fields_default_and_present() {
 }
 
 #[test]
-fn read_dir_caps_at_max_files_by_name() {
-    let d = tmp("maxfiles");
+fn read_dir_keeps_newest_max_files_by_mtime() {
+    let d = tmp("maxfiles-mtime");
+    // Name order is the reverse of age order, so a name-based cap would keep the wrong files.
     for i in 0..(MAX_FILES + 10) {
         let id = format!("s{i:03}");
-        fs::write(d.join(format!("{id}.json")), json_for(&id)).unwrap();
+        write_json(&d, &format!("{id}.json"), &id, NOW - 1000 + i as u64);
     }
-    let got = read_dir(&d);
-    assert_eq!(got.len(), MAX_FILES);
-    assert_eq!(got[0].session_id, "s000");
-    assert_eq!(got[MAX_FILES - 1].session_id, format!("s{:03}", MAX_FILES - 1));
+    let mut ids: Vec<String> = read_dir(&d).into_iter().map(|r| r.session_id).collect();
+    assert_eq!(ids.len(), MAX_FILES);
+    ids.sort();
+    let want: Vec<String> = (10..(MAX_FILES + 10)).map(|i| format!("s{i:03}")).collect();
+    assert_eq!(ids, want);
     let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn read_dir_max_files_ties_break_by_name() {
+    let d = tmp("maxfiles-tie");
+    for i in 0..(MAX_FILES + 1) {
+        let id = format!("t{i:03}");
+        write_json(&d, &format!("{id}.json"), &id, NOW - 5);
+    }
+    let mut ids: Vec<String> = read_dir(&d).into_iter().map(|r| r.session_id).collect();
+    ids.sort();
+    let want: Vec<String> = (0..MAX_FILES).map(|i| format!("t{i:03}")).collect();
+    assert_eq!(ids, want);
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn prune_deletes_only_expired_json() {
+    let d = tmp("prune");
+    write_json(&d, "old.json", "old", NOW - TTL_SECS - 1);
+    write_json(&d, "edge.json", "edge", NOW - TTL_SECS);
+    write_json(&d, "fresh.json", "fresh", NOW - 5);
+    write_json(&d, "old.sub1.json", "old", NOW - TTL_SECS - 100);
+    for other in ["old.txt", "old.json.tmp", "old.json.bak"] {
+        fs::write(d.join(other), "x").unwrap();
+        set_mtime(&d.join(other), NOW - TTL_SECS - 1000);
+    }
+    prune(&d, NOW);
+    let mut left: Vec<String> = fs::read_dir(&d)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    assert_eq!(left, vec!["edge.json", "fresh.json", "old.json.bak", "old.json.tmp", "old.txt"]);
+    assert_eq!(mtime_secs(&d.join("fresh.json")), NOW - 5);
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn prune_missing_dir_does_not_panic() {
+    let d = std::env::temp_dir().join(format!("notch-session-tests-{}-prune-missing", std::process::id()));
+    let _ = fs::remove_dir_all(&d);
+    prune(&d, NOW);
+    assert!(!d.exists());
 }
 
 #[test]
