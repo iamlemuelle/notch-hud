@@ -8,25 +8,58 @@
   .pill { position: absolute; inset: 0; background: #000; border-radius: 0 0 14px 14px;
     display: flex; align-items: flex-start; justify-content: space-between; padding: 0 14px; box-sizing: border-box; }
   .ear { height: var(--h, 32px); display: flex; align-items: center; gap: 6px; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: #34d058; box-shadow: 0 0 6px #34d058; }
-  .detail { display: none; position: absolute; left: 18px; right: 18px; bottom: 16px; font-weight: 500; line-height: 1.6; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #8b8b8b; }
+  .dot.green { background: #34d058; box-shadow: 0 0 6px #34d058; }
+  .dot.amber { background: #f5a623; box-shadow: 0 0 6px #f5a623; }
+  .warn { color: #f5a623; }
+  .detail { display: none; position: absolute; left: 18px; right: 18px; bottom: 14px; font-weight: 500; line-height: 22px; }
   body.open .detail { display: block; }
+  .detail div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .muted { color: #8b8b8b; }
 </style>
 </head>
 <body>
   <div class="pill">
-    <div class="ear"><span class="dot"></span><span>2</span></div>
-    <div class="ear">spike</div>
-    <div class="detail">
-      <div>lstack · bianki <span class="muted">— verifier running</span></div>
-      <div>patunay <span class="muted">— waiting for permission</span></div>
-      <div class="muted">mock data · hover to expand</div>
+    <div class="ear"><span class="dot" id="dot"></span><span id="total">0</span></div>
+    <div class="ear warn" id="warn"></div>
+    <div class="detail" id="detail"></div>
     </div>
-  </div>
 <script>
+  const STATUS_TEXT = {
+    needs_input: () => 'needs your input',
+    error: () => 'error',
+    working: () => 'working',
+    done: () => 'done',
+    waiting: () => 'waiting for you',
+    needs_permission: (detail) => detail ? 'needs permission: ' + detail : 'needs permission',
+  };
+  function render(s) {
+    const dot = document.getElementById('dot');
+    dot.className = 'dot ' + (s.attention > 0 ? 'amber' : s.working > 0 ? 'green' : '');
+    document.getElementById('total').textContent = s.total;
+    document.getElementById('warn').textContent = s.attention > 0 ? '\u26a0 ' + s.attention : '';
+    const detail = document.getElementById('detail');
+    detail.replaceChildren();
+    if (s.rows.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'muted';
+      empty.textContent = 'no Claude Code sessions';
+      detail.append(empty);
+    }
+    for (const row of s.rows) {
+      const line = document.createElement('div');
+      const muted = document.createElement('span');
+      muted.className = 'muted';
+      muted.textContent = ' \u2014 ' + STATUS_TEXT[row.status](row.detail);
+      line.append(row.label, muted);
+      detail.append(line);
+    }
+  }
+  render({ rows: [], total: 0, attention: 0, working: 0 });
   document.documentElement.style.setProperty('--h', window.innerHeight + 'px');
   window.__TAURI__.event.listen('hover', (e) => document.body.classList.toggle('open', e.payload));
+  window.__TAURI__.event.listen('sessions', (e) => render(e.payload));
+  window.__TAURI__.core.invoke('sessions').then((s) => { if (s) render(s); });
 </script>
 </body>
 </html>
