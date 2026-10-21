@@ -402,6 +402,7 @@ impl Provider {
                 self.via = Via::Adapter;
                 let started = Instant::now();
                 stream_adapter(&self.dir, sink);
+                sink(Media { via: Via::Adapter, health: Health::Failed, track: None });
                 if started.elapsed() >= STREAM_HEALTHY_AFTER {
                     self.attempt = 0;
                 }
