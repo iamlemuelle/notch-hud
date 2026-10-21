@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # macOS: the app links AppKit, and the hook and scripts rely on /usr/bin/jq, plutil and launchctl's CLI shape.
+    # check.sh is not run here: it needs a real notched display and Screen Recording permission.
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Hook tests
+        run: ./tests/hook_test.sh
+      - name: Installer tests
+        run: ./tests/install_test.sh
+      - name: Login item tests
+        run: ./tests/login_test.sh
