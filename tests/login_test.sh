@@ -14,9 +14,19 @@ export LAUNCHCTL_LOG="$ROOT/launchctl.log"
 cat > "$ROOT/fakebin/launchctl" <<'FAKE'
 #!/bin/bash
 echo "$*" >> "$LAUNCHCTL_LOG"
+# Models macOS 27.0.1: after bootout the service lingers for FAKE_LINGER successful `print` calls (default 0:
+# gone at once), and bootstrap exits 5 while it is still there. State lives in $LAUNCHCTL_LOG.linger.
+STATE="$LAUNCHCTL_LOG.linger"
+remaining() { cat "$STATE" 2>/dev/null || echo 0; }
 case "$1" in
-  bootout) exit "${FAKE_BOOTOUT_RC:-0}" ;;
-  bootstrap) exit "${FAKE_BOOTSTRAP_RC:-0}" ;;
+  bootout) echo "${FAKE_LINGER:-0}" > "$STATE"; exit "${FAKE_BOOTOUT_RC:-0}" ;;
+  print)
+    r="$(remaining)"
+    if [ "$r" -gt 0 ]; then echo $((r - 1)) > "$STATE"; exit 0; fi
+    exit 113 ;;
+  bootstrap)
+    if [ "$(remaining)" -gt 0 ]; then echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; fi
+    exit "${FAKE_BOOTSTRAP_RC:-0}" ;;
 esac
 exit 0
 FAKE
@@ -40,7 +50,7 @@ check_eq() { # name actual expected
 
 mode_of() { stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"; }
 extract() { plutil -extract "$2" raw -o - "$1" 2>/dev/null; }
-reset() { : > "$LAUNCHCTL_LOG"; unset FAKE_BOOTOUT_RC FAKE_BOOTSTRAP_RC; }
+reset() { : > "$LAUNCHCTL_LOG"; rm -f "$LAUNCHCTL_LOG.linger"; unset FAKE_BOOTOUT_RC FAKE_BOOTSTRAP_RC FAKE_LINGER; }
 need_script() { # name script
   if [ ! -f "$2" ]; then fail "$1" "missing script $2"; return 1; fi
   return 0
@@ -68,6 +78,7 @@ if need_script "install writes plist" "$INSTALL"; then
   check_eq "StandardErrorPath" "$(extract "$PLIST" StandardErrorPath)" "$HOME/Library/Logs/notch-hud.log"
   check_eq "plist mode" "$([ -f "$PLIST" ] && mode_of "$PLIST")" "644"
   check_eq "launchctl calls in order" "$(calls)" "bootout gui/$UID_/$LABEL
+print gui/$UID_/$LABEL
 bootstrap gui/$UID_ $PLIST"
   check_eq "no temp files beside plist" "$(ls -A "$ROOT/agents" 2>/dev/null)" "$LABEL.plist"
 else
@@ -128,11 +139,38 @@ if need_script "install twice" "$INSTALL"; then
   check_eq "creates missing plist directory" "$([ -f "$P2" ] && echo yes || echo no)" "yes"
   check_eq "twice leaves one plist, no temp files" "$(ls -A "$ROOT/deep/er")" "$LABEL.plist"
   check_eq "twice reloads both times" "$(calls)" "bootout gui/$UID_/$LABEL
+print gui/$UID_/$LABEL
 bootstrap gui/$UID_ $P2
 bootout gui/$UID_/$LABEL
+print gui/$UID_/$LABEL
 bootstrap gui/$UID_ $P2"
 else
   for n in "creates missing plist directory" "twice leaves one plist, no temp files" "twice reloads both times"; do fail "$n" "script missing"; done
+fi
+
+# --- install: old service lingers after bootout ---
+reset; rm -rf "$ROOT/agents"
+if need_script "lingering service" "$INSTALL"; then
+  FAKE_LINGER=3 run "$INSTALL" "$PLIST"
+  check_eq "lingers 3 prints: exit 0" "$RC" "0"
+  check_eq "lingers 3 prints: bootstrap once, after the last print" "$(calls)" "bootout gui/$UID_/$LABEL
+print gui/$UID_/$LABEL
+print gui/$UID_/$LABEL
+print gui/$UID_/$LABEL
+print gui/$UID_/$LABEL
+bootstrap gui/$UID_ $PLIST"
+
+  reset; rm -rf "$ROOT/agents"
+  t0="$(date +%s)"
+  FAKE_LINGER=1000000 run "$INSTALL" "$PLIST"
+  elapsed=$(( $(date +%s) - t0 ))
+  check_eq "never stops: exit 1" "$RC" "1"
+  check_eq "never stops: stderr" "$(cat "$ROOT/err")" "notch-hud: old login item did not stop"
+  check_eq "never stops: no bootstrap" "$(calls | grep -c '^bootstrap')" "0"
+  if [ "$elapsed" -le 6 ]; then pass "never stops: gives up within 6 s"; else fail "never stops: gives up within 6 s" "took ${elapsed}s"; fi
+else
+  for n in "lingers 3 prints: exit 0" "lingers 3 prints: bootstrap once, after the last print" "never stops: exit 1" \
+    "never stops: stderr" "never stops: no bootstrap" "never stops: gives up within 6 s"; do fail "$n" "script missing"; done
 fi
 
 # --- uninstall ---
