@@ -210,7 +210,8 @@ Read-only in this version: the panel shows what is playing. Play, pause, next an
 When the adapter stream exits, the provider waits `backoff(attempt)` (1 s doubling, capped at 60 s, attempt resets
 after a stream that lived 60 s or more), runs `test` again and picks a source again. A panic inside the provider is
 caught; it logs `media: Failed: <reason>` to stderr and restarts under the same backoff. When the adapter is not
-usable it logs `media: adapter Failed (<reason>), using AppleScript` once per switch.
+usable it logs `media: adapter Failed (<reason>), using AppleScript` once per switch, polls AppleScript, and runs
+`test` again every 60 s, switching back to the adapter when it passes.
 
 ### Model
 
