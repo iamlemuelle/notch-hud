@@ -30,6 +30,18 @@ func shot(_ r: CGRect, _ name: String) -> NSBitmapImageRep? {
     try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: name))
     return rep
 }
+func isAmber(_ c: NSColor?) -> Bool {
+    guard let c = c else { return false }
+    return c.redComponent > 0.8 && c.greenComponent > 0.45 && c.greenComponent < 0.8 && c.blueComponent < 0.35
+}
+func isGreen(_ c: NSColor?) -> Bool {
+    guard let c = c else { return false }
+    return c.greenComponent > 0.6 && c.greenComponent - c.redComponent > 0.2 && c.greenComponent - c.blueComponent > 0.2
+}
+func describe(_ c: NSColor?) -> String {
+    guard let c = c else { return "no pixel" }
+    return String(format: "r %.2f g %.2f b %.2f", c.redComponent, c.greenComponent, c.blueComponent)
+}
 // Color of the pixel at global point p, inside a capture whose origin is `origin`; nil when out of range.
 func color(_ rep: NSBitmapImageRep, _ origin: CGPoint, _ p: CGPoint) -> NSColor? {
     rep.colorAt(x: Int((p.x - origin.x) * scale), y: Int((p.y - origin.y) * scale))?.usingColorSpace(.deviceRGB)
@@ -65,6 +77,7 @@ expect(layer > 24, "2. layer \(layer) > 24 (above menu bar)")
 expect(b.minY == 0, "3a. top edge y == 0 (got \(b.minY))")
 expect(abs(b.midX - screen.frame.width / 2) <= 2, "3b. centered within 2pt (midX \(b.midX) vs \(screen.frame.width / 2))")
 expect(b.width > notchW, "3c. wider than notch (\(b.width) > \(notchW))")
+var wasAmber = false
 let collapsedArea = CGRect(x: b.midX - 260, y: 0, width: 520, height: 70)
 if let rep = shot(collapsedArea, "shot.png") {
     let ear = CGPoint(x: left.maxX - 8, y: b.midY)
@@ -73,7 +86,8 @@ if let rep = shot(collapsedArea, "shot.png") {
     // Only the page can put the green status dot here: .pill padding 14 + half the 8px dot.
     let dot = CGPoint(x: b.minX + 18, y: b.midY)
     let c = color(rep, collapsedArea.origin, dot)
-    expect(isAmber(c), "6a. a session needs permission, so the status dot at \(dot) is amber (\(describe(c)))")
+    wasAmber = isAmber(c)
+    expect(wasAmber, "6a. a session needs permission, so the status dot at \(dot) is amber (\(describe(c)))")
 }
 
 let home = CGEvent(source: nil)!.location
@@ -115,7 +129,7 @@ for _ in 0..<12 where !turned {
         turned = isGreen(last)
     }
 }
-expect(turned, "6b. after s1's Stop goes through the hook, the dot turns green within 3s (\(describe(last)))")
+expect(wasAmber && turned, "6b. (needs 6a) after s1's Stop goes through the hook, the dot turns green within 3s (\(describe(last)))")
 
 print(failures.isEmpty ? "ALL PASS" : "FAILED: \(failures.count)")
 exit(failures.isEmpty ? 0 : 1)
