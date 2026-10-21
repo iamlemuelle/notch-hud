@@ -17,6 +17,7 @@ func shot(_ r: CGRect, _ name: String) {
     let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
     p.arguments = ["-x", "-R\(Int(r.minX)),\(Int(r.minY)),\(Int(r.width)),\(Int(r.height))", name]
     try? p.run(); p.waitUntilExit()
+    expect(FileManager.default.fileExists(atPath: name), "5. screenshot saved to \(name) (needs Screen Recording permission)")
 }
 func move(_ pt: CGPoint) {
     CGWarpMouseCursorPosition(pt)
@@ -45,7 +46,7 @@ expect(layer > 24, "2. layer \(layer) > 24 (above menu bar)")
 expect(b.minY == 0, "3a. top edge y == 0 (got \(b.minY))")
 expect(abs(b.midX - screen.frame.width / 2) <= 2, "3b. centered within 2pt (midX \(b.midX) vs \(screen.frame.width / 2))")
 expect(b.width > notchW, "3c. wider than notch (\(b.width) > \(notchW))")
-shot(CGRect(x: b.midX - 260, y: 0, width: 520, height: 70), "shot-collapsed.png")
+shot(CGRect(x: b.midX - 260, y: 0, width: 520, height: 70), "shot.png")
 
 let home = CGEvent(source: nil)!.location
 move(CGPoint(x: b.midX, y: b.midY))
