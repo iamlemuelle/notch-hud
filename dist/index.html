@@ -124,7 +124,7 @@
     $('earMedia').classList.toggle('paused', !!t && !t.playing);
     $('card').classList.toggle('on', !!t);
     $('denied').classList.toggle('on', !t && !!media && media.health === 'denied');
-    if (!t) return;
+    if (!t) return syncClock();
     setArt($('earArt'), t.artwork);
     setArt($('cardArt'), t.artwork);
     if (!t.artwork) {
