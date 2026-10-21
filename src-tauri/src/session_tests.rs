@@ -615,3 +615,94 @@ fn contract_quiet_decay_is_600_seconds() {
     let past = summarize(&[rec("s", "/p/proj", "PreToolUse", NOW - 601)], NOW);
     assert_eq!(past.rows[0].status, Status::Waiting);
 }
+
+const STALE: u64 = NOW - 100;
+const BOUNDARY: u64 = NOW - 50;
+const NEWER: u64 = NOW - 10;
+
+fn stale_perm() -> Record {
+    let mut p = sub("s", "ag1", "/p/proj", "PermissionRequest", STALE);
+    p.tool_name = Some("Bash".into());
+    p
+}
+
+fn one_row(recs: &[Record]) -> (Row, usize) {
+    let s = summarize(recs, NOW);
+    assert_eq!(s.total, 1);
+    (s.rows[0].clone(), s.attention)
+}
+
+#[test]
+fn supersede_boundaries_clear_stale_agent_permission() {
+    let idle = Record { notification_type: Some("idle_prompt".into()), ..rec("s", "/p/proj", "Notification", BOUNDARY) };
+    let cases = [
+        (rec("s", "/p/proj", "UserPromptSubmit", BOUNDARY), Status::Working),
+        (rec("s", "/p/proj", "Stop", BOUNDARY), Status::Done),
+        (rec("s", "/p/proj", "StopFailure", BOUNDARY), Status::Error),
+        (rec("s", "/p/proj", "SessionStart", BOUNDARY), Status::Waiting),
+        (rec("s", "/p/proj", "PermissionDenied", BOUNDARY), Status::Waiting),
+        (idle, Status::Waiting),
+    ];
+    for (main, want) in cases {
+        let label = format!("{} {:?}", main.event, main.notification_type);
+        let (row, attention) = one_row(&[stale_perm(), main]);
+        assert_eq!(row, Row { label: "proj".into(), status: want, detail: None }, "{label}");
+        assert_eq!(attention, 0, "{label}");
+    }
+}
+
+#[test]
+fn supersede_main_non_boundary_keeps_agent_permission() {
+    for event in ["PreToolUse", "PostToolUse", "PostToolUseFailure"] {
+        let (row, attention) = one_row(&[stale_perm(), rec("s", "/p/proj", event, BOUNDARY)]);
+        assert_eq!(
+            row,
+            Row { label: "proj".into(), status: Status::NeedsPermission, detail: Some("Bash".into()) },
+            "{event}"
+        );
+        assert_eq!(attention, 1, "{event}");
+    }
+}
+
+#[test]
+fn supersede_main_permission_prompt_notification_is_not_boundary() {
+    let main = Record { notification_type: Some("permission_prompt".into()), ..rec("s", "/p/proj", "Notification", BOUNDARY) };
+    let (row, attention) = one_row(&[stale_perm(), main]);
+    assert_eq!(
+        row,
+        Row { label: "proj".into(), status: Status::NeedsPermission, detail: Some("Bash".into()) }
+    );
+    assert_eq!(attention, 1);
+}
+
+#[test]
+fn supersede_keeps_agent_record_newer_than_boundary() {
+    let recs = [rec("s", "/p/proj", "Stop", BOUNDARY), sub("s", "ag1", "/p/proj", "PreToolUse", NEWER)];
+    let s = summarize(&recs, NOW);
+    assert_eq!(s.rows, vec![Row { label: "proj".into(), status: Status::Working, detail: None }]);
+    assert_eq!((s.total, s.attention, s.working), (1, 0, 1));
+}
+
+#[test]
+fn supersede_keeps_agent_record_with_equal_ts() {
+    let recs = [rec("s", "/p/proj", "Stop", BOUNDARY), sub("s", "ag1", "/p/proj", "PreToolUse", BOUNDARY)];
+    let s = summarize(&recs, NOW);
+    assert_eq!(s.rows, vec![Row { label: "proj".into(), status: Status::Working, detail: None }]);
+    assert_eq!((s.total, s.attention, s.working), (1, 0, 1));
+}
+
+#[test]
+fn supersede_is_per_session() {
+    let mut other = sub("t", "ag9", "/p/other", "PermissionRequest", STALE);
+    other.tool_name = Some("Edit".into());
+    let recs = [stale_perm(), rec("s", "/p/proj", "UserPromptSubmit", BOUNDARY), other];
+    let s = summarize(&recs, NOW);
+    assert_eq!(
+        s.rows,
+        vec![
+            Row { label: "other".into(), status: Status::NeedsPermission, detail: Some("Edit".into()) },
+            Row { label: "proj".into(), status: Status::Working, detail: None },
+        ]
+    );
+    assert_eq!((s.total, s.attention, s.working), (2, 1, 1));
+}
