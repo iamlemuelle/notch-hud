@@ -16,9 +16,9 @@ fail() { echo "FAIL: $1 -- $2"; FAILS=$((FAILS + 1)); }
 
 # Number of hook commands ending in notch-hook.sh under event $2 in file $1.
 ours() { jq --arg ev "$2" --arg suf "$HOOK_SUFFIX" \
-  '[(.hooks[$ev] // [])[] | .hooks[]? | select(.command | endswith($suf))] | length' "$1"; }
+  '[(.hooks[$ev] // [])[] | .hooks[]? | select(.command | ltrimstr("\u0027") | rtrimstr("\u0027") | endswith($suf))] | length' "$1"; }
 total_ours() { jq --arg suf "$HOOK_SUFFIX" \
-  '[(.hooks // {})[][] | .hooks[]? | select(.command | endswith($suf))] | length' "$1"; }
+  '[(.hooks // {})[][] | .hooks[]? | select(.command | ltrimstr("\u0027") | rtrimstr("\u0027") | endswith($suf))] | length' "$1"; }
 
 # Octal permission bits of $1.
 mode_of() { stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"; }
@@ -75,12 +75,12 @@ N="$(total_ours "$F")"
 if [ "$N" = "12" ]; then pass "$NAME"; else fail "$NAME" "total $N"; fi
 
 NAME="registered hooks are synchronous with timeout 2 and absolute command"
-BAD="$(jq -r --arg suf "$HOOK_SUFFIX" '[.hooks[][] | .hooks[] | select(.command | endswith($suf))
-  | select(.type != "command" or .timeout != 2 or (has("async") and .async == true) or (.command | startswith("/") | not))] | length' "$F")"
+BAD="$(jq -r --arg suf "$HOOK_SUFFIX" '[.hooks[][] | .hooks[] | select(.command | ltrimstr("\u0027") | rtrimstr("\u0027") | endswith($suf))
+  | select(.type != "command" or .timeout != 2 or (has("async") and .async == true) or (.command | ltrimstr("\u0027") | rtrimstr("\u0027") | startswith("/") | not))] | length' "$F")"
 if [ "$BAD" = "0" ]; then pass "$NAME"; else fail "$NAME" "$BAD bad registrations"; fi
 
 NAME="registered command points at this repo's hook script"
-BAD="$(jq -r --arg want "$REPO/$HOOK_SUFFIX" '[.hooks[][] | .hooks[] | select(.command | endswith("notch-hook.sh")) | select(.command | contains($want) | not)] | length' "$F")"
+BAD="$(jq -r --arg want "$REPO/$HOOK_SUFFIX" '[.hooks[][] | .hooks[] | select(.command | ltrimstr("\u0027") | rtrimstr("\u0027") | endswith("notch-hook.sh")) | select(.command | contains($want) | not)] | length' "$F")"
 if [ "$BAD" = "0" ]; then pass "$NAME"; else fail "$NAME" "$BAD commands not containing $REPO/$HOOK_SUFFIX"; fi
 
 NAME="install preserves pre-existing hooks and settings"

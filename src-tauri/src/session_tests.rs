@@ -468,10 +468,13 @@ fn read_dir_optional_fields_default_and_present() {
     .unwrap();
     let got = read_dir(&d);
     assert_eq!(got.len(), 2);
-    assert_eq!(got[0].tool_name.as_deref(), Some("Bash"));
-    assert_eq!(got[0].notification_type, None);
-    assert_eq!(got[1].notification_type.as_deref(), Some("idle_prompt"));
-    assert_eq!(got[1].tool_name, None);
+    // read_dir orders by mtime (contract section 2), so look records up by id rather than position.
+    let x = got.iter().find(|r| r.session_id == "x").expect("x read");
+    let y = got.iter().find(|r| r.session_id == "y").expect("y read");
+    assert_eq!(x.tool_name.as_deref(), Some("Bash"));
+    assert_eq!(x.notification_type, None);
+    assert_eq!(y.notification_type.as_deref(), Some("idle_prompt"));
+    assert_eq!(y.tool_name, None);
     let _ = fs::remove_dir_all(&d);
 }
 
