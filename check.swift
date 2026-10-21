@@ -73,14 +73,14 @@ if let rep = shot(collapsedArea, "shot.png") {
     // Only the page can put the green status dot here: .pill padding 14 + half the 8px dot.
     let dot = CGPoint(x: b.minX + 18, y: b.midY)
     let c = color(rep, collapsedArea.origin, dot)
-    let g = c?.greenComponent ?? 0, r = c?.redComponent ?? 1
-    expect(g > 0.6 && g - r > 0.2, "5a. web content painted: status dot at \(dot) is green (r \(r) g \(g))")
+    expect(isAmber(c), "6a. a session needs permission, so the status dot at \(dot) is amber (\(describe(c)))")
 }
 
 let home = CGEvent(source: nil)!.location
 move(CGPoint(x: b.midX, y: b.midY))
+// Four seeded sessions: 44 + 22 * 4 + 14.
 let grown = waitFor { $0.height >= 120 }
-expect((grown?.height ?? 0) >= 120, "4a. hover grows height to >= 120 (got \(grown?.height ?? -1))")
+expect(grown?.height == 146 && grown?.width == 420, "4a. hover expands to 420x146 for 4 sessions (got \(grown?.size ?? .zero))")
 if let g = grown {
     usleep(300_000)
     let area = CGRect(x: g.midX - 260, y: 0, width: 520, height: g.height + 30)
@@ -99,6 +99,23 @@ move(CGPoint(x: b.midX, y: 400))
 let shrunk = waitFor { $0.height < 60 }
 expect((shrunk?.height ?? 999) < 60, "4b. leaving shrinks it back (got \(shrunk?.height ?? -1))")
 move(home)
+
+// The permission prompt in s1 is answered and the turn ends: the dot must turn green (s2 is still working).
+let hookRun = Process()
+hookRun.executableURL = URL(fileURLWithPath: "/bin/sh")
+hookRun.arguments = ["-c", "printf '%s' '{\"session_id\":\"s1\",\"cwd\":\"/x/bianki\",\"hook_event_name\":\"Stop\"}' | ./hooks/notch-hook.sh"]
+try? hookRun.run(); hookRun.waitUntilExit()
+var turned = false
+var last: NSColor? = nil
+for _ in 0..<12 where !turned {
+    usleep(250_000)
+    let area = CGRect(x: b.midX - 260, y: 0, width: 520, height: 70)
+    if let rep = shot(area, "shot-after-stop.png") {
+        last = color(rep, area.origin, CGPoint(x: b.minX + 18, y: b.midY))
+        turned = isGreen(last)
+    }
+}
+expect(turned, "6b. after s1's Stop goes through the hook, the dot turns green within 3s (\(describe(last)))")
 
 print(failures.isEmpty ? "ALL PASS" : "FAILED: \(failures.count)")
 exit(failures.isEmpty ? 0 : 1)
