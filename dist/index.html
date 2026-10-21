@@ -107,6 +107,9 @@
   let media = null;
   let shown = null;
   let drag = null; // fraction 0..1 while the bar is being dragged
+  // The optimistic change awaiting the app's confirmation: { kind: 'toggle' | 'seek', until } or null.
+  let pending = null;
+  let pendingTimer = null;
   let attention = 0;
   function fmt(sec) {
     const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), r = sec % 60;
@@ -207,22 +210,47 @@
     syncClock();
   });
   window.__TAURI__.event.listen('sessions', (e) => render(e.payload));
-  const onMedia = (m) => { media = m; shown = m; renderMedia(); };
+  // Ends the pending change, if any, and shows the latest media the app sent.
+  function settle() {
+    clearTimeout(pendingTimer);
+    pending = null;
+    shown = media;
+    renderMedia();
+  }
+  function agrees(m) {
+    const was = shown.track;
+    return pending.kind === 'toggle'
+      ? m.track.playing === was.playing
+      : Math.abs(elapsedMs(m.track) - elapsedMs(was)) <= 2000;
+  }
+  function onMedia(m) {
+    media = m;
+    const sameTrack = pending && m.track && shown.track && m.track.title === shown.track.title;
+    if (pending && sameTrack && !agrees(m)) return;
+    settle();
+  }
+  function setPending(kind) {
+    clearTimeout(pendingTimer);
+    pending = { kind, until: Date.now() + 2000 };
+    pendingTimer = setTimeout(settle, 2000);
+  }
   function patchTrack(patch) {
     if (!shown || !shown.track) return;
     shown = { ...shown, track: { ...shown.track, ...patch } };
     renderMedia();
   }
   function send(action) {
-    window.__TAURI__.core.invoke('act', { action }).catch(() => { shown = media; renderMedia(); });
+    window.__TAURI__.core.invoke('act', { action }).catch(() => { if (pending) settle(); });
   }
   function seekTo(ms) {
+    setPending('seek');
     patchTrack({ elapsed_ms: ms, elapsed_at_ms: Date.now() });
     send({ kind: 'seek', position_ms: ms });
   }
   $('btnMain').addEventListener('click', () => {
     const t = shown && shown.track;
     if (!t) return;
+    setPending('toggle');
     patchTrack({ playing: !t.playing, elapsed_ms: elapsedMs(t), elapsed_at_ms: Date.now() });
     send({ kind: 'toggle' });
   });
