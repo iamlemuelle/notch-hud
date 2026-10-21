@@ -12,9 +12,10 @@ the menu bar. Hover over it to see one row per session.
 Expanded rows read like `bianki — needs permission: Bash`, `lstack — working`, `patunay — done`.
 
 It also shows what is playing: the right ear carries the artwork with a small equalizer (or a pause mark), and the
-expanded panel adds a card with the artwork, title, artist, the app, and a progress bar. Anything macOS lists as Now
-Playing shows up, so Apple Music, Spotify, and video in Safari or Chrome (YouTube included, shown as the browser) all
-work. A wide thumbnail switches the card to a video layout. Controls (play, pause, next, seek) are not in yet.
+expanded panel adds a card with the artwork, title, artist, the app, a seek bar, and previous, play/pause and next
+buttons. Anything macOS lists as Now Playing shows up, so Apple Music, Spotify, and video in Safari or Chrome (YouTube
+included, shown as the browser) all work. A wide thumbnail switches the card to a video layout. Clicking a control
+doesn't bring notch-hud to the front: the app you were in stays active.
 
 ## How it works
 
@@ -26,7 +27,11 @@ work. A wide thumbnail switches the card to a video layout. Controls (play, paus
 3. Now Playing comes from the vendored [mediaremote-adapter](vendor/VENDORED.md), run as a `/usr/bin/perl`
    subprocess that streams JSON. It relies on a private macOS framework through a loophole Apple could close, so when
    its self-test fails the app falls back to asking Music and Spotify directly over AppleScript (macOS asks once for
-   Automation access) and keeps retrying the adapter every minute.
+   Automation access) and keeps retrying the adapter every minute. The controls go back the same way: the adapter's
+   `send` and `seek` commands, or `tell application "Music"` (or `"Spotify"`) when on the fallback.
+4. The panel is a native non-activating `NSPanel` that hosts the Tauri webview. A plain Tauri window, even one turned
+   into a panel after it is created, activates the app when clicked on macOS 27, which would take focus from the app
+   you are working in.
 
 `CONTRACT.md` is the spec: the record format, the hook's rules, the status table, and the installer's behavior. Code
 and tests are both written against it.
@@ -69,8 +74,13 @@ cd src-tauri && cargo test && cd ..   # status rules: grouping, priority, decay,
 ./tests/hook_test.sh                  # the hook against real payloads in a temp directory
 ./tests/install_test.sh               # the installer against temp copies of settings.json
 ./tests/media_test.sh                 # Now Playing end to end: a fixture player through the real adapter, then the fallback
+./tests/controls_test.sh              # real clicks on the controls drive the fixture player; the front app must not change
 ./check.sh                            # end to end on the real screen, needs Screen Recording permission
 ```
+
+`controls_test.sh` posts mouse events, so the terminal running it needs Accessibility, and you must leave the mouse
+alone for the ~20 s it runs: real input moves the pointer out from under it. It exits 2 (skipped) when it can't post
+events or when a click would land on another window, such as an older notch-hud ordered above the test's panel.
 
 `check.sh` builds and launches the app with sessions seeded through the real hook into a temp directory. It then
 checks the window server (window level 27, above the menu bar's 24), moves the pointer to test hover, and samples
@@ -85,6 +95,8 @@ screen pixels: the amber dot, the expanded rows, and the dot turning green after
   notification clears it.
 - An interrupted turn sends no `Stop`. A session that has been "working" with no event for 10 minutes shows as waiting.
 - Session files older than 3 hours are deleted.
-- Now Playing is read-only until click routing lands. While nothing is playing, the adapter's self-test briefly
+- With the AppleScript fallback, controls work only for Music and Spotify, and only while that app is running (a click
+  never launches it). Its state refreshes on the next 2 s poll.
+- While nothing is playing, the adapter's self-test briefly
   publishes a test track at startup and after a restart, which other Now Playing displays can see for a moment.
 - The adapter is looked up next to `target/<profile>/notch-hud`; a bundled `.app` will need a new path.
