@@ -19,6 +19,7 @@
   .right { display: flex; align-items: center; }
   #earMedia { display: none; align-items: center; gap: 6px; margin-right: 3px; }
   #earMedia.on { display: flex; }
+  body.open #earMedia { display: none; }
   .art { display: block; object-fit: cover; border-radius: 3px; background: #1c1c1e; flex: none; }
   #earArt { width: 18px; height: 18px; }
   #earArt.wide { width: 26px; height: 15px; }
@@ -106,7 +107,7 @@
     }
   }
   function setArt(img, url) {
-    const key = url || '';
+    const key = url ? url.length + ':' + url.slice(-32) : '';
     if (img.dataset.key === key) return;
     img.dataset.key = key;
     if (!url) { img.removeAttribute('src'); img.classList.remove('wide'); return; }
@@ -132,9 +133,16 @@
     $('cardTitle').textContent = t.title;
     $('cardArtist').textContent = t.artist || '';
     $('cardApp').textContent = t.app;
+    syncClock();
+  }
+  let timer = null;
+  function syncClock() {
+    const t = media && media.track;
+    const want = document.body.classList.contains('open') && !!t && t.playing;
+    if (want && timer === null) timer = setInterval(tick, 250);
+    if (!want && timer !== null) { clearInterval(timer); timer = null; }
     tick();
   }
-  setInterval(tick, 250);
   function render(s) {
     attention = s.attention;
     const dot = document.getElementById('dot');
@@ -161,7 +169,7 @@
   }
   render({ rows: [], total: 0, attention: 0, working: 0 });
   document.documentElement.style.setProperty('--h', window.innerHeight + 'px');
-  window.__TAURI__.event.listen('hover', (e) => document.body.classList.toggle('open', e.payload));
+  window.__TAURI__.event.listen('hover', (e) => { document.body.classList.toggle('open', e.payload); syncClock(); });
   window.__TAURI__.event.listen('sessions', (e) => render(e.payload));
   const onMedia = (m) => { media = m; renderMedia(); };
   window.__TAURI__.event.listen('media', (e) => onMedia(e.payload));
