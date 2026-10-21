@@ -16,12 +16,57 @@
   body.open .detail { display: block; }
   .detail div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .muted { color: #8b8b8b; }
+  .right { display: flex; align-items: center; }
+  #earMedia { display: none; align-items: center; gap: 6px; margin-right: 3px; }
+  #earMedia.on { display: flex; }
+  .art { display: block; object-fit: cover; border-radius: 3px; background: #1c1c1e; flex: none; }
+  #earArt { width: 18px; height: 18px; }
+  #earArt.wide { width: 26px; height: 15px; }
+  #earBars { display: flex; align-items: center; gap: 2px; height: 12px; }
+  #earBars span { width: 2px; height: 12px; background: #f5f5f5; border-radius: 1px; transform-origin: 50% 100%;
+    animation: eq 0.9s ease-in-out infinite alternate; }
+  #earBars span:nth-child(2) { animation-delay: -0.3s; }
+  #earBars span:nth-child(3) { animation-delay: -0.6s; }
+  #earBars span:nth-child(4) { animation-delay: -0.15s; }
+  @keyframes eq { from { transform: scaleY(0.25); } to { transform: scaleY(1); } }
+  @media (prefers-reduced-motion: reduce) { #earBars span { animation: none; transform: scaleY(0.6); } }
+  #earPause { display: none; gap: 2px; align-items: center; height: 12px; }
+  #earPause span { width: 2px; height: 10px; background: #f5f5f5; border-radius: 1px; }
+  #earMedia.paused #earBars { display: none; }
+  #earMedia.paused #earPause { display: flex; }
+  #card, #denied { display: none; position: absolute; left: 18px; right: 18px; top: 44px; }
+  body.open #card.on { display: block; height: 100px; }
+  body.open #denied.on { display: block; font-weight: 500; line-height: 22px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #cardArt { width: 64px; height: 64px; border-radius: 6px; position: absolute; left: 0; top: 0; }
+  #cardArt.wide { width: 112px; height: 63px; }
+  #cardText { position: absolute; top: 0; right: 0; left: 76px; line-height: 20px; font-weight: 500; }
+  #cardText.wide { left: 124px; }
+  #cardText div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #cardTitle { font-weight: 600; }
+  #cardArtist, #cardApp { color: #8b8b8b; }
+  #prog { position: absolute; left: 0; right: 0; top: 76px; height: 20px; display: flex; align-items: center; gap: 8px;
+    color: #8b8b8b; font-weight: 500; font-variant-numeric: tabular-nums; }
+  #bar { flex: 1; height: 3px; border-radius: 2px; background: #2a2a2c; overflow: hidden; }
+  #fill { height: 100%; background: #f5f5f5; transform-origin: 0 50%; transform: scaleX(0); }
 </style>
 </head>
 <body>
   <div class="pill">
     <div class="ear"><span class="dot" id="dot"></span><span id="total">0</span></div>
-    <div class="ear warn" id="warn"></div>
+    <div class="right">
+      <div class="ear" id="earMedia">
+        <img class="art" id="earArt" alt="">
+        <div id="earBars"><span></span><span></span><span></span><span></span></div>
+        <div id="earPause"><span></span><span></span></div>
+      </div>
+      <div class="ear warn" id="warn"></div>
+    </div>
+    <div id="card">
+      <img class="art" id="cardArt" alt="">
+      <div id="cardText"><div id="cardTitle"></div><div id="cardArtist"></div><div id="cardApp"></div></div>
+      <div id="prog"><span id="tEl"></span><div id="bar"><div id="fill"></div></div><span id="tRem"></span></div>
+    </div>
+    <div id="denied">Music access is off: allow notch-hud in System Settings, Privacy &amp; Security, Automation</div>
     <div class="detail" id="detail"></div>
     </div>
 <script>
@@ -33,7 +78,65 @@
     waiting: () => 'waiting for you',
     needs_permission: (detail) => detail ? 'needs permission: ' + detail : 'needs permission',
   };
+  const $ = (id) => document.getElementById(id);
+  let media = null;
+  let attention = 0;
+  function fmt(sec) {
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), r = sec % 60;
+    const ss = String(r).padStart(2, '0');
+    return h > 0 ? h + ':' + String(m).padStart(2, '0') + ':' + ss : m + ':' + ss;
+  }
+  function elapsedMs(t) {
+    let e = t.elapsed_ms ?? 0;
+    if (t.playing && t.elapsed_at_ms != null) e += Math.max(0, Date.now() - t.elapsed_at_ms);
+    return t.duration_ms != null ? Math.min(e, t.duration_ms) : e;
+  }
+  function tick() {
+    const t = media && media.track;
+    if (!t) return;
+    const el = Math.floor(elapsedMs(t) / 1000);
+    $('tEl').textContent = fmt(el);
+    if (t.duration_ms != null) {
+      const dur = Math.floor(t.duration_ms / 1000);
+      $('tRem').textContent = '-' + fmt(Math.max(0, dur - el));
+      $('fill').style.transform = 'scaleX(' + (dur > 0 ? Math.min(1, elapsedMs(t) / t.duration_ms) : 0) + ')';
+    } else {
+      $('tRem').textContent = '';
+      $('fill').style.transform = 'scaleX(0)';
+    }
+  }
+  function setArt(img, url) {
+    const key = url || '';
+    if (img.dataset.key === key) return;
+    img.dataset.key = key;
+    if (!url) { img.removeAttribute('src'); img.classList.remove('wide'); return; }
+    img.onload = () => {
+      const wide = img.naturalWidth >= 1.3 * img.naturalHeight;
+      for (const id of ['earArt', 'cardArt']) $(id).classList.toggle('wide', wide);
+      $('cardText').classList.toggle('wide', wide);
+    };
+    img.src = url;
+  }
+  function renderMedia() {
+    const t = media && media.track;
+    $('earMedia').classList.toggle('on', !!t && attention === 0);
+    $('earMedia').classList.toggle('paused', !!t && !t.playing);
+    $('card').classList.toggle('on', !!t);
+    $('denied').classList.toggle('on', !t && !!media && media.health === 'denied');
+    if (!t) return;
+    setArt($('earArt'), t.artwork);
+    setArt($('cardArt'), t.artwork);
+    if (!t.artwork) {
+      $('cardText').classList.remove('wide');
+    }
+    $('cardTitle').textContent = t.title;
+    $('cardArtist').textContent = t.artist || '';
+    $('cardApp').textContent = t.app;
+    tick();
+  }
+  setInterval(tick, 250);
   function render(s) {
+    attention = s.attention;
     const dot = document.getElementById('dot');
     dot.className = 'dot ' + (s.attention > 0 ? 'amber' : s.working > 0 ? 'green' : '');
     document.getElementById('total').textContent = s.total;
@@ -54,11 +157,15 @@
       line.append(row.label, muted);
       detail.append(line);
     }
+    renderMedia();
   }
   render({ rows: [], total: 0, attention: 0, working: 0 });
   document.documentElement.style.setProperty('--h', window.innerHeight + 'px');
   window.__TAURI__.event.listen('hover', (e) => document.body.classList.toggle('open', e.payload));
   window.__TAURI__.event.listen('sessions', (e) => render(e.payload));
+  const onMedia = (m) => { media = m; renderMedia(); };
+  window.__TAURI__.event.listen('media', (e) => onMedia(e.payload));
+  window.__TAURI__.core.invoke('media').then((m) => { if (m) onMedia(m); });
   window.__TAURI__.core.invoke('sessions').then((s) => { if (s) render(s); });
 </script>
 </body>
