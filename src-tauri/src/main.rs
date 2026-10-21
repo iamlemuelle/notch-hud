@@ -65,6 +65,9 @@ impl Notch {
 }
 
 static EXPANDED_NOW: AtomicBool = AtomicBool::new(false);
+/// Left button state at the previous hover poll, and whether a press that started on the expanded panel is held.
+static PREV_DOWN: AtomicBool = AtomicBool::new(false);
+static PRESS_LATCHED: AtomicBool = AtomicBool::new(false);
 static LATEST: Mutex<Option<Summary>> = Mutex::new(None);
 static MEDIA: Mutex<Option<Media>> = Mutex::new(None);
 
@@ -153,9 +156,17 @@ fn track_hover(window: &WebviewWindow) {
         && p.x <= frame.origin.x + frame.size.width
         && p.y >= frame.origin.y
         && p.y <= frame.origin.y + frame.size.height;
-    // A held left button keeps an expanded panel open, so a seek drag that overshoots the bar does not collapse it.
-    let held = NSEvent::pressedMouseButtons() & 1 != 0;
-    let inside = over || (held && EXPANDED_NOW.load(Ordering::Relaxed));
+    // A press that starts on the expanded panel keeps it open until release, so a seek drag that overshoots the
+    // bar does not collapse it. A press that starts elsewhere is never latched.
+    let down = NSEvent::pressedMouseButtons() & 1 != 0;
+    let pressed = down && !PREV_DOWN.swap(down, Ordering::Relaxed);
+    if !down {
+        PREV_DOWN.store(false, Ordering::Relaxed);
+        PRESS_LATCHED.store(false, Ordering::Relaxed);
+    } else if pressed && over && EXPANDED_NOW.load(Ordering::Relaxed) {
+        PRESS_LATCHED.store(true, Ordering::Relaxed);
+    }
+    let inside = over || PRESS_LATCHED.load(Ordering::Relaxed);
     if inside != EXPANDED_NOW.swap(inside, Ordering::Relaxed) {
         place(inside);
         let _ = window.emit("hover", inside);
