@@ -1,3 +1,4 @@
+mod layout;
 mod media;
 mod session;
 
@@ -15,13 +16,12 @@ use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
+use layout::{Layout, Shape, Size, WindowMode};
 use media::{Health, Media};
 use session::{prune, read_dir, sessions_dir, summarize, Summary};
 
 // kCGMainMenuWindowLevel is 24; +3 matches what notch apps use to clear the menu bar and its status items.
 const ABOVE_MENU_BAR: isize = 24 + 3;
-const EAR: f64 = 60.0;
-const EXPANDED_WIDTH: f64 = 420.0;
 
 /// Notch geometry in AppKit points (bottom-left origin), read afresh on every placement.
 struct Notch {
@@ -47,29 +47,38 @@ impl Notch {
         self.screen.origin.y + self.screen.size.height
     }
 
-    /// `expanded`: the session row count and the extra height the media block needs.
-    fn panel(&self, expanded: Option<(usize, usize)>) -> NSRect {
-        let size = match expanded {
-            Some((rows, media_extra)) => NSSize {
-                width: EXPANDED_WIDTH,
-                height: (44 + media_extra + 22 * rows.max(1) + 14) as f64,
-            },
-            None => NSSize { width: self.width + 2.0 * EAR, height: self.height },
-        };
+    /// `size` centered on the notch, its top edge at the screen top.
+    fn rect(&self, size: Size) -> NSRect {
         let center = self.x + self.width / 2.0;
         NSRect {
             origin: NSPoint { x: center - size.width / 2.0, y: self.top() - size.height },
-            size,
+            size: NSSize { width: size.width, height: size.height },
         }
+    }
+
+    fn layout(&self) -> Layout {
+        layout::layout(self.width, self.height, self.screen.size.height, latest_row_count(), media_extra_height())
     }
 }
 
-static EXPANDED_NOW: AtomicBool = AtomicBool::new(false);
-/// Left button state at the previous hover poll, and whether a press that started on the expanded panel is held.
+/// What the page last asked for with `surface`. `open_height` is the tallest open window since the mode became open.
+struct Surface {
+    window: WindowMode,
+    hit: Shape,
+    open_height: f64,
+}
+
+/// Whether the cursor was last reported inside the hit rect.
+static INSIDE: AtomicBool = AtomicBool::new(false);
+/// Left button state at the previous hover poll, and whether a press that started inside a grown shape is held.
 static PREV_DOWN: AtomicBool = AtomicBool::new(false);
 static PRESS_LATCHED: AtomicBool = AtomicBool::new(false);
 static LATEST: Mutex<Option<Summary>> = Mutex::new(None);
 static MEDIA: Mutex<Option<Media>> = Mutex::new(None);
+static SURFACE: Mutex<Surface> =
+    Mutex::new(Surface { window: WindowMode::Pill, hit: Shape::Pill, open_height: 0.0 });
+/// The layout the page was last sent, refreshed on every placement.
+static LAYOUT: Mutex<Option<Layout>> = Mutex::new(None);
 
 thread_local! {
     /// The visible window: a native non-activating panel that hosts the Tauri window's webview. Created once on
@@ -112,11 +121,6 @@ fn adopt_panel(mtm: MainThreadMarker, window: &WebviewWindow) {
     PANEL.with(|p| *p.borrow_mut() = Some(panel));
 }
 
-/// Main thread only. The panel's frame, or `None` before it exists.
-fn panel_frame() -> Option<NSRect> {
-    PANEL.with(|p| p.borrow().as_ref().map(|panel| panel.frame()))
-}
-
 fn notched_screen(mtm: MainThreadMarker) -> Option<Notch> {
     NSScreen::screens(mtm).iter().find_map(|s| Notch::read(&s))
 }
@@ -126,50 +130,93 @@ fn latest_row_count() -> usize {
 }
 
 /// Extra expanded height for the now playing block: a track, or the "access is off" line.
-fn media_extra_height() -> usize {
+fn media_extra_height() -> f64 {
     match MEDIA.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-        Some(Media { track: Some(_), .. }) => 146,
-        Some(Media { track: None, health: Health::Denied, .. }) => 22,
-        _ => 0,
+        Some(Media { track: Some(_), .. }) => 146.0,
+        Some(Media { track: None, health: Health::Denied, .. }) => 22.0,
+        _ => 0.0,
     }
 }
 
-/// Main thread only. Looks the notched screen up again so display changes move the panel.
-fn place(expanded: bool) {
+fn mode_name(mode: WindowMode) -> &'static str {
+    match mode {
+        WindowMode::Pill => "pill",
+        WindowMode::Banner => "banner",
+        WindowMode::Open => "open",
+    }
+}
+
+/// Main thread only. Looks the notched screen up again so display changes move the panel, sizes the window for the
+/// page's current mode, and emits `layout` when it changed.
+fn place(app: &AppHandle) {
     let Some(mtm) = MainThreadMarker::new() else { return };
     let Some(notch) = notched_screen(mtm) else { return };
-    let target = notch.panel(expanded.then(|| (latest_row_count(), media_extra_height())));
+    let layout = notch.layout();
+    let (mode, size) = {
+        let mut s = SURFACE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut size = layout::window_size(&layout, s.window);
+        if s.window == WindowMode::Open {
+            s.open_height = s.open_height.max(size.height);
+            size.height = s.open_height;
+        }
+        (s.window, size)
+    };
+    let target = notch.rect(size);
     PANEL.with(|p| {
         if let Some(panel) = p.borrow().as_ref() {
-            if panel.frame() != target {
+            let frame = panel.frame();
+            if frame != target {
+                if frame.size != target.size && trace_on() {
+                    eprintln!("window: {} {}x{}", mode_name(mode), size.width, size.height);
+                }
                 panel.setFrame_display(target, true);
             }
         }
     });
+    let changed = {
+        let mut last = LAYOUT.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = last.as_ref() != Some(&layout);
+        *last = Some(layout);
+        changed
+    };
+    if changed {
+        let _ = app.emit("layout", layout);
+    }
+}
+
+fn place_soon(app: &AppHandle) {
+    let target = app.clone();
+    let _ = app.run_on_main_thread(move || place(&target));
 }
 
 // The webview gets no mouse events while this non-key window belongs to a background app,
-// so hover is decided natively from the global cursor position.
+// so hover is decided natively from the global cursor position, against the shape the page shows.
 fn track_hover(app: &AppHandle) {
-    let Some(frame) = panel_frame() else { return };
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let Some(notch) = notched_screen(mtm) else { return };
+    let Some(layout) = *LAYOUT.lock().unwrap_or_else(|e| e.into_inner()) else { return };
+    let hit = SURFACE.lock().unwrap_or_else(|e| e.into_inner()).hit;
+    let frame = notch.rect(layout::shape_size(&layout, hit));
     let p = NSEvent::mouseLocation();
     let over = p.x >= frame.origin.x
         && p.x <= frame.origin.x + frame.size.width
         && p.y >= frame.origin.y
         && p.y <= frame.origin.y + frame.size.height;
-    // A press that starts on the expanded panel keeps it open until release, so a seek drag that overshoots the
-    // bar does not collapse it. A press that starts elsewhere is never latched.
+    // A press that starts inside a grown shape keeps hover on until release, so a seek drag that overshoots the
+    // bar does not collapse the panel. A press that starts elsewhere is never latched.
     let down = NSEvent::pressedMouseButtons() & 1 != 0;
     let pressed = down && !PREV_DOWN.swap(down, Ordering::Relaxed);
     if !down {
         PREV_DOWN.store(false, Ordering::Relaxed);
         PRESS_LATCHED.store(false, Ordering::Relaxed);
-    } else if pressed && over && EXPANDED_NOW.load(Ordering::Relaxed) {
+    } else if pressed && over && hit != Shape::Pill {
         PRESS_LATCHED.store(true, Ordering::Relaxed);
     }
     let inside = over || PRESS_LATCHED.load(Ordering::Relaxed);
-    if inside != EXPANDED_NOW.swap(inside, Ordering::Relaxed) {
-        place(inside);
+    if inside != INSIDE.swap(inside, Ordering::Relaxed) {
+        if trace_on() {
+            eprintln!("hover: {}", if inside { "in" } else { "out" });
+        }
         let _ = app.emit("hover", inside);
     }
 }
@@ -179,20 +226,14 @@ fn poll_sessions(app: &AppHandle) {
     let dir = sessions_dir();
     prune(&dir, now);
     let summary = summarize(&read_dir(&dir), now);
-    let _ = app.run_on_main_thread(move || place(EXPANDED_NOW.load(Ordering::Relaxed)));
     {
         let mut latest = LATEST.lock().unwrap_or_else(|e| e.into_inner());
-        if latest.as_ref() == Some(&summary) {
-            return;
+        if latest.as_ref() != Some(&summary) {
+            *latest = Some(summary.clone());
+            let _ = app.emit("sessions", &summary);
         }
-        *latest = Some(summary.clone());
     }
-    let _ = app.emit("sessions", &summary);
-    let _ = app.run_on_main_thread(|| {
-        if EXPANDED_NOW.load(Ordering::Relaxed) {
-            place(true);
-        }
-    });
+    place_soon(app);
 }
 
 #[tauri::command]
@@ -229,11 +270,7 @@ fn on_media(app: &AppHandle, media: Media) {
         eprintln!("{}", trace_line(&media));
     }
     let _ = app.emit("media", &media);
-    let _ = app.run_on_main_thread(|| {
-        if EXPANDED_NOW.load(Ordering::Relaxed) {
-            place(true);
-        }
-    });
+    place_soon(app);
 }
 
 /// Parses, routes against the latest media and applies off the main thread.
@@ -271,9 +308,28 @@ fn media() -> Option<Media> {
     MEDIA.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+#[tauri::command]
+fn layout() -> Option<Layout> {
+    *LAYOUT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The page's window mode and hit shape (CONTRACT.md section 8). Serde rejects unknown values before this runs.
+#[tauri::command]
+fn surface(app: AppHandle, window: WindowMode, hit: Shape) {
+    {
+        let mut s = SURFACE.lock().unwrap_or_else(|e| e.into_inner());
+        if s.window != window {
+            s.open_height = 0.0;
+        }
+        s.window = window;
+        s.hit = hit;
+    }
+    place_soon(&app);
+}
+
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![sessions, media, act])
+        .invoke_handler(tauri::generate_handler![sessions, media, act, layout, surface])
         .setup(|app| {
             let mtm = MainThreadMarker::new().expect("main thread");
             if notched_screen(mtm).is_none() {
@@ -295,7 +351,7 @@ fn main() {
                 })
                 .build()?;
             adopt_panel(mtm, &window);
-            place(false);
+            place(app.handle());
 
             drop(window);
 
