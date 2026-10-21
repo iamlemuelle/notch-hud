@@ -1,6 +1,11 @@
 //! Now Playing: what the panel shows is playing. See CONTRACT.md section 7.
 
-use std::time::Duration;
+use std::any::Any;
+use std::io::{BufRead, BufReader};
+use std::panic::AssertUnwindSafe;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
@@ -155,6 +160,212 @@ pub fn applescript_denied(stderr: &str) -> bool {
 
 pub fn backoff(attempt: u32) -> Duration {
     Duration::from_secs(2u64.checked_pow(attempt).map_or(60, |s| s.min(60)))
+}
+
+// ---- Provider: processes and timing. Everything above is pure. ----
+
+const ADAPTER_TEST_TIMEOUT: Duration = Duration::from_secs(5);
+const STREAM_HEALTHY_AFTER: Duration = Duration::from_secs(60);
+const APPLESCRIPT_POLL: Duration = Duration::from_secs(2);
+const ADAPTER_RETEST: Duration = Duration::from_secs(60);
+
+const MUSIC_SCRIPT: &str = r#"tell application "Music"
+set s to player state as text
+if s is "stopped" then return "music" & tab & s & tab & tab & tab & tab & "0" & tab & "0" & tab
+set t to current track
+return "music" & tab & s & tab & (name of t) & tab & (artist of t) & tab & (album of t) & tab & ((round (duration of t)) as text) & tab & ((round (player position)) as text) & tab
+end tell"#;
+
+const SPOTIFY_SCRIPT: &str = r#"tell application "Spotify"
+set s to player state as text
+if s is "stopped" then return "spotify" & tab & s & tab & tab & tab & tab & "0" & tab & "0" & tab
+set t to current track
+return "spotify" & tab & s & tab & (name of t) & tab & (artist of t) & tab & (album of t) & tab & ((round ((duration of t) / 1000)) as text) & tab & ((round (player position)) as text) & tab & (artwork url of t)
+end tell"#;
+
+/// `$NOTCH_MEDIA_ADAPTER` when set and non-empty, else `target/adapter` next to `target/<profile>/notch-hud`.
+pub fn adapter_dir() -> PathBuf {
+    match std::env::var_os("NOTCH_MEDIA_ADAPTER") {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => std::env::current_exe()
+            .ok()
+            .and_then(|exe| Some(exe.parent()?.parent()?.join("adapter")))
+            .unwrap_or_else(|| PathBuf::from("adapter")),
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+fn adapter_command(dir: &Path, args: &[&str]) -> Command {
+    let mut cmd = Command::new("/usr/bin/perl");
+    cmd.arg(dir.join("mediaremote-adapter.pl"))
+        .arg(dir.join("MediaRemoteAdapter.framework"))
+        .arg(dir.join("MediaRemoteAdapterTestClient"))
+        .args(args)
+        .stdin(Stdio::null());
+    cmd
+}
+
+/// Kills the child when dropped, also while unwinding from a panic, so no adapter outlives its reader.
+struct Reaped(Child);
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn test_adapter(dir: &Path) -> Result<(), String> {
+    let script = dir.join("mediaremote-adapter.pl");
+    if !script.is_file() {
+        return Err(format!("{} not found", script.display()));
+    }
+    let child = adapter_command(dir, &["test"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("test did not start: {e}"))?;
+    let mut child = Reaped(child);
+    let started = Instant::now();
+    loop {
+        match child.0.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => return Err(format!("test {status}")),
+            Ok(None) if started.elapsed() >= ADAPTER_TEST_TIMEOUT => {
+                return Err(format!("test timed out after {} s", ADAPTER_TEST_TIMEOUT.as_secs()))
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => return Err(format!("test wait: {e}")),
+        }
+    }
+}
+
+/// Feeds every stream line to `sink` until the adapter exits.
+fn stream_adapter(dir: &Path, sink: &dyn Fn(Media)) {
+    let child = adapter_command(dir, &["stream", "--micros", "--no-diff", "--debounce=100"])
+        .stdout(Stdio::piped())
+        .spawn();
+    let mut child = match child {
+        Ok(child) => Reaped(child),
+        Err(e) => return eprintln!("media: adapter stream did not start: {e}"),
+    };
+    let Some(stdout) = child.0.stdout.take() else { return };
+    for line in BufReader::new(stdout).lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(e) => {
+                eprintln!("media: adapter stream read: {e}");
+                break;
+            }
+        };
+        match parse_adapter_line(&line) {
+            Ok(track) => sink(Media { via: Via::Adapter, health: Health::Ok, track }),
+            Err(e) => eprintln!("media: skipped adapter line: {e}"),
+        }
+    }
+    match child.0.wait() {
+        Ok(status) => eprintln!("media: adapter stream ended ({status})"),
+        Err(e) => eprintln!("media: adapter stream wait: {e}"),
+    }
+}
+
+fn running(process: &str) -> bool {
+    Command::new("/usr/bin/pgrep")
+        .args(["-x", process])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// Asks only apps that are already running, so polling never launches one.
+fn poll_applescript() -> Media {
+    let mut out = String::new();
+    let mut denied = false;
+    for (process, script) in [("Music", MUSIC_SCRIPT), ("Spotify", SPOTIFY_SCRIPT)] {
+        if !running(process) {
+            continue;
+        }
+        match Command::new("/usr/bin/osascript").args(["-e", script]).stdin(Stdio::null()).output() {
+            Ok(o) => {
+                denied |= applescript_denied(&String::from_utf8_lossy(&o.stderr));
+                out.push_str(&String::from_utf8_lossy(&o.stdout));
+                out.push('\n');
+            }
+            Err(e) => {
+                eprintln!("media: osascript did not start: {e}");
+                return Media { via: Via::Applescript, health: Health::Failed, track: None };
+            }
+        }
+    }
+    match parse_applescript(&out, now_ms()) {
+        Some(track) => Media { via: Via::Applescript, health: Health::Ok, track: Some(track) },
+        None if denied => Media { via: Via::Applescript, health: Health::Denied, track: None },
+        None => Media { via: Via::Applescript, health: Health::Ok, track: None },
+    }
+}
+
+struct Provider {
+    dir: PathBuf,
+    attempt: u32,
+    via: Via,
+}
+
+impl Provider {
+    fn back_off(&mut self) {
+        std::thread::sleep(backoff(self.attempt));
+        self.attempt = self.attempt.saturating_add(1);
+    }
+
+    /// One pass: stream the adapter until it exits, or poll AppleScript until the next adapter test.
+    fn step(&mut self, sink: &dyn Fn(Media)) {
+        match test_adapter(&self.dir) {
+            Ok(()) => {
+                self.via = Via::Adapter;
+                let started = Instant::now();
+                stream_adapter(&self.dir, sink);
+                if started.elapsed() >= STREAM_HEALTHY_AFTER {
+                    self.attempt = 0;
+                }
+                self.back_off();
+            }
+            Err(reason) => {
+                if self.via != Via::Applescript {
+                    eprintln!("media: adapter Failed ({reason}), using AppleScript");
+                    self.via = Via::Applescript;
+                }
+                let started = Instant::now();
+                while started.elapsed() < ADAPTER_RETEST {
+                    sink(poll_applescript());
+                    std::thread::sleep(APPLESCRIPT_POLL);
+                }
+            }
+        }
+    }
+}
+
+fn panic_reason(panic: &(dyn Any + Send)) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".into())
+}
+
+/// Never returns. Reports every reading to `sink`; a panic is logged, reported as `Failed`, and retried.
+pub fn run(sink: impl Fn(Media) + Send + Sync + 'static) -> ! {
+    let mut provider = Provider { dir: adapter_dir(), attempt: 0, via: Via::None };
+    loop {
+        let pass = std::panic::catch_unwind(AssertUnwindSafe(|| provider.step(&sink)));
+        if let Err(panic) = pass {
+            eprintln!("media: Failed: {}", panic_reason(panic.as_ref()));
+            sink(Media { via: provider.via, health: Health::Failed, track: None });
+            provider.back_off();
+        }
+    }
 }
 
 #[cfg(test)]
