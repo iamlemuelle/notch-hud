@@ -10,7 +10,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push supersedes a PR's run; every commit on main keeps its own result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -25,6 +26,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: src-tauri
+          # PRs restore main's cache but never write one, so they can't evict it.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
       - name: Hook tests
