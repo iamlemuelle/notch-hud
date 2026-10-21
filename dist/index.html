@@ -50,7 +50,7 @@
     background: radial-gradient(170px 125px at 158px 42px, rgba(var(--tint), 0.34), rgba(var(--tint), 0.08) 60%, transparent);
     -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 30px); mask-image: linear-gradient(to bottom, transparent 0, #000 30px); }
   #panel.video #glow { background: radial-gradient(170px 125px at 182px 41.5px, rgba(var(--tint), 0.34), rgba(var(--tint), 0.08) 60%, transparent); }
-  #music.has #glow { display: block; }
+  #music.art #glow { display: block; }
   #cardArt { left: 16px; top: 44px; width: 64px; height: 64px; border-radius: 13px; }
   #panel.video #cardArt { width: 112px; height: 63px; border-radius: 8px; }
   #cardArt::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09); }
@@ -192,7 +192,8 @@
   function setTint(rgb) {
     document.documentElement.style.setProperty('--tint', rgb);
   }
-  // The average color of the artwork's pixels, lifted toward white until its luminance reaches 110.
+  // The alpha-weighted average color of the artwork's pixels, lifted toward white until its luminance reaches 110.
+  // White when no pixel is opaque.
   function averageTint(img) {
     try {
       const c = document.createElement('canvas');
@@ -200,9 +201,12 @@
       const x = c.getContext('2d');
       x.drawImage(img, 0, 0, 16, 16);
       const d = x.getImageData(0, 0, 16, 16).data;
-      let r = 0, g = 0, b = 0;
-      for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
-      const n = d.length / 4;
+      let r = 0, g = 0, b = 0, n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const a = d[i + 3];
+        r += d[i] * a; g += d[i + 1] * a; b += d[i + 2] * a; n += a;
+      }
+      if (n === 0) return WHITE;
       [r, g, b] = [r / n, g / n, b / n];
       const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
       const t = lum >= 110 ? 0 : (110 - lum) / (255 - lum);
@@ -211,7 +215,8 @@
       return WHITE; // a cross-origin artwork without CORS taints the canvas
     }
   }
-  // The tint is read from a separate image, so the visible artwork never waits on it or fails with it.
+  // A remote artwork's tint is read from a separate CORS image, so the visible artwork never waits on it or fails
+  // with it. A data URL needs no second load: showArt reads the visible image.
   function loadTint(url) {
     const probe = new Image();
     probe.crossOrigin = 'anonymous';
@@ -223,7 +228,8 @@
     if (url === artUrl) return;
     artUrl = url;
     $('panel').classList.remove('video');
-    setTint(WHITE);
+    $('music').classList.toggle('art', !!url);
+    if (!url) setTint(WHITE);
     for (const box of [$('earArt'), $('cardArt')]) {
       const img = box.querySelector('img');
       box.classList.toggle('has', !!url);
@@ -233,13 +239,17 @@
     if (!url) return;
     const img = $('cardArt').querySelector('img');
     img.onload = () => {
-      if (artUrl === url) $('panel').classList.toggle('video', img.naturalWidth >= 1.3 * img.naturalHeight);
+      if (artUrl !== url) return;
+      $('panel').classList.toggle('video', img.naturalWidth >= 1.3 * img.naturalHeight);
+      if (url.startsWith('data:')) setTint(averageTint(img));
     };
     img.onerror = () => {
       if (artUrl !== url) return;
       for (const box of [$('earArt'), $('cardArt')]) box.classList.remove('has');
+      $('music').classList.remove('art');
+      setTint(WHITE);
     };
-    loadTint(url);
+    if (!url.startsWith('data:')) loadTint(url);
   }
   function renderMedia() {
     const t = shown && shown.track;
@@ -305,8 +315,8 @@
     head.className = s.attention > 0 ? 'att' : '';
     head.textContent = s.attention > 0 ? s.attention + (s.attention === 1 ? ' needs you' : ' need you')
       : s.working > 0 ? s.working + ' working' : 'All quiet';
-    const rows = s.rows.slice(0, 4).map(sessionRow);
-    if (s.total > 4) rows.push(mutedRow(s.total - 4 + ' more'));
+    const rows = s.rows.map(sessionRow);
+    if (s.total > s.rows.length) rows.push(mutedRow(s.total - s.rows.length + ' more'));
     if (s.total === 0) rows.push(mutedRow('No Claude Code sessions'));
     $('rows').replaceChildren(...rows);
   }
