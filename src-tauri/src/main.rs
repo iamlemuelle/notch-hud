@@ -1,3 +1,4 @@
+mod media;
 mod session;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,6 +9,7 @@ use objc2_app_kit::{NSEvent, NSScreen, NSWindow, NSWindowCollectionBehavior};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
+use media::{Health, Media};
 use session::{prune, read_dir, sessions_dir, summarize, Summary};
 
 // kCGMainMenuWindowLevel is 24; +3 matches what notch apps use to clear the menu bar and its status items.
@@ -39,11 +41,12 @@ impl Notch {
         self.screen.origin.y + self.screen.size.height
     }
 
-    fn panel(&self, expanded_rows: Option<usize>) -> NSRect {
-        let size = match expanded_rows {
-            Some(rows) => NSSize {
+    /// `expanded`: the session row count and the extra height the media block needs.
+    fn panel(&self, expanded: Option<(usize, usize)>) -> NSRect {
+        let size = match expanded {
+            Some((rows, media_extra)) => NSSize {
                 width: EXPANDED_WIDTH,
-                height: (44 + 22 * rows.max(1) + 14) as f64,
+                height: (44 + media_extra + 22 * rows.max(1) + 14) as f64,
             },
             None => NSSize { width: self.width + 2.0 * EAR, height: self.height },
         };
@@ -57,6 +60,7 @@ impl Notch {
 
 static EXPANDED_NOW: AtomicBool = AtomicBool::new(false);
 static LATEST: Mutex<Option<Summary>> = Mutex::new(None);
+static MEDIA: Mutex<Option<Media>> = Mutex::new(None);
 
 fn ns_window(window: &WebviewWindow) -> &NSWindow {
     let ptr = window.ns_window().expect("ns_window") as *const NSWindow;
@@ -71,12 +75,20 @@ fn latest_row_count() -> usize {
     LATEST.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |s| s.rows.len())
 }
 
+/// Extra expanded height for the now playing block: a track, or the "access is off" line.
+fn media_extra_height() -> usize {
+    match MEDIA.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        Some(Media { track: Some(_), .. }) => 108,
+        Some(Media { track: None, health: Health::Denied, .. }) => 22,
+        _ => 0,
+    }
+}
+
 /// Main thread only. Looks the notched screen up again so display changes move the panel.
 fn place(window: &WebviewWindow, expanded: bool) {
     let Some(mtm) = MainThreadMarker::new() else { return };
     let Some(notch) = notched_screen(mtm) else { return };
-    let rows = expanded.then(latest_row_count);
-    let target = notch.panel(rows);
+    let target = notch.panel(expanded.then(|| (latest_row_count(), media_extra_height())));
     let ns = ns_window(window);
     if ns.frame() != target {
         ns.setFrame_display(target, true);
@@ -126,9 +138,47 @@ fn sessions() -> Option<Summary> {
     LATEST.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+fn trace_line(m: &Media) -> String {
+    let via = serde_json::to_value(m.via).unwrap_or_default();
+    let health = serde_json::to_value(m.health).unwrap_or_default();
+    let (via, health) = (via.as_str().unwrap_or("?"), health.as_str().unwrap_or("?"));
+    match &m.track {
+        Some(t) => {
+            let state = if t.playing { "playing" } else { "paused" };
+            format!("media: {via} {health} {state} \"{}\" ({})", t.title, t.app)
+        }
+        None => format!("media: {via} {health} nothing"),
+    }
+}
+
+fn on_media(window: &WebviewWindow, media: Media) {
+    {
+        let mut latest = MEDIA.lock().unwrap_or_else(|e| e.into_inner());
+        if latest.as_ref() == Some(&media) {
+            return;
+        }
+        *latest = Some(media.clone());
+    }
+    if std::env::var_os("NOTCH_TRACE").is_some_and(|v| !v.is_empty()) {
+        eprintln!("{}", trace_line(&media));
+    }
+    let _ = window.emit("media", &media);
+    let target = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        if EXPANDED_NOW.load(Ordering::Relaxed) {
+            place(&target, true);
+        }
+    });
+}
+
+#[tauri::command]
+fn media() -> Option<Media> {
+    MEDIA.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![sessions])
+        .invoke_handler(tauri::generate_handler![sessions, media])
         .setup(|app| {
             let mtm = MainThreadMarker::new().expect("main thread");
             if notched_screen(mtm).is_none() {
@@ -166,6 +216,8 @@ fn main() {
                 poll_sessions(&poll);
                 std::thread::sleep(Duration::from_secs(1));
             });
+            let media_window = window.clone();
+            std::thread::spawn(move || media::run(move |m| on_media(&media_window, m)));
             Ok(())
         })
         .run(tauri::generate_context!())
