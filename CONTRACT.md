@@ -204,11 +204,20 @@ Read-only in this version: the panel shows what is playing. Play, pause, next an
    - Then runs `... stream --micros --no-diff --debounce=100` and reads one JSON object per stdout line.
 2. **AppleScript** (fallback, when the adapter is not usable). Every 2 s, for each of Music (`pgrep -x Music`) and
    Spotify (`pgrep -x Spotify`) that is running, one `osascript` call prints one tab-separated line per app:
-   `<music|spotify>\t<playing|paused|stopped>\t<title>\t<artist>\t<album>\t<duration s>\t<position s>\t<artwork url or empty>`.
-   Stderr containing `-1743` means Automation access was refused: health `denied`, no retry until the next poll.
+   `<music|spotify>\t<playing|paused|stopped>\t<title>\t<artist>\t<album>\t<duration ms>\t<position ms>\t<artwork url or empty>`.
+   Positions and durations are printed as whole milliseconds (`round (x * 1000)`), so no locale decimal comma
+   appears and the page does not step backward. Each `osascript` is killed after 3 s; a timeout gives health
+   `failed` for that poll. Stderr containing `-1743` means Automation access was refused: health `denied`, no retry
+   until the next poll.
 
-When the adapter stream exits, the provider waits `backoff(attempt)` (1 s doubling, capped at 60 s, attempt resets
-after a stream that lived 60 s or more), runs `test` again and picks a source again. A panic inside the provider is
+When the adapter stream exits, the provider first reports `{via: adapter, health: failed, track: null}` so no stale
+track stays on screen, then waits `backoff(attempt)` (1 s doubling, capped at 60 s; a stream that lived 60 s or more
+resets `attempt` to 0 so the next wait is 1 s), runs `test` again and picks a source again.
+
+Every adapter process (`test` and `stream`) runs in its own process group under a watchdog that holds a pipe from
+the app: when the app exits for any reason, SIGKILL included, the pipe closes and the watchdog ends the whole group,
+the adapter's test client too. Stopping a child early (a `test` timeout, a read error) sends SIGTERM to the group,
+then SIGKILL after 3 s. A panic inside the provider is
 caught; it logs `media: Failed: <reason>` to stderr and restarts under the same backoff. When the adapter is not
 usable it logs `media: adapter Failed (<reason>), using AppleScript` once per switch, polls AppleScript, and runs
 `test` again every 60 s, switching back to the adapter when it passes.
@@ -260,8 +269,8 @@ pub struct Media { pub via: Via, pub health: Health, pub track: Option<Track> }
 - `parse_applescript(out: &str, now_ms: u64) -> Option<Track>`. Reads the lines above. Picks the first `playing`
   line, else the first `paused` line; `stopped`, malformed lines (fewer than 8 fields, unknown app, unparsable
   numbers) and empty titles are skipped. `music` maps to `com.apple.Music` / Apple Music, `spotify` to
-  `com.spotify.client` / Spotify. Seconds become milliseconds (rounded); `elapsed_at_ms` = `now_ms`; empty artist,
-  album or artwork become `None`.
+  `com.spotify.client` / Spotify. Duration and position are milliseconds; a fractional value is rounded;
+  `elapsed_at_ms` = `now_ms`; empty artist, album or artwork become `None`.
 - `applescript_denied(stderr: &str) -> bool`: true when `stderr` contains `-1743`.
 - `backoff(attempt: u32) -> std::time::Duration`: `min(2^attempt, 60)` seconds.
 
@@ -272,10 +281,10 @@ pub struct Media { pub via: Via, pub health: Health, pub track: Option<Track> }
   `media: <via> <health> <playing|paused> "<title>" (<app>)`, or `media: <via> <health> nothing` without a track.
 - Expanded height adds 108 pt when `track` is set, or 22 pt when `track` is null and `health` is `denied`:
   `44 + extra + 22 * max(rows.len(), 1) + 14`.
-- Collapsed right ear: `⚠ <attention>` when `attention > 0` (unchanged), else, when a track is set, its artwork
+- Right ear while collapsed: `⚠ <attention>` when `attention > 0` (unchanged), else, when a track is set, its artwork
   (18 pt square, or 26 × 15 pt when the artwork is at least 1.3 times wider than tall) and four equalizer bars while
   playing or a pause glyph while paused.
-- Expanded: below the ear band, the artwork (64 pt square, or 112 × 63 pt when wide), title, artist and app name,
-  then a progress bar with elapsed and remaining time (`h:mm:ss` from one hour) that the page advances while
-  playing: `elapsed_ms + (now - elapsed_at_ms)`, clamped to `duration_ms`. Session rows follow. With `denied`, one
+- Expanded: the right ear's media hides (the artwork is in the card instead); below the ear band, the artwork (64 pt square, or 112 × 63 pt when wide), title, artist and app name,
+  then a progress bar with elapsed and remaining time (`h:mm:ss` from one hour) that the page advances only while
+  expanded and playing: `elapsed_ms + (now - elapsed_at_ms)`, clamped to `duration_ms`. Session rows follow. With `denied`, one
   muted line: `Music access is off: allow notch-hud in System Settings, Privacy & Security, Automation`.
