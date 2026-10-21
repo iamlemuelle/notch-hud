@@ -6,7 +6,12 @@
 //   drive warp <x> <y>              moves the cursor without a click
 //   drive front                     prints "<pid> <bundle id>" of the frontmost app
 //   drive watch                     prints "watching", then one "activated <pid> <bundle id>" line per app activation
-//   drive hover <pid>               moves onto the app's panel and waits until it is 420 x 226; prints "x0=<n>"
+//   drive hover <pid> [open height] moves onto the app's pill and waits until its window is the open window, 452 wide
+//                                   and <open height> + 16 tall (default 226); prints "x0=<n>", the panel's left edge
+//                                   (the window's left edge + 16)
+//   drive bounds <pid>              prints "<x> <y> <w> <h>" of the app's panel window, exit 1 when it has none
+//   drive notch                     prints "<width> <height>" of the notch on the notched screen
+//   drive screen                    prints "<x> <y> <w> <h>" of the notched screen in global top-left coordinates
 //   drive click <pid> <x> <y>       a left click
 //   drive drag <pid> <x0> <x1> <y> <steps>   press at x0, drag in <steps> moves to x1, release
 //
@@ -59,10 +64,12 @@ func stack(at p: CGPoint) -> String {
     windows().filter { $0.bounds.contains(p) }.prefix(3).map { "\($0.pid)@\($0.layer) \(Int($0.bounds.width))x\(Int($0.bounds.height))" }.joined(separator: " > ")
 }
 
+func notched() -> NSScreen? { NSScreen.screens.first { $0.safeAreaInsets.top > 0 } }
+
 func pump(_ s: Double) { RunLoop.current.run(until: Date().addingTimeInterval(s)) }
 
 let a = CommandLine.arguments
-guard a.count >= 2 else { die(2, "usage: drive <access|cursor|warp|front|watch|hover|click|drag> ...") }
+guard a.count >= 2 else { die(2, "usage: drive <access|cursor|warp|front|watch|hover|bounds|notch|screen|click|drag> ...") }
 
 func num(_ i: Int) -> Double {
     guard a.count > i else { die(2, "missing argument \(i)") }
@@ -98,12 +105,27 @@ case "watch":
     out("watching")
     RunLoop.main.run()
 
+case "bounds":
+    guard let r = panel(of: pidArg()) else { exit(1) }
+    out("\(Int(r.minX.rounded())) \(Int(r.minY.rounded())) \(Int(r.width.rounded())) \(Int(r.height.rounded()))")
+
+case "notch":
+    guard let s = notched() else { die(2, "no notched screen") }
+    guard let left = s.auxiliaryTopLeftArea, let right = s.auxiliaryTopRightArea else { die(2, "no auxiliary top areas") }
+    out("\(Int((right.minX - left.maxX).rounded())) \(Int(s.safeAreaInsets.top.rounded()))")
+
+case "screen":
+    guard let s = notched(), let id = s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { die(2, "no notched screen") }
+    let b = CGDisplayBounds(id)
+    out("\(Int(b.minX)) \(Int(b.minY)) \(Int(b.width)) \(Int(b.height))")
+
 case "hover":
     let pid = pidArg()
+    let wantHeight = (a.count > 3 ? num(3) : 226) + 16
     var seen: CGRect? = nil
     for _ in 0..<50 { if let r = panel(of: pid) { seen = r; break }; pump(0.1) }
     guard let collapsed = seen else { die(2, "no panel window found for pid \(pid)") }
-    let target = CGPoint(x: collapsed.midX, y: collapsed.midY)
+    let target = CGPoint(x: collapsed.midX, y: collapsed.minY + 10)
     requireTopmost(pid, at: target)
     var last = collapsed
     for _ in 0..<50 {
@@ -111,10 +133,10 @@ case "hover":
         pump(0.1)
         if let r = panel(of: pid) {
             last = r
-            if abs(r.width - 420) < 0.5 && abs(r.height - 226) < 0.5 { out("x0=\(Int(r.minX.rounded()))"); exit(0) }
+            if abs(r.width - 452) < 0.5 && abs(r.height - wantHeight) < 0.5 { out("x0=\(Int((r.minX + 16).rounded()))"); exit(0) }
         }
     }
-    die(1, "panel did not reach 420 x 226 on hover; last bounds \(last)")
+    die(1, "window did not reach 452 x \(Int(wantHeight)) on hover; last bounds \(last)")
 
 case "click":
     let pid = pidArg()
