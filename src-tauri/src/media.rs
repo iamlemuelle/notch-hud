@@ -4,7 +4,8 @@ use std::any::Any;
 use std::io::{BufRead, BufReader};
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::os::unix::process::CommandExt;
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
@@ -165,6 +166,7 @@ pub fn backoff(attempt: u32) -> Duration {
 // ---- Provider: processes and timing. Everything above is pure. ----
 
 const ADAPTER_TEST_TIMEOUT: Duration = Duration::from_secs(5);
+const STOP_GRACE: Duration = Duration::from_secs(3);
 const STREAM_HEALTHY_AFTER: Duration = Duration::from_secs(60);
 const APPLESCRIPT_POLL: Duration = Duration::from_secs(2);
 const ADAPTER_RETEST: Duration = Duration::from_secs(60);
@@ -208,13 +210,95 @@ fn adapter_command(dir: &Path, args: &[&str]) -> Command {
     cmd
 }
 
-/// Kills the child when dropped, also while unwinding from a panic, so no adapter outlives its reader.
-struct Reaped(Child);
+extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+}
 
-impl Drop for Reaped {
+const SIGTERM: i32 = 15;
+const SIGKILL: i32 = 9;
+
+/// Sends `signal` to every process in group `pgid` (0 only probes). False once no process is left in it.
+fn signal_group(pgid: u32, signal: i32) -> bool {
+    let Ok(pgid) = i32::try_from(pgid) else { return false };
+    // SAFETY: kill(2) only sends a signal; it reads and writes no memory of ours.
+    unsafe { kill(-pgid, signal) == 0 }
+}
+
+/// Runs beside an adapter group with the app holding its stdin. EOF means the app is gone, SIGKILL included, so it
+/// ends the group: SIGTERM, then SIGKILL once STOP_GRACE has passed or the group is empty. `$1` is the group id.
+const WATCHDOG: &str = r#"read _
+kill -s TERM -- "-$1" 2>/dev/null
+i=0
+while [ "$i" -lt 30 ] && kill -s 0 -- "-$1" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
+kill -s KILL -- "-$1" 2>/dev/null"#;
+
+/// An adapter process leading its own process group, plus the watchdog that ends that group if the app dies.
+/// Dropping it stops the group, also while unwinding from a panic, so no adapter outlives its reader.
+struct Group {
+    child: Child,
+    watchdog: Child,
+    stopped: bool,
+}
+
+impl Group {
+    fn spawn(mut cmd: Command) -> Result<Group, String> {
+        let mut child = cmd.process_group(0).spawn().map_err(|e| e.to_string())?;
+        let pgid = child.id();
+        let watchdog = Command::new("/bin/sh")
+            .args(["-c", WATCHDOG, "notch-hud-watchdog", &pgid.to_string()])
+            .process_group(0)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        match watchdog {
+            Ok(watchdog) => Ok(Group { child, watchdog, stopped: false }),
+            Err(e) => {
+                signal_group(pgid, SIGKILL);
+                let _ = child.wait();
+                Err(format!("watchdog did not start: {e}"))
+            }
+        }
+    }
+
+    /// SIGTERM to the group, SIGKILL after STOP_GRACE if anything is left, then reaps the adapter and the watchdog.
+    fn stop(&mut self) {
+        if std::mem::replace(&mut self.stopped, true) {
+            return;
+        }
+        let pgid = self.child.id();
+        signal_group(pgid, SIGTERM);
+        let started = Instant::now();
+        while started.elapsed() < STOP_GRACE {
+            let _ = self.child.try_wait();
+            if !signal_group(pgid, 0) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        signal_group(pgid, SIGKILL);
+        let _ = self.child.wait();
+        let _ = self.watchdog.kill();
+        let _ = self.watchdog.wait();
+    }
+}
+
+impl Drop for Group {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        self.stop();
+    }
+}
+
+/// Waits for `child` until `timeout` has passed. `Ok(None)` on timeout; stopping it is the caller's job.
+fn wait_deadline(child: &mut Child, timeout: Duration) -> Result<Option<ExitStatus>, String> {
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(Some(status)),
+            Ok(None) if started.elapsed() >= timeout => return Ok(None),
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => return Err(e.to_string()),
+        }
     }
 }
 
@@ -223,41 +307,32 @@ fn test_adapter(dir: &Path) -> Result<(), String> {
     if !script.is_file() {
         return Err(format!("{} not found", script.display()));
     }
-    let child = adapter_command(dir, &["test"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("test did not start: {e}"))?;
-    let mut child = Reaped(child);
-    let started = Instant::now();
-    loop {
-        match child.0.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => return Err(format!("test {status}")),
-            Ok(None) if started.elapsed() >= ADAPTER_TEST_TIMEOUT => {
-                return Err(format!("test timed out after {} s", ADAPTER_TEST_TIMEOUT.as_secs()))
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(e) => return Err(format!("test wait: {e}")),
-        }
+    let mut cmd = adapter_command(dir, &["test"]);
+    cmd.stdout(Stdio::null()).stderr(Stdio::null());
+    let mut group = Group::spawn(cmd).map_err(|e| format!("test did not start: {e}"))?;
+    match wait_deadline(&mut group.child, ADAPTER_TEST_TIMEOUT) {
+        Ok(Some(status)) if status.success() => Ok(()),
+        Ok(Some(status)) => Err(format!("test {status}")),
+        Ok(None) => Err(format!("test timed out after {} s", ADAPTER_TEST_TIMEOUT.as_secs())),
+        Err(e) => Err(format!("test wait: {e}")),
     }
 }
 
 /// Feeds every stream line to `sink` until the adapter exits.
 fn stream_adapter(dir: &Path, sink: &dyn Fn(Media)) {
-    let child = adapter_command(dir, &["stream", "--micros", "--no-diff", "--debounce=100"])
-        .stdout(Stdio::piped())
-        .spawn();
-    let mut child = match child {
-        Ok(child) => Reaped(child),
+    let mut cmd = adapter_command(dir, &["stream", "--micros", "--no-diff", "--debounce=100"]);
+    cmd.stdout(Stdio::piped());
+    let mut group = match Group::spawn(cmd) {
+        Ok(group) => group,
         Err(e) => return eprintln!("media: adapter stream did not start: {e}"),
     };
-    let Some(stdout) = child.0.stdout.take() else { return };
+    let Some(stdout) = group.child.stdout.take() else { return };
     for line in BufReader::new(stdout).lines() {
         let line = match line {
             Ok(line) => line,
             Err(e) => {
                 eprintln!("media: adapter stream read: {e}");
+                group.stop();
                 break;
             }
         };
@@ -266,7 +341,7 @@ fn stream_adapter(dir: &Path, sink: &dyn Fn(Media)) {
             Err(e) => eprintln!("media: skipped adapter line: {e}"),
         }
     }
-    match child.0.wait() {
+    match group.child.wait() {
         Ok(status) => eprintln!("media: adapter stream ended ({status})"),
         Err(e) => eprintln!("media: adapter stream wait: {e}"),
     }
