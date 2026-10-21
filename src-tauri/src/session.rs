@@ -96,6 +96,23 @@ struct Session {
     ts: u64,
 }
 
+fn is_turn_boundary(r: &Record) -> bool {
+    r.agent_id.is_none()
+        && match r.event.as_str() {
+            "UserPromptSubmit" | "Stop" | "StopFailure" | "SessionStart" | "PermissionDenied" => true,
+            "Notification" => r.notification_type.as_deref() == Some("idle_prompt"),
+            _ => false,
+        }
+}
+
+/// A main-thread turn boundary clears agent records older than it: an interrupted subagent sends no `SubagentStop`.
+fn supersede_agents(group: &mut Vec<(&Record, Status)>) {
+    let Some(boundary_ts) = group.iter().filter(|(r, _)| is_turn_boundary(r)).map(|(r, _)| r.ts).max() else {
+        return;
+    };
+    group.retain(|(r, _)| r.agent_id.is_none() || r.ts >= boundary_ts);
+}
+
 fn collapse(group: &[(&Record, Status)], now: u64) -> Session {
     let (top, top_status) = group
         .iter()
@@ -126,7 +143,13 @@ pub fn summarize(records: &[Record], now: u64) -> Summary {
             groups.entry(r.session_id.as_str()).or_default().push((r, s));
         }
     }
-    let mut sessions: Vec<Session> = groups.values().map(|g| collapse(g, now)).collect();
+    let mut sessions: Vec<Session> = groups
+        .values_mut()
+        .map(|g| {
+            supersede_agents(g);
+            collapse(g, now)
+        })
+        .collect();
 
     let total = sessions.len();
     let attention = sessions
