@@ -213,6 +213,18 @@ fn summarize_sort_priority_order() {
 }
 
 #[test]
+fn summarize_sort_priority_order_below_working() {
+    let recs = [
+        rec("1", "/p/waiting", "SessionStart", NOW),
+        rec("2", "/p/done", "Stop", NOW),
+        rec("3", "/p/working", "PreToolUse", NOW),
+    ];
+    let s = summarize(&recs, NOW);
+    let statuses: Vec<Status> = s.rows.iter().map(|r| r.status).collect();
+    assert_eq!(statuses, vec![Status::Working, Status::Done, Status::Waiting]);
+}
+
+#[test]
 fn summarize_sort_ts_desc_then_session_id_asc() {
     let recs = [
         rec("b", "/p/b", "Stop", 100),
