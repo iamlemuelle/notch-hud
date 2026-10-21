@@ -13,7 +13,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use tauri::webview::PageLoadEvent;
-use tauri::{Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use media::{Health, Media};
 use session::{prune, read_dir, sessions_dir, summarize, Summary};
@@ -82,6 +82,7 @@ const PANEL_STYLE: NSWindowStyleMask =
 
 /// Main thread only: moves the webview of `window` into a new non-activating panel and shows the panel.
 /// A plain window, or one turned into a panel afterwards, activates the app on click; this one does not.
+/// The Tauri window stays hidden and must never be shown: it would activate the app on click.
 fn adopt_panel(mtm: MainThreadMarker, window: &WebviewWindow) {
     let ptr = window.ns_window().expect("ns_window") as *const objc2_app_kit::NSWindow;
     // SAFETY: Tauri owns this window for the app's lifetime; we only read it here, on the main thread.
@@ -149,7 +150,7 @@ fn place(expanded: bool) {
 
 // The webview gets no mouse events while this non-key window belongs to a background app,
 // so hover is decided natively from the global cursor position.
-fn track_hover(window: &WebviewWindow) {
+fn track_hover(app: &AppHandle) {
     let Some(frame) = panel_frame() else { return };
     let p = NSEvent::mouseLocation();
     let over = p.x >= frame.origin.x
@@ -169,16 +170,16 @@ fn track_hover(window: &WebviewWindow) {
     let inside = over || PRESS_LATCHED.load(Ordering::Relaxed);
     if inside != EXPANDED_NOW.swap(inside, Ordering::Relaxed) {
         place(inside);
-        let _ = window.emit("hover", inside);
+        let _ = app.emit("hover", inside);
     }
 }
 
-fn poll_sessions(window: &WebviewWindow) {
+fn poll_sessions(app: &AppHandle) {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let dir = sessions_dir();
     prune(&dir, now);
     let summary = summarize(&read_dir(&dir), now);
-    let _ = window.run_on_main_thread(move || place(EXPANDED_NOW.load(Ordering::Relaxed)));
+    let _ = app.run_on_main_thread(move || place(EXPANDED_NOW.load(Ordering::Relaxed)));
     {
         let mut latest = LATEST.lock().unwrap_or_else(|e| e.into_inner());
         if latest.as_ref() == Some(&summary) {
@@ -186,8 +187,8 @@ fn poll_sessions(window: &WebviewWindow) {
         }
         *latest = Some(summary.clone());
     }
-    let _ = window.emit("sessions", &summary);
-    let _ = window.run_on_main_thread(|| {
+    let _ = app.emit("sessions", &summary);
+    let _ = app.run_on_main_thread(|| {
         if EXPANDED_NOW.load(Ordering::Relaxed) {
             place(true);
         }
@@ -216,7 +217,7 @@ fn trace_line(m: &Media) -> String {
     }
 }
 
-fn on_media(window: &WebviewWindow, media: Media) {
+fn on_media(app: &AppHandle, media: Media) {
     {
         let mut latest = MEDIA.lock().unwrap_or_else(|e| e.into_inner());
         if latest.as_ref() == Some(&media) {
@@ -227,8 +228,8 @@ fn on_media(window: &WebviewWindow, media: Media) {
     if trace_on() {
         eprintln!("{}", trace_line(&media));
     }
-    let _ = window.emit("media", &media);
-    let _ = window.run_on_main_thread(|| {
+    let _ = app.emit("media", &media);
+    let _ = app.run_on_main_thread(|| {
         if EXPANDED_NOW.load(Ordering::Relaxed) {
             place(true);
         }
@@ -296,19 +297,21 @@ fn main() {
             adopt_panel(mtm, &window);
             place(false);
 
-            let hover = window.clone();
+            drop(window);
+
+            let hover = app.handle().clone();
             std::thread::spawn(move || loop {
                 std::thread::sleep(Duration::from_millis(50));
                 let target = hover.clone();
                 let _ = hover.run_on_main_thread(move || track_hover(&target));
             });
-            let poll = app.get_webview_window("notch").expect("notch window");
+            let poll = app.handle().clone();
             std::thread::spawn(move || loop {
                 poll_sessions(&poll);
                 std::thread::sleep(Duration::from_secs(1));
             });
-            let media_window = window.clone();
-            std::thread::spawn(move || media::run(move |m| on_media(&media_window, m)));
+            let media_app = app.handle().clone();
+            std::thread::spawn(move || media::run(move |m| on_media(&media_app, m)));
             Ok(())
         })
         .run(tauri::generate_context!())
