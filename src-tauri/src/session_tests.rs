@@ -249,7 +249,7 @@ fn summarize_truncates_but_counts_everything() {
     assert_eq!(s.working, 4);
     assert_eq!(s.rows.len(), MAX_ROWS);
     let labels: Vec<&str> = s.rows.iter().map(|r| r.label.as_str()).collect();
-    assert_eq!(labels, vec!["p0", "p1", "p2", "n0", "w0", "w1"]);
+    assert_eq!(labels, vec!["p0", "p1", "p2", "n0"]);
 }
 
 #[test]
@@ -580,13 +580,32 @@ fn contract_read_dir_caps_at_50_files() {
 }
 
 #[test]
-fn contract_summarize_caps_at_6_rows() {
+fn contract_summarize_caps_at_4_rows() {
     let recs: Vec<Record> = (0..7u64)
         .map(|i| rec(&format!("r{i}"), &format!("/p/r{i}"), "Stop", NOW - i))
         .collect();
     let s = summarize(&recs, NOW);
     assert_eq!(s.total, 7);
-    assert_eq!(s.rows.len(), 6);
+    assert_eq!(s.rows.len(), 4);
+}
+
+#[test]
+fn summarize_seven_sessions_show_four_rows_and_total_seven() {
+    let recs: Vec<Record> = (0..7u64)
+        .map(|i| rec(&format!("s{i}"), &format!("/p/s{i}"), "PreToolUse", NOW - i))
+        .collect();
+    let s = summarize(&recs, NOW);
+    assert_eq!(s.rows.len(), 4);
+    assert_eq!(s.total, 7);
+    assert_eq!(s.working, 7);
+}
+
+#[test]
+fn summarize_lone_error_session_counts_as_attention() {
+    let s = summarize(&[rec("e", "/p/boom", "StopFailure", NOW)], NOW);
+    assert_eq!(s.rows.len(), 1);
+    assert_eq!(s.rows[0].status, Status::Error);
+    assert_eq!((s.total, s.attention, s.working), (1, 1, 0));
 }
 
 #[test]
