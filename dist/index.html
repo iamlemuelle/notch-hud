@@ -220,7 +220,7 @@
   function loadTint(url) {
     const probe = new Image();
     probe.crossOrigin = 'anonymous';
-    probe.onload = () => { if (artUrl === url) setTint(averageTint(probe)); };
+    probe.onload = () => { if (artUrl === url && $('music').classList.contains('art')) setTint(averageTint(probe)); };
     probe.onerror = () => { if (artUrl === url) setTint(WHITE); };
     probe.src = url;
   }
