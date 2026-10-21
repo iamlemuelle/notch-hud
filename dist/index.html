@@ -103,8 +103,9 @@
   let media = null;
   let shown = null;
   let drag = null; // fraction 0..1 while the bar is being dragged
-  // The optimistic change awaiting the app's confirmation: { kind: 'toggle' | 'seek', until } or null.
+  // The optimistic change awaiting the app's confirmation: { id, kind: 'toggle' | 'seek' } or null.
   let pending = null;
+  let pendingSeq = 0;
   let pendingTimer = null;
   let attention = 0;
   function fmt(sec) {
@@ -227,28 +228,29 @@
   }
   function setPending(kind) {
     clearTimeout(pendingTimer);
-    pending = { kind, until: Date.now() + 2000 };
-    pendingTimer = setTimeout(settle, 2000);
+    pending = { id: ++pendingSeq, kind };
+    pendingTimer = setTimeout(settle, shown && shown.via === 'applescript' ? 5000 : 2000);
+    return pending.id;
   }
   function patchTrack(patch) {
     if (!shown || !shown.track) return;
     shown = { ...shown, track: { ...shown.track, ...patch } };
     renderMedia();
   }
-  function send(action) {
-    window.__TAURI__.core.invoke('act', { action }).catch(() => { if (pending) settle(); });
+  function send(action, id) {
+    window.__TAURI__.core.invoke('act', { action }).catch(() => { if (id !== undefined && pending && pending.id === id) settle(); });
   }
   function seekTo(ms) {
-    setPending('seek');
+    const id = setPending('seek');
     patchTrack({ elapsed_ms: ms, elapsed_at_ms: Date.now() });
-    send({ kind: 'seek', position_ms: ms });
+    send({ kind: 'seek', position_ms: ms }, id);
   }
   $('btnMain').addEventListener('click', () => {
     const t = shown && shown.track;
     if (!t) return;
-    setPending('toggle');
+    const id = setPending('toggle');
     patchTrack({ playing: !t.playing, elapsed_ms: elapsedMs(t), elapsed_at_ms: Date.now() });
-    send({ kind: 'toggle' });
+    send({ kind: 'toggle' }, id);
   });
   $('btnNext').addEventListener('click', () => send({ kind: 'next' }));
   $('btnPrev').addEventListener('click', () => {
