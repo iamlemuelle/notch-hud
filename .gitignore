@@ -2,3 +2,4 @@ src-tauri/target/
 src-tauri/gen/
 shot*.png
 check-bin
+.DS_Store
