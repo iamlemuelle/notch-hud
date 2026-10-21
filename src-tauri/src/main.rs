@@ -1,12 +1,18 @@
 mod media;
 mod session;
 
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use objc2_app_kit::{NSEvent, NSScreen, NSWindow, NSWindowCollectionBehavior};
+use objc2::rc::Retained;
+use objc2::MainThreadOnly;
+use objc2_app_kit::{
+    NSBackingStoreType, NSColor, NSEvent, NSPanel, NSScreen, NSWindowCollectionBehavior, NSWindowStyleMask,
+};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
+use tauri::webview::PageLoadEvent;
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use media::{Health, Media};
@@ -62,9 +68,49 @@ static EXPANDED_NOW: AtomicBool = AtomicBool::new(false);
 static LATEST: Mutex<Option<Summary>> = Mutex::new(None);
 static MEDIA: Mutex<Option<Media>> = Mutex::new(None);
 
-fn ns_window(window: &WebviewWindow) -> &NSWindow {
-    let ptr = window.ns_window().expect("ns_window") as *const NSWindow;
-    unsafe { &*ptr }
+thread_local! {
+    /// The visible window: a native non-activating panel that hosts the Tauri window's webview. Created once on
+    /// the main thread at startup and kept for the app's lifetime; only the main thread can reach it.
+    static PANEL: RefCell<Option<Retained<NSPanel>>> = const { RefCell::new(None) };
+}
+
+const PANEL_STYLE: NSWindowStyleMask =
+    NSWindowStyleMask::Borderless.union(NSWindowStyleMask::NonactivatingPanel);
+
+/// Main thread only: moves the webview of `window` into a new non-activating panel and shows the panel.
+/// A plain window, or one turned into a panel afterwards, activates the app on click; this one does not.
+fn adopt_panel(mtm: MainThreadMarker, window: &WebviewWindow) {
+    let ptr = window.ns_window().expect("ns_window") as *const objc2_app_kit::NSWindow;
+    // SAFETY: Tauri owns this window for the app's lifetime; we only read it here, on the main thread.
+    let tao = unsafe { &*ptr };
+    let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
+        NSPanel::alloc(mtm),
+        tao.frame(),
+        PANEL_STYLE,
+        NSBackingStoreType::Buffered,
+        false,
+    );
+    panel.setLevel(ABOVE_MENU_BAR);
+    panel.setCollectionBehavior(
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::Stationary
+            | NSWindowCollectionBehavior::FullScreenAuxiliary
+            | NSWindowCollectionBehavior::IgnoresCycle,
+    );
+    panel.setHasShadow(false);
+    panel.setOpaque(false);
+    panel.setBackgroundColor(Some(&NSColor::clearColor()));
+    // SAFETY: the panel is held by PANEL, never closed by AppKit on its own.
+    unsafe { panel.setReleasedWhenClosed(false) };
+    let content = tao.contentView().expect("content view");
+    panel.setContentView(Some(&content));
+    panel.orderFrontRegardless();
+    PANEL.with(|p| *p.borrow_mut() = Some(panel));
+}
+
+/// Main thread only. The panel's frame, or `None` before it exists.
+fn panel_frame() -> Option<NSRect> {
+    PANEL.with(|p| p.borrow().as_ref().map(|panel| panel.frame()))
 }
 
 fn notched_screen(mtm: MainThreadMarker) -> Option<Notch> {
@@ -85,27 +131,33 @@ fn media_extra_height() -> usize {
 }
 
 /// Main thread only. Looks the notched screen up again so display changes move the panel.
-fn place(window: &WebviewWindow, expanded: bool) {
+fn place(expanded: bool) {
     let Some(mtm) = MainThreadMarker::new() else { return };
     let Some(notch) = notched_screen(mtm) else { return };
     let target = notch.panel(expanded.then(|| (latest_row_count(), media_extra_height())));
-    let ns = ns_window(window);
-    if ns.frame() != target {
-        ns.setFrame_display(target, true);
-    }
+    PANEL.with(|p| {
+        if let Some(panel) = p.borrow().as_ref() {
+            if panel.frame() != target {
+                panel.setFrame_display(target, true);
+            }
+        }
+    });
 }
 
 // The webview gets no mouse events while this non-key window belongs to a background app,
 // so hover is decided natively from the global cursor position.
 fn track_hover(window: &WebviewWindow) {
-    let frame = ns_window(window).frame();
+    let Some(frame) = panel_frame() else { return };
     let p = NSEvent::mouseLocation();
-    let inside = p.x >= frame.origin.x
+    let over = p.x >= frame.origin.x
         && p.x <= frame.origin.x + frame.size.width
         && p.y >= frame.origin.y
         && p.y <= frame.origin.y + frame.size.height;
+    // A held left button keeps an expanded panel open, so a seek drag that overshoots the bar does not collapse it.
+    let held = NSEvent::pressedMouseButtons() & 1 != 0;
+    let inside = over || (held && EXPANDED_NOW.load(Ordering::Relaxed));
     if inside != EXPANDED_NOW.swap(inside, Ordering::Relaxed) {
-        place(window, inside);
+        place(inside);
         let _ = window.emit("hover", inside);
     }
 }
@@ -115,8 +167,7 @@ fn poll_sessions(window: &WebviewWindow) {
     let dir = sessions_dir();
     prune(&dir, now);
     let summary = summarize(&read_dir(&dir), now);
-    let replace = window.clone();
-    let _ = window.run_on_main_thread(move || place(&replace, EXPANDED_NOW.load(Ordering::Relaxed)));
+    let _ = window.run_on_main_thread(move || place(EXPANDED_NOW.load(Ordering::Relaxed)));
     {
         let mut latest = LATEST.lock().unwrap_or_else(|e| e.into_inner());
         if latest.as_ref() == Some(&summary) {
@@ -125,10 +176,9 @@ fn poll_sessions(window: &WebviewWindow) {
         *latest = Some(summary.clone());
     }
     let _ = window.emit("sessions", &summary);
-    let target = window.clone();
-    let _ = window.run_on_main_thread(move || {
+    let _ = window.run_on_main_thread(|| {
         if EXPANDED_NOW.load(Ordering::Relaxed) {
-            place(&target, true);
+            place(true);
         }
     });
 }
@@ -136,6 +186,10 @@ fn poll_sessions(window: &WebviewWindow) {
 #[tauri::command]
 fn sessions() -> Option<Summary> {
     LATEST.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn trace_on() -> bool {
+    std::env::var_os("NOTCH_TRACE").is_some_and(|v| !v.is_empty())
 }
 
 fn trace_line(m: &Media) -> String {
@@ -159,14 +213,13 @@ fn on_media(window: &WebviewWindow, media: Media) {
         }
         *latest = Some(media.clone());
     }
-    if std::env::var_os("NOTCH_TRACE").is_some_and(|v| !v.is_empty()) {
+    if trace_on() {
         eprintln!("{}", trace_line(&media));
     }
     let _ = window.emit("media", &media);
-    let target = window.clone();
-    let _ = window.run_on_main_thread(move || {
+    let _ = window.run_on_main_thread(|| {
         if EXPANDED_NOW.load(Ordering::Relaxed) {
-            place(&target, true);
+            place(true);
         }
     });
 }
@@ -192,18 +245,15 @@ fn main() {
                 .resizable(false)
                 .skip_taskbar(true)
                 .visible(false)
+                .accept_first_mouse(true)
+                .on_page_load(|_, payload| {
+                    if payload.event() == PageLoadEvent::Finished && trace_on() {
+                        eprintln!("page: loaded");
+                    }
+                })
                 .build()?;
-            let ns = ns_window(&window);
-            ns.setLevel(ABOVE_MENU_BAR);
-            ns.setCollectionBehavior(
-                NSWindowCollectionBehavior::CanJoinAllSpaces
-                    | NSWindowCollectionBehavior::Stationary
-                    | NSWindowCollectionBehavior::FullScreenAuxiliary
-                    | NSWindowCollectionBehavior::IgnoresCycle,
-            );
-            ns.setHasShadow(false);
-            place(&window, false);
-            window.show()?;
+            adopt_panel(mtm, &window);
+            place(false);
 
             let hover = window.clone();
             std::thread::spawn(move || loop {
