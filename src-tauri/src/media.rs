@@ -458,7 +458,10 @@ pub fn run(sink: impl Fn(Media) + Send + Sync + 'static) -> ! {
         let pass = std::panic::catch_unwind(AssertUnwindSafe(|| provider.step(&sink)));
         if let Err(panic) = pass {
             eprintln!("media: Failed: {}", panic_reason(panic.as_ref()));
-            sink(Media { via: provider.via, health: Health::Failed, track: None });
+            let report = Media { via: provider.via, health: Health::Failed, track: None };
+            if let Err(panic) = std::panic::catch_unwind(AssertUnwindSafe(|| sink(report))) {
+                eprintln!("media: Failed: reporting a panic: {}", panic_reason(panic.as_ref()));
+            }
             provider.back_off();
         }
     }
