@@ -1,3 +1,4 @@
+mod media;
 mod session;
 
 use std::sync::atomic::{AtomicBool, Ordering};
