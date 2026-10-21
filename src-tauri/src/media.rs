@@ -105,16 +105,16 @@ pub fn parse_adapter_line(line: &str) -> Result<Option<Track>, String> {
     }))
 }
 
-fn seconds_to_ms(s: &str) -> Option<u64> {
-    let secs: f64 = s.trim().parse().ok()?;
-    (secs.is_finite() && secs >= 0.0).then(|| (secs * 1000.0).round() as u64)
+fn parse_ms(s: &str) -> Option<u64> {
+    let ms: f64 = s.trim().parse().ok()?;
+    (ms.is_finite() && ms >= 0.0).then(|| ms.round() as u64)
 }
 
 fn none_if_empty(s: &str) -> Option<String> {
     (!s.is_empty()).then(|| s.to_string())
 }
 
-/// One `<music|spotify>\t<state>\t<title>\t<artist>\t<album>\t<duration s>\t<position s>\t<artwork>` line.
+/// One `<music|spotify>\t<state>\t<title>\t<artist>\t<album>\t<duration ms>\t<position ms>\t<artwork>` line.
 fn parse_applescript_line(line: &str, now_ms: u64) -> Option<Track> {
     let f: Vec<&str> = line.split('\t').collect();
     if f.len() < 8 {
@@ -140,8 +140,8 @@ fn parse_applescript_line(line: &str, now_ms: u64) -> Option<Track> {
         app: app.to_string(),
         bundle_id: bundle_id.to_string(),
         playing,
-        duration_ms: Some(seconds_to_ms(f[5])?),
-        elapsed_ms: Some(seconds_to_ms(f[6])?),
+        duration_ms: Some(parse_ms(f[5])?),
+        elapsed_ms: Some(parse_ms(f[6])?),
         elapsed_at_ms: Some(now_ms),
         artwork: none_if_empty(f[7].trim_end_matches('\r')),
     })
@@ -173,14 +173,14 @@ const MUSIC_SCRIPT: &str = r#"tell application "Music"
 set s to player state as text
 if s is "stopped" then return "music" & tab & s & tab & tab & tab & tab & "0" & tab & "0" & tab
 set t to current track
-return "music" & tab & s & tab & (name of t) & tab & (artist of t) & tab & (album of t) & tab & ((round (duration of t)) as text) & tab & ((round (player position)) as text) & tab
+return "music" & tab & s & tab & (name of t) & tab & (artist of t) & tab & (album of t) & tab & ((round ((duration of t) * 1000)) as text) & tab & ((round ((player position) * 1000)) as text) & tab
 end tell"#;
 
 const SPOTIFY_SCRIPT: &str = r#"tell application "Spotify"
 set s to player state as text
 if s is "stopped" then return "spotify" & tab & s & tab & tab & tab & tab & "0" & tab & "0" & tab
 set t to current track
-return "spotify" & tab & s & tab & (name of t) & tab & (artist of t) & tab & (album of t) & tab & ((round ((duration of t) / 1000)) as text) & tab & ((round (player position)) as text) & tab & (artwork url of t)
+return "spotify" & tab & s & tab & (name of t) & tab & (artist of t) & tab & (album of t) & tab & ((duration of t) as text) & tab & ((round ((player position) * 1000)) as text) & tab & (artwork url of t)
 end tell"#;
 
 /// `$NOTCH_MEDIA_ADAPTER` when set and non-empty, else `target/adapter` next to `target/<profile>/notch-hud`.
