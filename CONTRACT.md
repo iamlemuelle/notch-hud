@@ -376,10 +376,11 @@ pub enum Route {
   a 12 pt muted pause glyph at x 280 (284 when wide), top 10. With `prefers-reduced-motion`, the bars hold still.
   While expanded, the right ear shows nothing (the artwork is in the card).
 - Expanded music block, in pt from the expanded panel's top-left (420 wide), always shown:
-  - artwork at (32, 44), 64 x 64, radius 13, with a 1 pt inner hairline `rgba(255,255,255,0.09)`; when wide,
+  - artwork at (16, 44), 64 x 64, radius 13, with a 1 pt inner hairline `rgba(255,255,255,0.09)`; when wide,
     112 x 63, radius 8. Without artwork (or without a track), a `#161616` placeholder with two muted rings.
   - glow: behind the artwork, a radial gradient of the tint (`rgba(tint, 0.34)` at the center, `rgba(tint, 0.08)` at
-    60 %, transparent beyond), 170 x 125 pt radii centered at the artwork's center, faded out over the top 30 pt
+    60 %, transparent beyond), 170 x 125 pt radii centered at the artwork's center ((48, 76), or (72, 75.5) when
+    wide), faded out over the top 30 pt
     below the ear band so the band stays pure black. No glow without a track.
   - text at left 92, top 46, width 262 (left 142, width 232 when wide): title 600 14 px / 18 px (ellipsis; when wide,
     13.5 px / 17 px clamped to two lines); artist 500 12 px / 16 px `rgba(245,245,245,0.62)`, 2 pt below; source row
