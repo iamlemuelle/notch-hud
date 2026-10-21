@@ -52,5 +52,15 @@ mv "$tmp" "$plist"
 
 uid=$(id -u)
 launchctl bootout "gui/$uid/$label" 2>/dev/null || true
+# bootout returns before the old service is gone, and bootstrapping over it fails with exit 5.
+tries=0
+while launchctl print "gui/$uid/$label" >/dev/null 2>&1; do
+  tries=$((tries + 1))
+  if [ "$tries" -gt 50 ]; then
+    echo "notch-hud: old login item did not stop" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
 launchctl bootstrap "gui/$uid" "$plist"
 echo "notch-hud: login item installed: $plist"
