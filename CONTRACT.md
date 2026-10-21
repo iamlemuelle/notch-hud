@@ -436,8 +436,8 @@ pub fn window_size(layout: &Layout, mode: WindowMode) -> Size;
 
 - Command `layout` returns the current `Layout`. The app emits `layout` with it whenever it changes (row count, the
   media extra height, or the notched screen's geometry).
-- Command `surface` takes `{ window: WindowMode, hit: Shape }` (lowercase strings, unknown fields or values rejected
-  with `Err`). It records both and places the panel on the main thread. The page is its only caller.
+- Command `surface` takes `{ window: WindowMode, hit: Shape }` (lowercase strings; an unknown value is rejected with
+  `Err`). It records both and places the panel on the main thread. The page is its only caller.
 - Window frame: `window_size(layout, mode)` for the recorded mode. While the mode stays `open`, the height never
   drops below the largest `open` height since the mode became `open`, so a row disappearing mid-spring never cuts the
   shape; any other mode change resets that. The frame is set only when it differs from the panel's frame.
