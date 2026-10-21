@@ -34,6 +34,8 @@ Registered synchronously (not `async`) with `"timeout": 2` for: `SessionStart`, 
 `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `PermissionDenied`, `Notification`, `Stop`, `StopFailure`,
 `SubagentStop`, `SessionEnd`. Async hooks can finish out of order, which could let a late `PostToolUse` overwrite `Stop`.
 
+Known limit: a manual "No" or Esc on a permission prompt sends no event. The session stays `NeedsPermission` until
+the main thread's next boundary event (section 2), normally `Notification` `idle_prompt` or your next prompt.
 Known limit: Claude Code has no event for "permission approved", so after you approve a long-running tool the session
 shows `NeedsPermission` until that tool's `PostToolUse`.
 
@@ -94,7 +96,11 @@ pub fn sessions_dir() -> std::path::PathBuf;
 ### `summarize(records, now)`
 
 1. Keep records where `status_of` is `Some` and age `now.saturating_sub(ts) <= TTL_SECS` (a future `ts` has age 0).
-2. Group kept records by `session_id`. Each group is one session:
+2. Group kept records by `session_id`. Superseding: when a group has a main-thread record (`agent_id == None`) that
+   is a turn boundary (`UserPromptSubmit`, `Stop`, `StopFailure`, `SessionStart`, `PermissionDenied`, or `Notification`
+   with `idle_prompt`), drop that group's agent records whose `ts` is strictly older than the main record's `ts`. An
+   interrupted subagent sends no `SubagentStop`, and a manual "No" or Esc on a permission prompt sends no
+   `PermissionDenied`; the main thread's next boundary event is what clears them. Each group is then one session:
    - status: the highest-priority status among its records (priority below), taken from that record;
    - `ts`: the largest `ts` in the group;
    - quiet decay: when the chosen status is `Working` and `now.saturating_sub(ts) > QUIET_SECS`, the status is `Waiting`
@@ -129,7 +135,9 @@ The app calls it before each `read_dir`.
   to stderr and exit 0. Set window level, collection behavior and shadow once.
 - Every time the window is placed (startup, hover change, row-count change), look the notched screen up again on the
   main thread, so plugging in or rearranging displays moves the panel correctly. If none is found, leave the frame.
-- Every 1 s: `prune(&dir, now)`, then `summarize(&read_dir(&dir), now)` with `dir = sessions_dir()`. When it differs from the last one, emit `sessions` with the
+- Every 1 s: `prune(&dir, now)`, then `summarize(&read_dir(&dir), now)` with `dir = sessions_dir()`. Also every 1 s, on
+  the main thread: compute the frame the panel should have now (notched screen looked up again, current expanded state)
+  and set it when it differs from the window's frame, so a display change moves the collapsed pill too. When it differs from the last one, emit `sessions` with the
   `Summary` as payload, and resize the panel if it is expanded.
 - Hover (unchanged): native cursor polling every 50 ms, emits `hover` (bool).
 - Expanded size: width 420, height `44 + 22 * max(rows.len(), 1) + 14` pt, top edge at the screen top, centered on the notch.
