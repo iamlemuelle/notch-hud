@@ -1,12 +1,16 @@
 //! Derives per-session status rows from the records the hook writes. See CONTRACT.md section 2.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Record {
     pub session_id: String,
     pub cwd: String,
     pub event: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
     #[serde(default)]
     pub notification_type: Option<String>,
     #[serde(default)]
@@ -54,6 +58,7 @@ pub struct Summary {
 }
 
 pub const TTL_SECS: u64 = 3 * 3600;
+pub const QUIET_SECS: u64 = 600;
 pub const MAX_ROWS: usize = 6;
 pub const MAX_FILES: usize = 50;
 
@@ -69,6 +74,7 @@ pub fn status_of(r: &Record) -> Option<Status> {
         ("Notification", Some("elicitation_dialog" | "agent_needs_input")) => {
             Some(Status::NeedsInput)
         }
+        ("PermissionDenied", _) => Some(Status::Waiting),
         ("Stop", _) => Some(Status::Done),
         ("StopFailure", _) => Some(Status::Error),
         _ => None,
@@ -82,65 +88,113 @@ fn base_label(cwd: &str) -> String {
         .to_string()
 }
 
+struct Session {
+    id: String,
+    cwd: String,
+    status: Status,
+    detail: Option<String>,
+    ts: u64,
+}
+
+fn collapse(group: &[(&Record, Status)], now: u64) -> Session {
+    let (top, top_status) = group
+        .iter()
+        .min_by_key(|(_, s)| s.priority())
+        .expect("group is non-empty");
+    let ts = group.iter().map(|(r, _)| r.ts).max().unwrap_or(0);
+    let status = if *top_status == Status::Working && now.saturating_sub(ts) > QUIET_SECS {
+        Status::Waiting
+    } else {
+        *top_status
+    };
+    let cwd = group
+        .iter()
+        .find(|(r, _)| r.agent_id.is_none())
+        .map_or(&top.cwd, |(r, _)| &r.cwd)
+        .clone();
+    let detail = match status {
+        Status::NeedsPermission => top.tool_name.clone(),
+        _ => None,
+    };
+    Session { id: top.session_id.clone(), cwd, status, detail, ts }
+}
+
 pub fn summarize(records: &[Record], now: u64) -> Summary {
-    let mut kept: Vec<(&Record, Status)> = records
-        .iter()
-        .filter(|r| now.saturating_sub(r.ts) <= TTL_SECS)
-        .filter_map(|r| status_of(r).map(|s| (r, s)))
-        .collect();
+    let mut groups: BTreeMap<&str, Vec<(&Record, Status)>> = BTreeMap::new();
+    for r in records.iter().filter(|r| now.saturating_sub(r.ts) <= TTL_SECS) {
+        if let Some(s) = status_of(r) {
+            groups.entry(r.session_id.as_str()).or_default().push((r, s));
+        }
+    }
+    let mut sessions: Vec<Session> = groups.values().map(|g| collapse(g, now)).collect();
 
-    let total = kept.len();
-    let attention = kept
+    let total = sessions.len();
+    let attention = sessions
         .iter()
-        .filter(|(_, s)| matches!(s, Status::NeedsPermission | Status::NeedsInput))
+        .filter(|s| matches!(s.status, Status::NeedsPermission | Status::NeedsInput))
         .count();
-    let working = kept.iter().filter(|(_, s)| *s == Status::Working).count();
+    let working = sessions.iter().filter(|s| s.status == Status::Working).count();
 
-    kept.sort_by(|(a, sa), (b, sb)| {
-        sa.priority()
-            .cmp(&sb.priority())
+    sessions.sort_by(|a, b| {
+        a.status
+            .priority()
+            .cmp(&b.status.priority())
             .then(b.ts.cmp(&a.ts))
-            .then(a.session_id.cmp(&b.session_id))
+            .then(a.id.cmp(&b.id))
     });
 
-    let labels: Vec<String> = kept.iter().map(|(r, _)| base_label(&r.cwd)).collect();
-    let rows = kept
+    let labels: Vec<String> = sessions.iter().map(|s| base_label(&s.cwd)).collect();
+    let rows = sessions
         .iter()
         .zip(&labels)
         .take(MAX_ROWS)
-        .map(|((r, status), label)| {
+        .map(|(s, label)| {
             let shared = labels.iter().filter(|l| *l == label).count() > 1;
             let label = if shared {
-                let short: String = r.session_id.chars().take(4).collect();
+                let short: String = s.id.chars().take(4).collect();
                 format!("{label} · {short}")
             } else {
                 label.clone()
             };
-            let detail = match status {
-                Status::NeedsPermission => r.tool_name.clone(),
-                _ => None,
-            };
-            Row { label, status: *status, detail }
+            Row { label, status: s.status, detail: s.detail.clone() }
         })
         .collect();
 
     Summary { rows, total, attention, working }
 }
 
-pub fn read_dir(dir: &Path) -> Vec<Record> {
+/// Regular `*.json` files in `dir` with their mtimes, unsorted.
+fn json_files(dir: &Path) -> Vec<(PathBuf, SystemTime)> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
-    let mut paths: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|ext| ext == "json"))
-        .collect();
-    paths.sort();
-    paths.truncate(MAX_FILES);
-    paths
-        .iter()
-        .filter_map(|p| serde_json::from_slice::<Record>(&std::fs::read(p).ok()?).ok())
+    entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+        .filter_map(|e| {
+            let meta = e.metadata().ok()?;
+            meta.is_file().then(|| Some((e.path(), meta.modified().ok()?)))?
+        })
         .collect()
+}
+
+pub fn read_dir(dir: &Path) -> Vec<Record> {
+    let mut files = json_files(dir);
+    files.sort_by(|(pa, ma), (pb, mb)| mb.cmp(ma).then_with(|| pa.file_name().cmp(&pb.file_name())));
+    files.truncate(MAX_FILES);
+    files
+        .iter()
+        .filter_map(|(p, _)| serde_json::from_slice::<Record>(&std::fs::read(p).ok()?).ok())
+        .collect()
+}
+
+pub fn prune(dir: &Path, now: u64) {
+    let cutoff = UNIX_EPOCH + Duration::from_secs(now.saturating_sub(TTL_SECS));
+    for (path, mtime) in json_files(dir) {
+        if mtime < cutoff {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 pub fn sessions_dir() -> PathBuf {
