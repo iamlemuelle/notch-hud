@@ -176,9 +176,13 @@ empty, and follows the same symlink, backup, permission and temp-file rules.
   creating the directory if missing. Keys: `Label` `com.lem.notch-hud`; `ProgramArguments` `[<binary>]`; `RunAtLoad`
   true; `KeepAlive` `{SuccessfulExit: false}` (restart after a crash, not after a clean exit such as "no notched
   display"); `ProcessType` `Interactive`; `StandardErrorPath` `$HOME/Library/Logs/notch-hud.log`.
-- Then runs `launchctl bootout gui/<uid>/com.lem.notch-hud` (its failure, meaning "not loaded", is ignored) and
-  `launchctl bootstrap gui/<uid> <plist>`, with `<uid>` from `id -u`. A failing bootstrap makes the script exit
-  non-zero. `launchctl` is found on `PATH`.
+- Then runs `launchctl bootout gui/<uid>/com.lem.notch-hud` (its failure, meaning "not loaded", is ignored), with
+  `<uid>` from `id -u`. `bootout` returns before the old service is gone, and a `bootstrap` while it is still there
+  fails with exit 5 (seen on macOS 27.0.1). So the script polls `launchctl print gui/<uid>/com.lem.notch-hud` every
+  0.1 s until it exits non-zero, for at most 5 s. If the service is still there after 5 s, it prints
+  `notch-hud: old login item did not stop` to stderr and exits 1 without calling `bootstrap`. Otherwise it runs
+  `launchctl bootstrap gui/<uid> <plist>`. A failing bootstrap makes the script exit non-zero. `launchctl` is found
+  on `PATH`.
 - On success prints one line, `notch-hud: login item installed: <plist>`. Running it again rewrites and reloads.
 
 `scripts/uninstall-login.sh [plist]` runs `launchctl bootout gui/<uid>/com.lem.notch-hud` (failure ignored), deletes the
