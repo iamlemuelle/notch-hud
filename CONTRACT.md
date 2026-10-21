@@ -139,13 +139,17 @@ The app calls it before each `read_dir`.
   the main thread: compute the frame the panel should have now (notched screen looked up again, current expanded state)
   and set it when it differs from the window's frame, so a display change moves the collapsed pill too. When it differs from the last one, emit `sessions` with the
   `Summary` as payload, and resize the panel if it is expanded.
-- Hover: native cursor polling every 50 ms, emits `hover` (bool). While the left mouse button is held
-  (`NSEvent::pressedMouseButtons() & 1`), an expanded panel stays expanded even when the cursor leaves it, so a seek
-  drag that overshoots the bar does not collapse the panel under the pointer.
+- Hover: native cursor polling every 50 ms, emits `hover` (bool). A left-button press that the poll first sees
+  (`NSEvent::pressedMouseButtons() & 1` going from up to down) while the cursor is over the expanded panel is latched
+  until the button is up again; while it is latched the panel stays expanded even when the cursor leaves it, so a seek
+  drag that overshoots the bar does not collapse the panel under the pointer. A press that starts anywhere else (a
+  window drag or a text selection passing over the notch) is never latched and changes nothing.
 - Clicks: the panel is a native `NSPanel` created at startup with style mask `Borderless | NonactivatingPanel`, level,
   collection behavior and no shadow as above, a clear background and `opaque = false`. The Tauri window's content view
   (the webview) is moved into it, the Tauri window itself is never shown, and the webview is built with
-  `accept_first_mouse(true)`. Every frame read and set (placement, hover) is the panel's. Effect: a click reaches the
+  `accept_first_mouse(true)`. Every frame read and set (placement, hover) is the panel's. After startup no code holds
+  the Tauri `WebviewWindow`: the threads hold an `AppHandle` (for `emit` and `run_on_main_thread`), so no window API
+  can reach the hidden window by mistake. Effect: a click reaches the
   page on the first press, and the frontmost app does not change (the app is never activated). Measured on macOS 27
   (click spike, 2026-10-22): a plain window, a non-activating style mask on it, or swapping its class to an `NSPanel`
   subclass after creation all activate the app on click; only a panel created as non-activating does not.
@@ -374,6 +378,12 @@ pub enum Route {
     round(fraction * duration_ms)}` and shows that position at once. A `media` event during a drag does not move the
     bar. If the panel collapses during a drag, the drag is cancelled and nothing is sent. With `duration_ms` null the
     bar takes no presses.
-  - When `act` rejects, the page shows the latest `media` it received again (the optimistic state is dropped). The
-    next `media` event always replaces the shown state. With `denied`, one
+  - Optimistic changes (toggle, the restart seek, a released drag) are pending until one of: a `media` event that
+    agrees with them (toggle: its `playing` equals the shown `playing`; seek: its elapsed time at arrival is within
+    2 s of the shown one), `act` rejecting, or 2 s passing. Until then a `media` event that disagrees is recorded but
+    not shown, so a poll that started before the click does not flip the card back. When the pending change ends, the
+    page shows the latest `media` it received. A `media` event with no track, or a different title, always shows at
+    once and ends any pending change.
+  - The play/pause glyphs are static markup switched by a class, so re-rendering never replaces the element under a
+    press. With `denied`, one
   muted line: `Music access is off: allow notch-hud in System Settings, Privacy & Security, Automation`.
