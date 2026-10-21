@@ -166,7 +166,6 @@ pub fn backoff(attempt: u32) -> Duration {
 // ---- Provider: processes and timing. Everything above is pure. ----
 
 const ADAPTER_TEST_TIMEOUT: Duration = Duration::from_secs(5);
-const STOP_GRACE: Duration = Duration::from_secs(3);
 const OSASCRIPT_TIMEOUT: Duration = Duration::from_secs(3);
 const STREAM_HEALTHY_AFTER: Duration = Duration::from_secs(60);
 const APPLESCRIPT_POLL: Duration = Duration::from_secs(2);
@@ -215,26 +214,38 @@ extern "C" {
     fn kill(pid: i32, sig: i32) -> i32;
 }
 
-const SIGTERM: i32 = 15;
 const SIGKILL: i32 = 9;
 
-/// Sends `signal` to every process in group `pgid` (0 only probes). False once no process is left in it.
-fn signal_group(pgid: u32, signal: i32) -> bool {
-    let Ok(pgid) = i32::try_from(pgid) else { return false };
+/// Sends `signal` to every process in group `pgid`.
+fn signal_group(pgid: u32, signal: i32) {
+    let Ok(pgid) = i32::try_from(pgid) else { return };
     // SAFETY: kill(2) only sends a signal; it reads and writes no memory of ours.
-    unsafe { kill(-pgid, signal) == 0 }
+    unsafe { kill(-pgid, signal) };
 }
 
-/// Runs beside an adapter group with the app holding its stdin. EOF means the app is gone, SIGKILL included, so it
-/// ends the group: SIGTERM, then SIGKILL once STOP_GRACE has passed or the group is empty. `$1` is the group id.
+/// The one stop policy (CONTRACT.md section 7). Runs beside an adapter group with the app holding its stdin; EOF
+/// means stop, whether the app closed it or is gone, SIGKILL included. Lists the adapter's direct children first
+/// (its test client runs in a group of its own), sends SIGTERM to the group and to them, waits up to 5 s, then sends
+/// SIGKILL to whatever of them is left. `$1` is the group id, which is also the adapter's pid.
 const WATCHDOG: &str = r#"read _
-kill -s TERM -- "-$1" 2>/dev/null
+g="$1"
+kids="$(/usr/bin/pgrep -P "$g")"
+alive() {
+  kill -s 0 -- "-$g" 2>/dev/null && return 0
+  for k in $kids; do kill -s 0 "$k" 2>/dev/null && return 0; done
+  return 1
+}
+kill -s TERM -- "-$g" 2>/dev/null
+for k in $kids; do kill -s TERM "$k" 2>/dev/null; done
 i=0
-while [ "$i" -lt 30 ] && kill -s 0 -- "-$1" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
-kill -s KILL -- "-$1" 2>/dev/null"#;
+while [ "$i" -lt 50 ] && alive; do sleep 0.1; i=$((i + 1)); done
+if alive; then
+  kill -s KILL -- "-$g" 2>/dev/null
+  for k in $kids; do kill -s KILL "$k" 2>/dev/null; done
+fi"#;
 
-/// An adapter process leading its own process group, plus the watchdog that ends that group if the app dies.
-/// Dropping it stops the group, also while unwinding from a panic, so no adapter outlives its reader.
+/// An adapter process leading its own process group, plus the watchdog that stops it when its stdin closes.
+/// Dropping it stops the adapter, also while unwinding from a panic, so no adapter outlives its reader.
 struct Group {
     child: Child,
     watchdog: Child,
@@ -262,25 +273,25 @@ impl Group {
         }
     }
 
-    /// SIGTERM to the group, SIGKILL after STOP_GRACE if anything is left, then reaps the adapter and the watchdog.
+    /// Closes the watchdog's stdin so it runs the stop policy, then reaps the adapter and the watchdog. The adapter
+    /// is reaped while the watchdog probes, so a zombie leader does not keep the group alive for the whole wait.
     fn stop(&mut self) {
         if std::mem::replace(&mut self.stopped, true) {
             return;
         }
-        let pgid = self.child.id();
-        signal_group(pgid, SIGTERM);
-        let started = Instant::now();
-        while started.elapsed() < STOP_GRACE {
+        drop(self.watchdog.stdin.take());
+        loop {
             let _ = self.child.try_wait();
-            if !signal_group(pgid, 0) {
-                break;
+            match self.watchdog.try_wait() {
+                Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                Ok(Some(_)) | Err(_) => break,
             }
-            std::thread::sleep(Duration::from_millis(50));
         }
-        signal_group(pgid, SIGKILL);
+        // Only when the watchdog failed to end it; the adapter is our unreaped child, so its pid is still its own.
+        if let Ok(None) = self.child.try_wait() {
+            let _ = self.child.kill();
+        }
         let _ = self.child.wait();
-        let _ = self.watchdog.kill();
-        let _ = self.watchdog.wait();
     }
 }
 
