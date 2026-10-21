@@ -124,7 +124,7 @@ fn latest_row_count() -> usize {
 /// Extra expanded height for the now playing block: a track, or the "access is off" line.
 fn media_extra_height() -> usize {
     match MEDIA.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-        Some(Media { track: Some(_), .. }) => 108,
+        Some(Media { track: Some(_), .. }) => 146,
         Some(Media { track: None, health: Health::Denied, .. }) => 22,
         _ => 0,
     }
@@ -224,6 +224,36 @@ fn on_media(window: &WebviewWindow, media: Media) {
     });
 }
 
+/// Parses, routes against the latest media and applies off the main thread.
+#[tauri::command]
+async fn act(action: serde_json::Value) -> Result<(), String> {
+    let trace = trace_on();
+    let action = match media::parse_action(&action) {
+        Ok(action) => action,
+        Err(reason) => {
+            if trace {
+                eprintln!("media: act rejected: {reason}");
+            }
+            return Err(reason);
+        }
+    };
+    let latest = MEDIA.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let label = media::clamp(latest.as_ref(), action).label();
+    let result = match media::route(latest.as_ref(), action) {
+        Ok(route) => tauri::async_runtime::spawn_blocking(move || media::apply(&route))
+            .await
+            .unwrap_or_else(|e| Err(format!("act task: {e}"))),
+        Err(reason) => Err(reason),
+    };
+    if trace {
+        match &result {
+            Ok(()) => eprintln!("media: act {label} ok"),
+            Err(reason) => eprintln!("media: act {label} failed: {reason}"),
+        }
+    }
+    result
+}
+
 #[tauri::command]
 fn media() -> Option<Media> {
     MEDIA.lock().unwrap_or_else(|e| e.into_inner()).clone()
@@ -231,7 +261,7 @@ fn media() -> Option<Media> {
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![sessions, media])
+        .invoke_handler(tauri::generate_handler![sessions, media, act])
         .setup(|app| {
             let mtm = MainThreadMarker::new().expect("main thread");
             if notched_screen(mtm).is_none() {

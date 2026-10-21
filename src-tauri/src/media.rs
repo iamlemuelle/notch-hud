@@ -414,6 +414,127 @@ fn poll_applescript() -> Media {
     }
 }
 
+// ---- Controls (CONTRACT.md section 7, "Controls") ----
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum Action {
+    Toggle,
+    Next,
+    Previous,
+    Seek { position_ms: u64 },
+}
+
+impl Action {
+    /// The word the trace lines use.
+    pub fn label(self) -> String {
+        match self {
+            Action::Toggle => "toggle".into(),
+            Action::Next => "next".into(),
+            Action::Previous => "previous".into(),
+            Action::Seek { position_ms } => format!("seek {position_ms}"),
+        }
+    }
+}
+
+pub const MAX_SEEK_MS: u64 = 24 * 3600 * 1000;
+
+/// Where an action goes: adapter arguments after the three paths, or one AppleScript for `app` ("Music" or
+/// "Spotify", the process name `pgrep -x` checks).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Route {
+    Adapter(Vec<String>),
+    Script { app: &'static str, script: String },
+}
+
+const ADAPTER_SEND_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub fn parse_action(v: &Value) -> Result<Action, String> {
+    let action: Action = serde_json::from_value(v.clone()).map_err(|e| e.to_string())?;
+    // serde's internally tagged enums let unit variants ignore extra fields, so the check is made here.
+    let fields = v.as_object().map_or(0, |o| o.len());
+    let expected = if matches!(action, Action::Seek { .. }) { 2 } else { 1 };
+    if fields != expected {
+        return Err("unexpected field".into());
+    }
+    match action {
+        Action::Seek { position_ms } if position_ms > MAX_SEEK_MS => Err("position_ms too large".into()),
+        _ => Ok(action),
+    }
+}
+
+/// A seek position past the track's known duration is clamped to it.
+pub fn clamp(media: Option<&Media>, action: Action) -> Action {
+    let duration = media.and_then(|m| m.track.as_ref()).and_then(|t| t.duration_ms);
+    match (action, duration) {
+        (Action::Seek { position_ms }, Some(d)) => Action::Seek { position_ms: position_ms.min(d) },
+        _ => action,
+    }
+}
+
+pub fn route(media: Option<&Media>, action: Action) -> Result<Route, String> {
+    let Some(m) = media else { return Err("nothing playing".into()) };
+    let Some(track) = &m.track else { return Err("nothing playing".into()) };
+    let action = clamp(media, action);
+    match m.via {
+        Via::Adapter => Ok(Route::Adapter(match action {
+            Action::Toggle => vec!["send".into(), "2".into()],
+            Action::Next => vec!["send".into(), "4".into()],
+            Action::Previous => vec!["send".into(), "5".into()],
+            Action::Seek { position_ms } => vec!["seek".into(), (position_ms * 1000).to_string()],
+        })),
+        Via::Applescript => {
+            let app = match track.bundle_id.as_str() {
+                "com.apple.Music" => "Music",
+                "com.spotify.client" => "Spotify",
+                other => return Err(format!("cannot control {other}")),
+            };
+            let verb = match action {
+                Action::Toggle => "playpause".to_string(),
+                Action::Next => "next track".to_string(),
+                Action::Previous => "previous track".to_string(),
+                Action::Seek { position_ms } => {
+                    format!("set player position to {}.{:03}", position_ms / 1000, position_ms % 1000)
+                }
+            };
+            Ok(Route::Script { app, script: format!("tell application \"{app}\" to {verb}") })
+        }
+        Via::None => Err("no media source".into()),
+    }
+}
+
+pub fn apply(route: &Route) -> Result<(), String> {
+    match route {
+        Route::Adapter(args) => {
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            let mut cmd = adapter_command(&adapter_dir(), &args);
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+            let mut group = Group::spawn(cmd).map_err(|e| format!("adapter did not start: {e}"))?;
+            match wait_deadline(&mut group.child, ADAPTER_SEND_TIMEOUT) {
+                Ok(Some(status)) if status.success() => Ok(()),
+                Ok(Some(status)) => Err(format!("adapter {status}")),
+                Ok(None) => Err(format!("adapter timed out after {} s", ADAPTER_SEND_TIMEOUT.as_secs())),
+                Err(e) => Err(format!("adapter wait: {e}")),
+            }
+        }
+        Route::Script { app, script } => {
+            if !running(app) {
+                return Err(format!("{app} is not running"));
+            }
+            let out = osascript(script)?;
+            if out.status.success() {
+                return Ok(());
+            }
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if applescript_denied(&stderr) {
+                Err("denied".into())
+            } else {
+                Err(format!("osascript {}", out.status))
+            }
+        }
+    }
+}
+
 struct Provider {
     dir: PathBuf,
     attempt: u32,
