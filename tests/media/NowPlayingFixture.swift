@@ -1,5 +1,7 @@
 // A stand-in media player for tests. It publishes one track to the system Now Playing center and keeps it
 // until it receives SIGTERM, so the adapter (and the app) can be checked against known values.
+// It also answers MediaRemote's transport commands and prints one line to stdout per command:
+//   fixture: toggle playing | toggle paused | play | pause | next "<title> II" | previous "<title>" | seek <s>
 //
 // Usage: NowPlayingFixture <title> <artist> <square|wide> <duration-seconds> <elapsed-seconds>
 // It must run inside an .app bundle: MediaRemote only reports players that have a bundle identifier.
@@ -7,7 +9,7 @@ import AppKit
 import MediaPlayer
 
 let args = CommandLine.arguments
-guard args.count == 6, let duration = Double(args[4]), let elapsed = Double(args[5]),
+guard args.count == 6, let duration = Double(args[4]), let startElapsed = Double(args[5]),
       args[3] == "square" || args[3] == "wide" else {
     FileHandle.standardError.write("usage: NowPlayingFixture <title> <artist> <square|wide> <duration> <elapsed>\n".data(using: .utf8)!)
     exit(2)
@@ -27,21 +29,68 @@ let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 
 let center = MPNowPlayingInfoCenter.default()
-center.nowPlayingInfo = [
-    MPMediaItemPropertyTitle: args[1],
-    MPMediaItemPropertyArtist: args[2],
-    MPMediaItemPropertyAlbumTitle: "Fixture Album",
-    MPMediaItemPropertyPlaybackDuration: duration,
-    MPNowPlayingInfoPropertyElapsedPlaybackTime: elapsed,
-    MPNowPlayingInfoPropertyPlaybackRate: 1.0,
-    MPMediaItemPropertyArtwork: artwork,
-]
-center.playbackState = .playing
 
-// Answering play and pause makes the fixture a real Now Playing candidate.
+// The fixture's whole state. Every command changes it and republishes it, so the adapter stream reports it.
+let baseTitle = args[1]
+var title = baseTitle
+var position = startElapsed
+var playing = true
+var anchor = Date()
+
+func say(_ line: String) {
+    FileHandle.standardOutput.write((line + "\n").data(using: .utf8)!)
+}
+
+func publish() {
+    center.nowPlayingInfo = [
+        MPMediaItemPropertyTitle: title,
+        MPMediaItemPropertyArtist: args[2],
+        MPMediaItemPropertyAlbumTitle: "Fixture Album",
+        MPMediaItemPropertyPlaybackDuration: duration,
+        MPNowPlayingInfoPropertyElapsedPlaybackTime: position,
+        MPNowPlayingInfoPropertyPlaybackRate: playing ? 1.0 : 0.0,
+        MPMediaItemPropertyArtwork: artwork,
+    ]
+    center.playbackState = playing ? .playing : .paused
+}
+
+// Brings `position` up to now before a command that changes the rate: it moves on while playing.
+func settle() {
+    if playing { position = min(duration, position + Date().timeIntervalSince(anchor)) }
+    anchor = Date()
+}
+
+publish()
+
 let commands = MPRemoteCommandCenter.shared()
-commands.playCommand.addTarget { _ in center.playbackState = .playing; return .success }
-commands.pauseCommand.addTarget { _ in center.playbackState = .paused; return .success }
+commands.togglePlayPauseCommand.addTarget { _ in
+    settle(); playing.toggle(); publish()
+    say("fixture: toggle " + (playing ? "playing" : "paused"))
+    return .success
+}
+commands.playCommand.addTarget { _ in
+    settle(); playing = true; publish(); say("fixture: play"); return .success
+}
+commands.pauseCommand.addTarget { _ in
+    settle(); playing = false; publish(); say("fixture: pause"); return .success
+}
+commands.nextTrackCommand.addTarget { _ in
+    title = baseTitle + " II"; position = 0; playing = true; anchor = Date(); publish()
+    say("fixture: next \"\(title)\""); return .success
+}
+commands.previousTrackCommand.addTarget { _ in
+    title = baseTitle; position = 0; playing = true; anchor = Date(); publish()
+    say("fixture: previous \"\(title)\""); return .success
+}
+commands.changePlaybackPositionCommand.addTarget { event in
+    guard let e = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+    position = e.positionTime; anchor = Date(); publish()
+    say(String(format: "fixture: seek %.1f", e.positionTime)); return .success
+}
+for c in [commands.togglePlayPauseCommand, commands.playCommand, commands.pauseCommand, commands.nextTrackCommand,
+          commands.previousTrackCommand, commands.changePlaybackPositionCommand] as [MPRemoteCommand] {
+    c.isEnabled = true
+}
 
 signal(SIGTERM) { _ in exit(0) }
 app.run()

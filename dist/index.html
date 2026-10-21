@@ -36,7 +36,7 @@
   #earMedia.paused #earBars { display: none; }
   #earMedia.paused #earPause { display: flex; }
   #card, #denied { display: none; position: absolute; left: 18px; right: 18px; top: 44px; }
-  body.open #card.on { display: block; height: 100px; }
+  body.open #card.on { display: block; height: 138px; }
   body.open #denied.on { display: block; font-weight: 500; line-height: 22px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #cardArt { width: 64px; height: 64px; border-radius: 6px; position: absolute; left: 0; top: 0; }
   #cardArt.wide { width: 112px; height: 63px; }
@@ -45,10 +45,24 @@
   #cardText div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #cardTitle { font-weight: 600; }
   #cardArtist, #cardApp { color: #8b8b8b; }
-  #prog { position: absolute; left: 0; right: 0; top: 76px; height: 20px; display: flex; align-items: center; gap: 8px;
-    color: #8b8b8b; font-weight: 500; font-variant-numeric: tabular-nums; }
-  #bar { flex: 1; height: 3px; border-radius: 2px; background: #2a2a2c; overflow: hidden; }
+  #prog { position: absolute; left: 0; right: 0; top: 72px; height: 16px; display: grid; grid-template-columns: 46px 1fr 46px;
+    column-gap: 6px; align-items: center; color: #8b8b8b; font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  #tRem { text-align: right; }
+  #bar { position: relative; height: 16px; touch-action: none; }
+  .track { position: absolute; left: 0; right: 0; top: 6px; height: 4px; border-radius: 2px;
+    background: rgba(245, 245, 245, 0.16); overflow: hidden; }
   #fill { height: 100%; background: #f5f5f5; transform-origin: 0 50%; transform: scaleX(0); }
+  #knob { display: none; position: absolute; top: 3px; left: 0; width: 10px; height: 10px; margin-left: -5px;
+    border-radius: 50%; background: #fff; }
+  #bar.drag #knob { display: block; }
+  .controls { position: absolute; left: 0; right: 0; top: 98px; height: 40px; display: flex; align-items: center;
+    justify-content: center; gap: 18px; }
+  .cb { width: 34px; height: 34px; border: 0; padding: 0; border-radius: 50%; background: transparent; color: #f5f5f5;
+    display: grid; place-items: center; opacity: 0.86; cursor: default; }
+  .cb.main { width: 40px; height: 40px; background: #f5f5f5; color: #000; opacity: 1; }
+  .cb .i-play, .cb.paused .i-pause { display: none; }
+  .cb.paused .i-play { display: block; }
+  .cb:active { transform: scale(0.92); }
 </style>
 </head>
 <body>
@@ -65,7 +79,12 @@
     <div id="card">
       <img class="art" id="cardArt" alt="">
       <div id="cardText"><div id="cardTitle"></div><div id="cardArtist"></div><div id="cardApp"></div></div>
-      <div id="prog"><span id="tEl"></span><div id="bar"><div id="fill"></div></div><span id="tRem"></span></div>
+      <div id="prog"><span id="tEl"></span><div id="bar"><div class="track"><div id="fill"></div></div><div id="knob"></div></div><span id="tRem"></span></div>
+      <div class="controls">
+        <button type="button" class="cb" id="btnPrev" aria-label="Previous track"><svg viewBox="0 0 16 16" width="16" height="16"><rect x="2" y="3" width="2" height="10" rx=".8" fill="currentColor"/><path d="M13.4 3.3v9.4c0 .45-.5.72-.88.47L5.3 8.47a.56.56 0 0 1 0-.94l7.22-4.7c.38-.25.88.02.88.47z" fill="currentColor"/></svg></button>
+        <button type="button" class="cb main" id="btnMain" aria-label="Pause"><svg class="i-pause" viewBox="0 0 16 16" width="16" height="16"><rect x="3.6" y="2.8" width="3" height="10.4" rx="1" fill="currentColor"/><rect x="9.4" y="2.8" width="3" height="10.4" rx="1" fill="currentColor"/></svg><svg class="i-play" viewBox="0 0 16 16" width="16" height="16"><path d="M4.4 2.9v10.2c0 .5.55.8.97.53l7.85-5.1a.62.62 0 0 0 0-1.06L5.37 2.37c-.42-.27-.97.03-.97.53z" fill="currentColor"/></svg></button>
+        <button type="button" class="cb" id="btnNext" aria-label="Next track"><svg viewBox="0 0 16 16" width="16" height="16"><path d="M2.6 3.3v9.4c0 .45.5.72.88.47l7.22-4.7a.56.56 0 0 0 0-.94L3.48 2.83c-.38-.25-.88.02-.88.47z" fill="currentColor"/><rect x="12" y="3" width="2" height="10" rx=".8" fill="currentColor"/></svg></button>
+      </div>
     </div>
     <div id="denied">Music access is off: allow notch-hud in System Settings, Privacy &amp; Security, Automation</div>
     <div class="detail" id="detail"></div>
@@ -80,7 +99,14 @@
     needs_permission: (detail) => detail ? 'needs permission: ' + detail : 'needs permission',
   };
   const $ = (id) => document.getElementById(id);
+  // media: the latest the app sent. shown: what the card draws, which is media plus any optimistic change.
   let media = null;
+  let shown = null;
+  let drag = null; // fraction 0..1 while the bar is being dragged
+  // The optimistic change awaiting the app's confirmation: { id, kind: 'toggle' | 'seek' } or null.
+  let pending = null;
+  let pendingSeq = 0;
+  let pendingTimer = null;
   let attention = 0;
   function fmt(sec) {
     const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), r = sec % 60;
@@ -93,14 +119,18 @@
     return t.duration_ms != null ? Math.min(e, t.duration_ms) : e;
   }
   function tick() {
-    const t = media && media.track;
+    const t = shown && shown.track;
     if (!t) return;
-    const el = Math.floor(elapsedMs(t) / 1000);
+    const known = t.duration_ms != null;
+    const posMs = drag !== null && known ? drag * t.duration_ms : elapsedMs(t);
+    const el = Math.floor(posMs / 1000);
     $('tEl').textContent = fmt(el);
-    if (t.duration_ms != null) {
+    if (known) {
       const dur = Math.floor(t.duration_ms / 1000);
+      const frac = t.duration_ms > 0 ? Math.min(1, posMs / t.duration_ms) : 0;
       $('tRem').textContent = '-' + fmt(Math.max(0, dur - el));
-      $('fill').style.transform = 'scaleX(' + (dur > 0 ? Math.min(1, elapsedMs(t) / t.duration_ms) : 0) + ')';
+      $('fill').style.transform = 'scaleX(' + frac + ')';
+      $('knob').style.left = frac * 100 + '%';
     } else {
       $('tRem').textContent = '';
       $('fill').style.transform = 'scaleX(0)';
@@ -119,11 +149,11 @@
     img.src = url;
   }
   function renderMedia() {
-    const t = media && media.track;
+    const t = shown && shown.track;
     $('earMedia').classList.toggle('on', !!t && attention === 0);
     $('earMedia').classList.toggle('paused', !!t && !t.playing);
     $('card').classList.toggle('on', !!t);
-    $('denied').classList.toggle('on', !t && !!media && media.health === 'denied');
+    $('denied').classList.toggle('on', !t && !!shown && shown.health === 'denied');
     if (!t) return syncClock();
     setArt($('earArt'), t.artwork);
     setArt($('cardArt'), t.artwork);
@@ -133,11 +163,13 @@
     $('cardTitle').textContent = t.title;
     $('cardArtist').textContent = t.artist || '';
     $('cardApp').textContent = t.app;
+    $('btnMain').classList.toggle('paused', !t.playing);
+    $('btnMain').setAttribute('aria-label', t.playing ? 'Pause' : 'Play');
     syncClock();
   }
   let timer = null;
   function syncClock() {
-    const t = media && media.track;
+    const t = shown && shown.track;
     const want = document.body.classList.contains('open') && !!t && t.playing;
     if (want && timer === null) timer = setInterval(tick, 250);
     if (!want && timer !== null) { clearInterval(timer); timer = null; }
@@ -169,9 +201,94 @@
   }
   render({ rows: [], total: 0, attention: 0, working: 0 });
   document.documentElement.style.setProperty('--h', window.innerHeight + 'px');
-  window.__TAURI__.event.listen('hover', (e) => { document.body.classList.toggle('open', e.payload); syncClock(); });
+  window.__TAURI__.event.listen('hover', (e) => {
+    document.body.classList.toggle('open', e.payload);
+    if (!e.payload && drag !== null) { endDrag(); tick(); }
+    syncClock();
+  });
   window.__TAURI__.event.listen('sessions', (e) => render(e.payload));
-  const onMedia = (m) => { media = m; renderMedia(); };
+  // Ends the pending change, if any, and shows the latest media the app sent.
+  function settle() {
+    clearTimeout(pendingTimer);
+    pending = null;
+    shown = media;
+    renderMedia();
+  }
+  function agrees(m) {
+    const was = shown.track;
+    return pending.kind === 'toggle'
+      ? m.track.playing === was.playing
+      : Math.abs(elapsedMs(m.track) - elapsedMs(was)) <= 2000;
+  }
+  function onMedia(m) {
+    media = m;
+    const sameTrack = pending && m.track && shown.track && m.track.title === shown.track.title;
+    if (pending && sameTrack && !agrees(m)) return;
+    settle();
+  }
+  function setPending(kind) {
+    clearTimeout(pendingTimer);
+    pending = { id: ++pendingSeq, kind };
+    pendingTimer = setTimeout(settle, shown && shown.via === 'applescript' ? 5000 : 2000);
+    return pending.id;
+  }
+  function patchTrack(patch) {
+    if (!shown || !shown.track) return;
+    shown = { ...shown, track: { ...shown.track, ...patch } };
+    renderMedia();
+  }
+  function send(action, id) {
+    window.__TAURI__.core.invoke('act', { action }).catch(() => { if (id !== undefined && pending && pending.id === id) settle(); });
+  }
+  function seekTo(ms) {
+    const id = setPending('seek');
+    patchTrack({ elapsed_ms: ms, elapsed_at_ms: Date.now() });
+    send({ kind: 'seek', position_ms: ms }, id);
+  }
+  $('btnMain').addEventListener('click', () => {
+    const t = shown && shown.track;
+    if (!t) return;
+    const id = setPending('toggle');
+    patchTrack({ playing: !t.playing, elapsed_ms: elapsedMs(t), elapsed_at_ms: Date.now() });
+    send({ kind: 'toggle' }, id);
+  });
+  $('btnNext').addEventListener('click', () => send({ kind: 'next' }));
+  $('btnPrev').addEventListener('click', () => {
+    const t = shown && shown.track;
+    if (!t) return;
+    if (elapsedMs(t) > 3000) seekTo(0);
+    else send({ kind: 'previous' });
+  });
+  const bar = $('bar');
+  function fracAt(e) {
+    const r = bar.getBoundingClientRect();
+    return r.width > 0 ? Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) : 0;
+  }
+  function endDrag() {
+    drag = null;
+    bar.classList.remove('drag');
+  }
+  bar.addEventListener('pointerdown', (e) => {
+    const t = shown && shown.track;
+    if (e.button !== 0 || !t || t.duration_ms == null || drag !== null) return;
+    bar.setPointerCapture(e.pointerId);
+    bar.classList.add('drag');
+    drag = fracAt(e);
+    tick();
+  });
+  bar.addEventListener('pointermove', (e) => {
+    if (drag === null) return;
+    drag = fracAt(e);
+    tick();
+  });
+  bar.addEventListener('pointerup', (e) => {
+    if (drag === null) return;
+    const t = shown && shown.track;
+    const frac = fracAt(e);
+    endDrag();
+    if (t && t.duration_ms != null) seekTo(Math.round(frac * t.duration_ms));
+  });
+  bar.addEventListener('pointercancel', () => { endDrag(); tick(); });
   window.__TAURI__.event.listen('media', (e) => onMedia(e.payload));
   window.__TAURI__.core.invoke('media').then((m) => { if (m) onMedia(m); });
   window.__TAURI__.core.invoke('sessions').then((s) => { if (s) render(s); });
