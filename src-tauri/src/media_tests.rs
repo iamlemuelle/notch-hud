@@ -217,7 +217,7 @@ const ART: &str = "https://i.scdn.co/image/abc123";
 
 #[test]
 fn applescript_spotify_full_line() {
-    let out = format!("spotify\tplaying\tSong\tArtist\tAlbum\t200.4\t12.6\t{ART}\n");
+    let out = format!("spotify\tplaying\tSong\tArtist\tAlbum\t200400\t12600\t{ART}\n");
     let t = parse_applescript(&out, 1_700_000_000_000).unwrap();
     assert_eq!(
         t,
@@ -238,7 +238,7 @@ fn applescript_spotify_full_line() {
 
 #[test]
 fn applescript_music_maps_to_apple_music() {
-    let out = "music\tplaying\tTune\tBand\tLP\t180\t30\t\n";
+    let out = "music\tplaying\tTune\tBand\tLP\t180000\t30000\t\n";
     let t = parse_applescript(out, 5).unwrap();
     assert_eq!(t.app, "Apple Music");
     assert_eq!(t.bundle_id, "com.apple.Music");
@@ -249,8 +249,8 @@ fn applescript_music_maps_to_apple_music() {
 }
 
 #[test]
-fn applescript_rounds_seconds_to_ms() {
-    let out = "music\tplaying\tT\tA\tB\t1.2346\t0.0006\t\n";
+fn applescript_rounds_fractional_ms() {
+    let out = "music\tplaying\tT\tA\tB\t1234.6\t0.6\t\n";
     let t = parse_applescript(out, 0).unwrap();
     assert_eq!(t.duration_ms, Some(1235));
     assert_eq!(t.elapsed_ms, Some(1));
@@ -258,7 +258,7 @@ fn applescript_rounds_seconds_to_ms() {
 
 #[test]
 fn applescript_empty_fields_become_none() {
-    let out = "music\tplaying\tT\t\t\t10\t1\t\n";
+    let out = "music\tplaying\tT\t\t\t10000\t1000\t\n";
     let t = parse_applescript(out, 0).unwrap();
     assert_eq!(t.artist, None);
     assert_eq!(t.album, None);
@@ -267,7 +267,7 @@ fn applescript_empty_fields_become_none() {
 
 #[test]
 fn applescript_playing_beats_paused_regardless_of_order() {
-    let out = "music\tpaused\tOld\tA\tB\t10\t1\t\nspotify\tplaying\tNew\tA\tB\t10\t1\t\n";
+    let out = "music\tpaused\tOld\tA\tB\t10000\t1000\t\nspotify\tplaying\tNew\tA\tB\t10000\t1000\t\n";
     let t = parse_applescript(out, 0).unwrap();
     assert_eq!(t.title, "New");
     assert!(t.playing);
@@ -275,13 +275,13 @@ fn applescript_playing_beats_paused_regardless_of_order() {
 
 #[test]
 fn applescript_first_playing_wins() {
-    let out = "music\tplaying\tFirst\tA\tB\t10\t1\t\nspotify\tplaying\tSecond\tA\tB\t10\t1\t\n";
+    let out = "music\tplaying\tFirst\tA\tB\t10000\t1000\t\nspotify\tplaying\tSecond\tA\tB\t10000\t1000\t\n";
     assert_eq!(parse_applescript(out, 0).unwrap().title, "First");
 }
 
 #[test]
 fn applescript_paused_when_nothing_playing() {
-    let out = "music\tstopped\tGone\tA\tB\t10\t0\t\nspotify\tpaused\tHeld\tA\tB\t10\t4\t\n";
+    let out = "music\tstopped\tGone\tA\tB\t10000\t0\t\nspotify\tpaused\tHeld\tA\tB\t10000\t4000\t\n";
     let t = parse_applescript(out, 0).unwrap();
     assert_eq!(t.title, "Held");
     assert!(!t.playing);
@@ -290,18 +290,18 @@ fn applescript_paused_when_nothing_playing() {
 
 #[test]
 fn applescript_stopped_only_is_none() {
-    assert_eq!(parse_applescript("music\tstopped\tT\tA\tB\t10\t0\t\n", 0), None);
+    assert_eq!(parse_applescript("music\tstopped\tT\tA\tB\t10000\t0\t\n", 0), None);
 }
 
 #[test]
 fn applescript_skips_bad_lines() {
     let out = [
-        "music\tplaying\tshort\tA\tB\t10\t1",           // 7 fields
-        "vlc\tplaying\tUnknownApp\tA\tB\t10\t1\t",       // unknown app
-        "music\tplaying\t\tA\tB\t10\t1\t",               // empty title
+        "music\tplaying\tshort\tA\tB\t10000\t1000",           // 7 fields
+        "vlc\tplaying\tUnknownApp\tA\tB\t10000\t1000\t",       // unknown app
+        "music\tplaying\t\tA\tB\t10000\t1000\t",               // empty title
         "music\tplaying\tBadNum\tA\tB\tabc\t1\t",        // unparsable duration
-        "music\tplaying\tBadPos\tA\tB\t10\txyz\t",       // unparsable position
-        "spotify\tplaying\tGood\tA\tB\t10\t1\t",
+        "music\tplaying\tBadPos\tA\tB\t10000\txyz\t",       // unparsable position
+        "spotify\tplaying\tGood\tA\tB\t10000\t1000\t",
     ]
     .join("\n");
     assert_eq!(parse_applescript(&out, 0).unwrap().title, "Good");
@@ -309,7 +309,7 @@ fn applescript_skips_bad_lines() {
 
 #[test]
 fn applescript_only_bad_lines_is_none() {
-    assert_eq!(parse_applescript("garbage\n\nmusic\tplaying\t\tA\tB\t1\t1\t\n", 0), None);
+    assert_eq!(parse_applescript("garbage\n\nmusic\tplaying\t\tA\tB\t1000\t1000\t\n", 0), None);
 }
 
 #[test]
@@ -330,6 +330,7 @@ fn applescript_denied_detects_1743() {
 #[test]
 fn applescript_denied_false_otherwise() {
     assert!(!applescript_denied(""));
+    assert!(!applescript_denied("1743"));
     assert!(!applescript_denied("execution error: Application isn't running. (-600)"));
 }
 
