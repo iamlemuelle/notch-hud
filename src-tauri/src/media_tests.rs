@@ -405,3 +405,263 @@ fn via_none_and_health_failed_serialize_lowercase() {
         r#"{"via":"none","health":"failed","track":null}"#
     );
 }
+
+// ---- controls: parse_action ----
+
+use serde_json::json;
+
+fn v(s: &str) -> serde_json::Value {
+    serde_json::from_str(s).expect("test json")
+}
+
+fn media_with(via: Via, bundle_id: &str, duration_ms: Option<u64>) -> Media {
+    Media {
+        via,
+        health: Health::Ok,
+        track: Some(Track {
+            title: "Song".into(),
+            artist: Some("Artist".into()),
+            album: None,
+            app: "App".into(),
+            bundle_id: bundle_id.into(),
+            playing: true,
+            duration_ms,
+            elapsed_ms: Some(1_000),
+            elapsed_at_ms: Some(1_700_000_000_000),
+            artwork: None,
+        }),
+    }
+}
+
+fn script(app: &'static str, script: &str) -> Route {
+    Route::Script {
+        app,
+        script: script.into(),
+    }
+}
+
+fn args(a: &[&str]) -> Route {
+    Route::Adapter(a.iter().map(|s| s.to_string()).collect())
+}
+
+#[test]
+fn parse_action_accepts_the_four_shapes() {
+    assert_eq!(parse_action(&v(r#"{"kind":"toggle"}"#)), Ok(Action::Toggle));
+    assert_eq!(parse_action(&v(r#"{"kind":"next"}"#)), Ok(Action::Next));
+    assert_eq!(parse_action(&v(r#"{"kind":"previous"}"#)), Ok(Action::Previous));
+    assert_eq!(
+        parse_action(&v(r#"{"kind":"seek","position_ms":74000}"#)),
+        Ok(Action::Seek { position_ms: 74_000 })
+    );
+}
+
+#[test]
+fn parse_action_accepts_seek_zero_and_the_maximum() {
+    assert_eq!(
+        parse_action(&json!({"kind": "seek", "position_ms": 0})),
+        Ok(Action::Seek { position_ms: 0 })
+    );
+    assert_eq!(MAX_SEEK_MS, 86_400_000);
+    assert_eq!(
+        parse_action(&json!({"kind": "seek", "position_ms": 86_400_000u64})),
+        Ok(Action::Seek { position_ms: 86_400_000 })
+    );
+}
+
+#[test]
+fn parse_action_rejects_one_past_the_maximum() {
+    assert!(parse_action(&json!({"kind": "seek", "position_ms": 86_400_001u64})).is_err());
+}
+
+#[test]
+fn parse_action_rejects_non_objects() {
+    for raw in ["null", "true", "5", r#""toggle""#, "[]", r#"[{"kind":"toggle"}]"#] {
+        assert!(parse_action(&v(raw)).is_err(), "{raw}");
+    }
+}
+
+#[test]
+fn parse_action_rejects_missing_or_unknown_kind() {
+    for raw in [
+        "{}",
+        r#"{"position_ms":5}"#,
+        r#"{"kind":"play"}"#,
+        r#"{"kind":"pause"}"#,
+        r#"{"kind":"Toggle"}"#,
+        r#"{"kind":"TOGGLE"}"#,
+        r#"{"kind":""}"#,
+        r#"{"kind":null}"#,
+        r#"{"kind":5}"#,
+        r#"{"kind":"stop"}"#,
+    ] {
+        assert!(parse_action(&v(raw)).is_err(), "{raw}");
+    }
+}
+
+#[test]
+fn parse_action_rejects_extra_fields() {
+    for raw in [
+        r#"{"kind":"toggle","position_ms":1}"#,
+        r#"{"kind":"next","x":1}"#,
+        r#"{"kind":"previous","extra":true}"#,
+        r#"{"kind":"seek","position_ms":1,"extra":1}"#,
+    ] {
+        assert!(parse_action(&v(raw)).is_err(), "{raw}");
+    }
+}
+
+#[test]
+fn parse_action_rejects_bad_seek_positions() {
+    for raw in [
+        r#"{"kind":"seek"}"#,
+        r#"{"kind":"seek","position_ms":-1}"#,
+        r#"{"kind":"seek","position_ms":1.5}"#,
+        r#"{"kind":"seek","position_ms":"74000"}"#,
+        r#"{"kind":"seek","position_ms":null}"#,
+        r#"{"kind":"seek","position_ms":true}"#,
+        r#"{"kind":"seek","position_ms":1e12}"#,
+    ] {
+        assert!(parse_action(&v(raw)).is_err(), "{raw}");
+    }
+}
+
+// ---- controls: route ----
+
+#[test]
+fn route_adapter_sends_the_media_key_codes() {
+    let m = media_with(Via::Adapter, "com.apple.Music", Some(223_000));
+    assert_eq!(route(Some(&m), Action::Toggle), Ok(args(&["send", "2"])));
+    assert_eq!(route(Some(&m), Action::Next), Ok(args(&["send", "4"])));
+    assert_eq!(route(Some(&m), Action::Previous), Ok(args(&["send", "5"])));
+}
+
+#[test]
+fn route_adapter_seek_is_in_microseconds() {
+    let m = media_with(Via::Adapter, "com.apple.Music", Some(223_000));
+    assert_eq!(
+        route(Some(&m), Action::Seek { position_ms: 74_000 }),
+        Ok(args(&["seek", "74000000"]))
+    );
+    assert_eq!(
+        route(Some(&m), Action::Seek { position_ms: 0 }),
+        Ok(args(&["seek", "0"]))
+    );
+}
+
+#[test]
+fn route_seek_clamps_to_the_duration() {
+    let m = media_with(Via::Adapter, "com.apple.Music", Some(223_000));
+    assert_eq!(
+        route(Some(&m), Action::Seek { position_ms: 300_000 }),
+        Ok(args(&["seek", "223000000"]))
+    );
+    let s = media_with(Via::Applescript, "com.apple.Music", Some(223_000));
+    assert_eq!(
+        route(Some(&s), Action::Seek { position_ms: 300_000 }),
+        Ok(script("Music", r#"tell application "Music" to set player position to 223.000"#))
+    );
+}
+
+#[test]
+fn route_seek_does_not_clamp_without_a_duration() {
+    let m = media_with(Via::Adapter, "com.apple.Music", None);
+    assert_eq!(
+        route(Some(&m), Action::Seek { position_ms: 300_000 }),
+        Ok(args(&["seek", "300000000"]))
+    );
+}
+
+#[test]
+fn route_applescript_music_scripts() {
+    let m = media_with(Via::Applescript, "com.apple.Music", Some(223_000));
+    assert_eq!(
+        route(Some(&m), Action::Toggle),
+        Ok(script("Music", r#"tell application "Music" to playpause"#))
+    );
+    assert_eq!(
+        route(Some(&m), Action::Next),
+        Ok(script("Music", r#"tell application "Music" to next track"#))
+    );
+    assert_eq!(
+        route(Some(&m), Action::Previous),
+        Ok(script("Music", r#"tell application "Music" to previous track"#))
+    );
+    assert_eq!(
+        route(Some(&m), Action::Seek { position_ms: 74_000 }),
+        Ok(script("Music", r#"tell application "Music" to set player position to 74.000"#))
+    );
+}
+
+#[test]
+fn route_applescript_spotify_scripts() {
+    let m = media_with(Via::Applescript, "com.spotify.client", Some(200_000));
+    assert_eq!(
+        route(Some(&m), Action::Toggle),
+        Ok(script("Spotify", r#"tell application "Spotify" to playpause"#))
+    );
+    assert_eq!(
+        route(Some(&m), Action::Next),
+        Ok(script("Spotify", r#"tell application "Spotify" to next track"#))
+    );
+    assert_eq!(
+        route(Some(&m), Action::Previous),
+        Ok(script("Spotify", r#"tell application "Spotify" to previous track"#))
+    );
+    assert_eq!(
+        route(Some(&m), Action::Seek { position_ms: 74_000 }),
+        Ok(script("Spotify", r#"tell application "Spotify" to set player position to 74.000"#))
+    );
+}
+
+#[test]
+fn route_applescript_seek_pads_milliseconds_to_three_digits() {
+    let m = media_with(Via::Applescript, "com.apple.Music", Some(223_000));
+    assert_eq!(
+        route(Some(&m), Action::Seek { position_ms: 5 }),
+        Ok(script("Music", r#"tell application "Music" to set player position to 0.005"#))
+    );
+    assert_eq!(
+        route(Some(&m), Action::Seek { position_ms: 61_050 }),
+        Ok(script("Music", r#"tell application "Music" to set player position to 61.050"#))
+    );
+}
+
+#[test]
+fn route_applescript_unknown_bundle_id_is_an_error() {
+    let m = media_with(Via::Applescript, "com.google.Chrome", Some(223_000));
+    for a in [Action::Toggle, Action::Next, Action::Previous, Action::Seek { position_ms: 1 }] {
+        assert!(route(Some(&m), a).is_err(), "{a:?}");
+    }
+}
+
+#[test]
+fn route_via_none_is_an_error() {
+    let m = media_with(Via::None, "com.apple.Music", Some(223_000));
+    for a in [Action::Toggle, Action::Next, Action::Previous, Action::Seek { position_ms: 1 }] {
+        assert!(route(Some(&m), a).is_err(), "{a:?}");
+    }
+}
+
+#[test]
+fn route_without_media_or_track_is_nothing_playing() {
+    assert_eq!(route(None, Action::Toggle), Err("nothing playing".to_string()));
+    let m = Media {
+        via: Via::Adapter,
+        health: Health::Ok,
+        track: None,
+    };
+    assert_eq!(route(Some(&m), Action::Next), Err("nothing playing".to_string()));
+    assert_eq!(
+        route(Some(&m), Action::Seek { position_ms: 5 }),
+        Err("nothing playing".to_string())
+    );
+}
+
+// ---- controls: apply ----
+
+#[test]
+fn apply_script_for_a_player_that_is_not_running_is_an_error() {
+    let r = script("NoSuchPlayerXyz", r#"tell application "NoSuchPlayerXyz" to playpause"#);
+    let err = apply(&r).expect_err("must not run");
+    assert!(err.contains("not running"), "{err}");
+}
