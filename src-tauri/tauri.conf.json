@@ -1,7 +1,7 @@
 {
-  "productName": "notch-spike",
+  "productName": "notch-hud",
   "version": "0.0.1",
-  "identifier": "dev.lem.notchspike",
+  "identifier": "dev.lem.notchhud",
   "build": { "frontendDist": "../dist" },
   "app": {
     "withGlobalTauri": true,

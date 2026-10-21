@@ -131,7 +131,7 @@ The app calls it before each `read_dir`.
 
 ## 3. App behavior
 
-- Startup: when no screen in `NSScreen::screens` has `safeAreaInsets().top > 0`, print `notch-spike: no notched display`
+- Startup: when no screen in `NSScreen::screens` has `safeAreaInsets().top > 0`, print `notch-hud: no notched display`
   to stderr and exit 0. Set window level, collection behavior and shadow once.
 - Every time the window is placed (startup, hover change, row-count change), look the notched screen up again on the
   main thread, so plugging in or rearranging displays moves the panel correctly. If none is found, leave the frame.

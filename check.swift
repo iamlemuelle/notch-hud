@@ -16,7 +16,7 @@ func bounds(_ w: [String: Any]) -> CGRect {
 // Region capture (-R) leaves out windows above the menu bar on this macOS, so capture the whole display and crop.
 func shot(_ r: CGRect, _ name: String) -> NSBitmapImageRep? {
     try? FileManager.default.removeItem(atPath: name)
-    let full = NSTemporaryDirectory() + "notch-spike-full.png"
+    let full = NSTemporaryDirectory() + "notch-hud-full.png"
     try? FileManager.default.removeItem(atPath: full)
     let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
     p.arguments = ["-x", full]

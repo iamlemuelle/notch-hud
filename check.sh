@@ -12,7 +12,7 @@ hook '{"session_id":"s1","cwd":"/x/bianki","hook_event_name":"PermissionRequest"
 hook '{"session_id":"s2","cwd":"/x/lstack","hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{}}'
 hook '{"session_id":"s3","cwd":"/x/patunay","hook_event_name":"Stop","stop_hook_active":false}'
 hook '{"session_id":"s4","cwd":"/x/kerf","hook_event_name":"SessionStart","source":"startup"}'
-./src-tauri/target/release/notch-spike & app=$!
+./src-tauri/target/release/notch-hud & app=$!
 trap 'kill "$app" 2>/dev/null' EXIT
 ./check-bin "$app"; code=$?
 exit $code

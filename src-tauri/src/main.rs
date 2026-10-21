@@ -132,7 +132,7 @@ fn main() {
         .setup(|app| {
             let mtm = MainThreadMarker::new().expect("main thread");
             if notched_screen(mtm).is_none() {
-                eprintln!("notch-spike: no notched display");
+                eprintln!("notch-hud: no notched display");
                 std::process::exit(0);
             }
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
