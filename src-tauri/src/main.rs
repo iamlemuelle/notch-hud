@@ -47,10 +47,10 @@ impl Notch {
         self.screen.origin.y + self.screen.size.height
     }
 
-    /// `expanded`: the latest session total.
-    fn panel(&self, expanded: Option<usize>) -> NSRect {
+    /// `expanded`: the latest summary's shown row count and total.
+    fn panel(&self, expanded: Option<(usize, usize)>) -> NSRect {
         let size = match expanded {
-            Some(total) => NSSize { width: EXPANDED_WIDTH, height: expanded_height(total) },
+            Some((rows, total)) => NSSize { width: EXPANDED_WIDTH, height: expanded_height(rows, total) },
             None => NSSize { width: self.width + 2.0 * EAR, height: self.height },
         };
         let center = self.x + self.width / 2.0;
@@ -62,9 +62,10 @@ impl Notch {
 }
 
 /// The music block (196), the session header (18), a 4 pt gap, one 22 pt row per shown session row and 14 below.
-/// Shown rows: up to four sessions, plus a "N more" row past four; one "No Claude Code sessions" row at zero.
-fn expanded_height(total: usize) -> f64 {
-    let shown_rows = (total.min(4) + usize::from(total > 4)).max(1);
+/// Shown rows: the summary's session rows, plus a "N more" row when the total exceeds them; one "No Claude Code
+/// sessions" row at zero.
+fn expanded_height(rows: usize, total: usize) -> f64 {
+    let shown_rows = (rows + usize::from(total > rows)).max(1);
     (196 + 18 + 4 + 22 * shown_rows + 14) as f64
 }
 
@@ -125,15 +126,15 @@ fn notched_screen(mtm: MainThreadMarker) -> Option<Notch> {
     NSScreen::screens(mtm).iter().find_map(|s| Notch::read(&s))
 }
 
-fn latest_total() -> usize {
-    LATEST.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |s| s.total)
+fn latest_counts() -> (usize, usize) {
+    LATEST.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or((0, 0), |s| (s.rows.len(), s.total))
 }
 
 /// Main thread only. Looks the notched screen up again so display changes move the panel.
 fn place(expanded: bool) {
     let Some(mtm) = MainThreadMarker::new() else { return };
     let Some(notch) = notched_screen(mtm) else { return };
-    let target = notch.panel(expanded.then(latest_total));
+    let target = notch.panel(expanded.then(latest_counts));
     PANEL.with(|p| {
         if let Some(panel) = p.borrow().as_ref() {
             if panel.frame() != target {
@@ -224,11 +225,6 @@ fn on_media(app: &AppHandle, media: Media) {
         eprintln!("{}", trace_line(&media));
     }
     let _ = app.emit("media", &media);
-    let _ = app.run_on_main_thread(|| {
-        if EXPANDED_NOW.load(Ordering::Relaxed) {
-            place(true);
-        }
-    });
 }
 
 /// Parses, routes against the latest media and applies off the main thread.
@@ -312,3 +308,7 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("tauri run");
 }
+
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod tests;
