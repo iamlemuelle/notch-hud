@@ -149,10 +149,24 @@ fxseek="$(tail -n +$((fm + 1)) "$fxlog" | grep -E '^fixture: seek [0-9.]+$' | ta
 if [ -n "$fxseek" ] && awk -v s="$fxseek" 'BEGIN { exit !(s >= 100 && s <= 123) }'; then pass "seek: fixture seeked to $fxseek s"; else flunk "seek: fixture seek [$fxseek] s, want 100..123"; fi
 steady "seek"
 
-# 4b. once the shown elapsed is over 3 s, previous restarts the track: a seek to 0, not a previous track.
+# 4b. once the shown elapsed is over 3 s, previous restarts the track: a seek to 0, not a previous track. The sleep
+# lets the seek's pending change end (elapsed is already far past 3 s after the seek).
 sleep 3.5
 rehover restart; mark; drv click "$app" "$x_prev" "$y_ctl" || flunk "click previous (restart)"
 expect "restart" 'fixture: seek 0.0' 'media: act seek 0 ok'
+if tail -n +$((fm + 1)) "$fxlog" | grep -qF 'fixture: previous'; then flunk "restart: the fixture got a previous, not only a seek"; else pass "restart: no previous reached the fixture"; fi
+
+# 4c. a drag that overshoots the panel's right edge: the press latch keeps the panel open while the pointer is outside
+# it, so the release still lands, and a position past the end clamps to the duration.
+sleep 2.5
+rehover overshoot; mark
+"$drive" drag "$app" $((bar_left + bar_w * 3 / 4)) $((x0 + 420 + 30)) "$y_bar" 12 2>"$tmp/drag.log"; rc=$?
+[ "$rc" -eq 2 ] && { echo "SKIP $(cat "$tmp/drag.log")"; exit 2; }
+[ "$rc" -ne 0 ] && flunk "overshoot drag"
+sed 's/^/note: /' "$tmp/drag.log"
+expect "overshoot" 'fixture: seek 223.0' 'media: act seek 223000 ok'
+oseeks="$(tail -n +$((am + 1)) "$applog" | grep -cE '^media: act seek [0-9]+ ok$')"
+if [ "$oseeks" = 1 ]; then pass "overshoot: exactly one act seek"; else flunk "overshoot: $oseeks act seek lines, want 1"; fi
 
 # 5. the test app was never activated, and nothing else was either.
 sleep 0.5
