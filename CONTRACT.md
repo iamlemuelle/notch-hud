@@ -267,7 +267,8 @@ pub struct Media { pub via: Via, pub health: Health, pub track: Option<Track> }
 ### App and UI
 
 - The app keeps the latest `Media` and emits `media` with it whenever it changes; the `media` command returns it
-  (`null` before the first update).
+  (`null` before the first update). When `$NOTCH_TRACE` is set and non-empty, each change is also logged to stderr as
+  `media: <via> <health> <playing|paused> "<title>" (<app>)`, or `media: <via> <health> nothing` without a track.
 - Expanded height adds 108 pt when `track` is set, or 22 pt when `track` is null and `health` is `denied`:
   `44 + extra + 22 * max(rows.len(), 1) + 14`.
 - Collapsed right ear: `⚠ <attention>` when `attention > 0` (unchanged), else, when a track is set, its artwork
