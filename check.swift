@@ -67,6 +67,13 @@ let left = screen.auxiliaryTopLeftArea!, right = screen.auxiliaryTopRightArea!
 let notchW = right.minX - left.maxX
 print("screen \(screen.frame.size) notch width \(notchW) top inset \(screen.safeAreaInsets.top)")
 
+// A fresh build can take a few seconds to show its window and paint: wait for the expected state, up to 10s.
+func until(_ seconds: Double, _ cond: () -> Bool) -> Bool {
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline { if cond() { return true }; usleep(200_000) }
+    return cond()
+}
+_ = until(10) { windows().count == 1 }
 let ws = windows()
 expect(ws.count == 1, "1. exactly one on-screen window (got \(ws.count))")
 guard let w = ws.first else { exit(1) }
@@ -79,7 +86,14 @@ expect(abs(b.midX - screen.frame.width / 2) <= 2, "3b. centered within 2pt (midX
 expect(b.width > notchW, "3c. wider than notch (\(b.width) > \(notchW))")
 var wasAmber = false
 let collapsedArea = CGRect(x: b.midX - 260, y: 0, width: 520, height: 70)
-if let rep = shot(collapsedArea, "shot.png") {
+// The first frame paints the empty state; the seeded sessions arrive within the 1s poll.
+var collapsedRep: NSBitmapImageRep? = nil
+_ = until(10) {
+    collapsedRep = shot(collapsedArea, "shot.png")
+    guard let rep = collapsedRep else { return true }
+    return isAmber(color(rep, collapsedArea.origin, CGPoint(x: b.minX + 18, y: b.midY)))
+}
+if let rep = collapsedRep {
     let ear = CGPoint(x: left.maxX - 8, y: b.midY)
     let v = brightness(rep, collapsedArea.origin, ear)
     expect(v >= 0 && v < 0.1, "5a. pill drawn on screen: left-ear pixel at \(ear) is black (brightness \(v))")

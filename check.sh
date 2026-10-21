@@ -14,6 +14,5 @@ hook '{"session_id":"s3","cwd":"/x/patunay","hook_event_name":"Stop","stop_hook_
 hook '{"session_id":"s4","cwd":"/x/kerf","hook_event_name":"SessionStart","source":"startup"}'
 ./src-tauri/target/release/notch-spike & app=$!
 trap 'kill "$app" 2>/dev/null' EXIT
-sleep 2
 ./check-bin "$app"; code=$?
 exit $code
