@@ -65,12 +65,13 @@ pass "page loaded and the fixture is playing"
 wait_for "$watchlog" 5 watching || { echo "FAIL activation watcher did not start"; exit 2; }
 front0="$("$drive" front)"
 
-# The panel must be on top at the click points (the user's own notch-hud may be running at the same level).
+# The panel must be on top at the click points (the user's own notch-hud may be running at the same level). `drive hover`
+# waits for the open window (452 wide, panel 420 wide inset by 16) and prints the panel's left edge as x0.
 x0_line="$("$drive" hover "$app" 2>&1)"; rc=$?
 if [ "$rc" -eq 2 ]; then echo "SKIP $x0_line"; exit 2; fi
 if [ "$rc" -ne 0 ]; then flunk "panel expands on hover"; echo "$x0_line"; exit 1; fi
 x0="${x0_line#x0=}"
-pass "panel expanded to 420 x 226 at x=$x0"
+pass "window expanded to 452 x 242 (panel 420 x 226) with the panel's left edge at x=$x0"
 
 y_ctl=162; y_bar=124
 x_play=$((x0 + 210)); x_prev=$((x0 + 210 - 55)); x_next=$((x0 + 210 + 55))
