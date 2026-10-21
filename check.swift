@@ -17,11 +17,12 @@ func bounds(_ w: [String: Any]) -> CGRect {
 func shot(_ r: CGRect, _ name: String) -> NSBitmapImageRep? {
     try? FileManager.default.removeItem(atPath: name)
     let full = NSTemporaryDirectory() + "notch-spike-full.png"
+    try? FileManager.default.removeItem(atPath: full)
     let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
     p.arguments = ["-x", full]
     try? p.run(); p.waitUntilExit()
     guard p.terminationStatus == 0, let src = NSBitmapImageRep(data: (try? Data(contentsOf: URL(fileURLWithPath: full))) ?? Data()),
-          let cropped = src.cgImage?.cropping(to: CGRect(x: r.minX * 2, y: r.minY * 2, width: r.width * 2, height: r.height * 2)) else {
+          let cropped = src.cgImage?.cropping(to: CGRect(x: r.minX * scale, y: r.minY * scale, width: r.width * scale, height: r.height * scale)) else {
         expect(false, "5. screenshot \(name) captured (needs Screen Recording permission)")
         return nil
     }
@@ -29,9 +30,12 @@ func shot(_ r: CGRect, _ name: String) -> NSBitmapImageRep? {
     try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: name))
     return rep
 }
-// Brightness of the pixel at global point p, inside a capture whose origin is `origin`.
+// Color of the pixel at global point p, inside a capture whose origin is `origin`; nil when out of range.
+func color(_ rep: NSBitmapImageRep, _ origin: CGPoint, _ p: CGPoint) -> NSColor? {
+    rep.colorAt(x: Int((p.x - origin.x) * scale), y: Int((p.y - origin.y) * scale))?.usingColorSpace(.deviceRGB)
+}
 func brightness(_ rep: NSBitmapImageRep, _ origin: CGPoint, _ p: CGPoint) -> CGFloat {
-    rep.colorAt(x: Int((p.x - origin.x) * 2), y: Int((p.y - origin.y) * 2))?.usingColorSpace(.deviceRGB)?.brightnessComponent ?? -1
+    color(rep, origin, p)?.brightnessComponent ?? -1
 }
 func move(_ pt: CGPoint) {
     CGWarpMouseCursorPosition(pt)
@@ -46,6 +50,7 @@ func waitFor(_ cond: (CGRect) -> Bool) -> CGRect? {
 }
 
 let screen = NSScreen.main!
+let scale = screen.backingScaleFactor
 let left = screen.auxiliaryTopLeftArea!, right = screen.auxiliaryTopRightArea!
 let notchW = right.minX - left.maxX
 print("screen \(screen.frame.size) notch width \(notchW) top inset \(screen.safeAreaInsets.top)")
@@ -65,6 +70,11 @@ if let rep = shot(collapsedArea, "shot.png") {
     let ear = CGPoint(x: left.maxX - 8, y: b.midY)
     let v = brightness(rep, collapsedArea.origin, ear)
     expect(v >= 0 && v < 0.1, "5a. pill drawn on screen: left-ear pixel at \(ear) is black (brightness \(v))")
+    // Only the page can put the green status dot here: .pill padding 14 + half the 8px dot.
+    let dot = CGPoint(x: b.minX + 18, y: b.midY)
+    let c = color(rep, collapsedArea.origin, dot)
+    let g = c?.greenComponent ?? 0, r = c?.redComponent ?? 1
+    expect(g > 0.6 && g - r > 0.2, "5a. web content painted: status dot at \(dot) is green (r \(r) g \(g))")
 }
 
 let home = CGEvent(source: nil)!.location
@@ -79,7 +89,10 @@ if let g = grown {
         for x in stride(from: g.minX + 18, to: g.maxX - 18, by: 1) {
             for y in stride(from: g.maxY - 60, to: g.maxY - 12, by: 1) where brightness(rep, area.origin, CGPoint(x: x, y: y)) > 0.5 { lit += 1 }
         }
-        expect(lit > 200, "5b. web UI reacted to hover: \(lit) bright text pixels in the detail area (> 200)")
+        let samples = Int((g.width - 36) * 48)
+        expect(lit > 200 && lit < samples / 4, "5b. web UI reacted to hover: \(lit) bright text pixels of \(samples) in the detail area (> 200, < 1/4)")
+        let bg = brightness(rep, area.origin, CGPoint(x: g.minX + 8, y: g.maxY - 40))
+        expect(bg >= 0 && bg < 0.1, "5b. expanded panel is painted black, not see-through (brightness \(bg))")
     }
 }
 move(CGPoint(x: b.midX, y: 400))
