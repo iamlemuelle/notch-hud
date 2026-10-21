@@ -5,7 +5,7 @@ use std::io::{BufRead, BufReader};
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::os::unix::process::CommandExt;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
@@ -167,6 +167,7 @@ pub fn backoff(attempt: u32) -> Duration {
 
 const ADAPTER_TEST_TIMEOUT: Duration = Duration::from_secs(5);
 const STOP_GRACE: Duration = Duration::from_secs(3);
+const OSASCRIPT_TIMEOUT: Duration = Duration::from_secs(3);
 const STREAM_HEALTHY_AFTER: Duration = Duration::from_secs(60);
 const APPLESCRIPT_POLL: Duration = Duration::from_secs(2);
 const ADAPTER_RETEST: Duration = Duration::from_secs(60);
@@ -356,6 +357,25 @@ fn running(process: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// Runs one script, killed after OSASCRIPT_TIMEOUT. Its output is one short line, so the pipes never fill up.
+fn osascript(script: &str) -> Result<Output, String> {
+    let mut child = Command::new("/usr/bin/osascript")
+        .args(["-e", script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("did not start: {e}"))?;
+    let failure = match wait_deadline(&mut child, OSASCRIPT_TIMEOUT) {
+        Ok(Some(_)) => return child.wait_with_output().map_err(|e| format!("output: {e}")),
+        Ok(None) => format!("timed out after {} s", OSASCRIPT_TIMEOUT.as_secs()),
+        Err(e) => format!("wait: {e}"),
+    };
+    let _ = child.kill();
+    let _ = child.wait();
+    Err(failure)
+}
+
 /// Asks only apps that are already running, so polling never launches one.
 fn poll_applescript() -> Media {
     let mut out = String::new();
@@ -364,14 +384,14 @@ fn poll_applescript() -> Media {
         if !running(process) {
             continue;
         }
-        match Command::new("/usr/bin/osascript").args(["-e", script]).stdin(Stdio::null()).output() {
+        match osascript(script) {
             Ok(o) => {
                 denied |= applescript_denied(&String::from_utf8_lossy(&o.stderr));
                 out.push_str(&String::from_utf8_lossy(&o.stdout));
                 out.push('\n');
             }
             Err(e) => {
-                eprintln!("media: osascript did not start: {e}");
+                eprintln!("media: osascript {e}");
                 return Media { via: Via::Applescript, health: Health::Failed, track: None };
             }
         }
