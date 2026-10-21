@@ -133,17 +133,18 @@ The app calls it before each `read_dir`.
 
 - Startup: when no screen in `NSScreen::screens` has `safeAreaInsets().top > 0`, print `notch-hud: no notched display`
   to stderr and exit 0. Set window level, collection behavior and shadow once.
-- Every time the window is placed (startup, hover change, row-count change), look the notched screen up again on the
+- Every time the window is placed (startup, a `surface` call, a layout change), look the notched screen up again on the
   main thread, so plugging in or rearranging displays moves the panel correctly. If none is found, leave the frame.
 - Every 1 s: `prune(&dir, now)`, then `summarize(&read_dir(&dir), now)` with `dir = sessions_dir()`. Also every 1 s, on
-  the main thread: compute the frame the panel should have now (notched screen looked up again, current expanded state)
-  and set it when it differs from the window's frame, so a display change moves the collapsed pill too. When it differs from the last one, emit `sessions` with the
-  `Summary` as payload, and resize the panel if it is expanded.
-- Hover: native cursor polling every 50 ms, emits `hover` (bool). A left-button press that the poll first sees
-  (`NSEvent::pressedMouseButtons() & 1` going from up to down) while the cursor is over the expanded panel is latched
-  until the button is up again; while it is latched the panel stays expanded even when the cursor leaves it, so a seek
-  drag that overshoots the bar does not collapse the panel under the pointer. A press that starts anywhere else (a
-  window drag or a text selection passing over the notch) is never latched and changes nothing.
+  the main thread: compute the frame the panel should have now (notched screen looked up again, current window mode,
+  section 8) and set it when it differs from the window's frame, so a display change moves the collapsed pill too.
+  When the summary differs from the last one, emit `sessions` with the `Summary` as payload.
+- Hover: native cursor polling every 50 ms, emits `hover` (bool): whether the cursor is inside the hit rect, the shape
+  the page last reported with `surface` (section 8). A left-button press that the poll first sees
+  (`NSEvent::pressedMouseButtons() & 1` going from up to down) while the cursor is inside a hit rect other than `pill`
+  is latched until the button is up again; while it is latched `hover` stays true even when the cursor leaves, so a
+  seek drag that overshoots the bar does not collapse the panel under the pointer. A press that starts anywhere else
+  (a window drag or a text selection passing over the notch) is never latched and changes nothing.
 - Clicks: the panel is a native `NSPanel` created at startup with style mask `Borderless | NonactivatingPanel`, level,
   collection behavior and no shadow as above, a clear background and `opaque = false`. The Tauri window's content view
   (the webview) is moved into it, the Tauri window itself is never shown, and the webview is built with
@@ -154,7 +155,7 @@ The app calls it before each `read_dir`.
   subclass after creation all activate the app on click; only a panel created as non-activating does not.
 - Page load: when `$NOTCH_TRACE` is set and non-empty, the app logs `page: loaded` to stderr once the page has finished
   loading, so a check knows when the page can take clicks.
-- Expanded size: width 420, height `44 + 22 * max(rows.len(), 1) + 14` pt, top edge at the screen top, centered on the notch.
+- Expanded size: the `open` shape of section 8's `Layout`.
 
 ## 4. UI (`dist/index.html`)
 
@@ -352,8 +353,8 @@ pub enum Route {
   `44 + extra + 22 * max(rows.len(), 1) + 14`.
 - Right ear while collapsed: `⚠ <attention>` when `attention > 0` (unchanged), else, when a track is set, its artwork
   (18 pt square, or 26 × 15 pt when the artwork is at least 1.3 times wider than tall) and four equalizer bars while
-  playing or a pause glyph while paused.
-- Expanded: the right ear's media hides (the artwork is in the card instead); below the ear band, the artwork (64 pt square, or 112 × 63 pt when wide), title, artist and app name,
+  playing or a pause glyph while paused. A paused track's ear artwork is drawn at opacity 0.6.
+- Expanded: the right ear's media hides (the artwork moves into the card, section 8); below the ear band, the artwork (64 pt square, or 112 × 63 pt when wide), title, artist and app name,
   then a seek bar with elapsed and remaining time (`h:mm:ss` from one hour) that the page advances only while
   expanded and playing: `elapsed_ms + (now - elapsed_at_ms)`, clamped to `duration_ms`. Under it, the controls.
   Session rows follow.
@@ -389,3 +390,148 @@ pub enum Route {
   - The play/pause glyphs are static markup switched by a class, so re-rendering never replaces the element under a
     press. With `denied`, one
   muted line: `Music access is off: allow notch-hud in System Settings, Privacy & Security, Automation`.
+
+## 8. Panel motion and window
+
+The approved prototype is the spec for look and timing; its motion code is ported. The page animates one black shape
+by its `clip-path` inside a window that Rust grows before the shape needs the room and shrinks only after the shape is
+back to the pill. Only `transform`, `opacity` and `clip-path` animate; nothing animates layout or the window frame.
+
+### Geometry (`src-tauri/src/layout.rs`, pure)
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct Size { pub width: f64, pub height: f64 }
+
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct Layout { pub stage: Size, pub pill: Size, pub peek: Size, pub banner: Size, pub open: Size, pub ear: f64 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Shape { Pill, Peek, Banner, Open }       // the hit rect
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowMode { Pill, Banner, Open }
+
+pub const EAR: f64 = 60.0;
+pub const EXPANDED_WIDTH: f64 = 420.0;
+pub const BANNER_WIDTH: f64 = 380.0;
+pub const MARGIN: f64 = 16.0;
+
+pub fn layout(notch_width: f64, notch_height: f64, screen_height: f64, rows: usize, media_extra: f64) -> Layout;
+pub fn shape_size(layout: &Layout, shape: Shape) -> Size;
+pub fn window_size(layout: &Layout, mode: WindowMode) -> Size;
+```
+
+- `layout`: `pill` = (`notch_width + 2 * EAR`, `notch_height`); `peek` = `pill` + 4 in both; `banner` =
+  (`BANNER_WIDTH`, `notch_height + 46`); `open` = (`EXPANDED_WIDTH`, `44 + media_extra + 22 * max(rows, 1) + 14`, with
+  `media_extra` from section 7); `stage` = (`EXPANDED_WIDTH + 2 * MARGIN`, `screen_height`); `ear` = `EAR`.
+- `shape_size` returns the matching field. `window_size`: `Pill` is `pill` exactly; `Banner` is (`banner.width + 2 *
+  MARGIN`, `banner.height + MARGIN`); `Open` is (`stage.width`, `open.height + MARGIN`). The margin leaves room for
+  the spring's overshoot.
+- Every rect (shape, hit, window) is centered horizontally on the notch's center with its top edge at the screen top.
+
+### Bridge
+
+- Command `layout` returns the current `Layout`. The app emits `layout` with it whenever it changes (row count, the
+  media extra height, or the notched screen's geometry).
+- Command `surface` takes `{ window: WindowMode, hit: Shape }` (lowercase strings, unknown fields or values rejected
+  with `Err`). It records both and places the panel on the main thread. The page is its only caller.
+- Window frame: `window_size(layout, mode)` for the recorded mode. While the mode stays `open`, the height never
+  drops below the largest `open` height since the mode became `open`, so a row disappearing mid-spring never cuts the
+  shape; any other mode change resets that. The frame is set only when it differs from the panel's frame.
+- Trace (`$NOTCH_TRACE`): `window: <pill|banner|open> <width>x<height>` each time the frame's size changes, and
+  `hover: in` / `hover: out` each time `hover` is emitted.
+
+### Page structure (`dist/index.html`)
+
+- `#stage`: `stage.width` × `stage.height`, at `left: calc(50% - stage.width / 2)`, `top: 0`, so it stays put on screen
+  whatever the window size. `#panel`: the black shape filling the stage, clipped by
+  `inset(0 L (stage.height - h) L round 0 0 r r)` with `L = (stage.width - w) / 2` for the current shape (w, h) and
+  radius `r`: pill 14, peek 14, banner 20, open 22. Children of `#panel` (so the clip cuts them): `#earL` (dot,
+  count), `#warn`, `#earBars`, `#earPause`, `#art`, `#content` (card, access line, session rows), `#banner`.
+- `body.dataset.phase` is the current phase name (below). The stage stays hidden until the first `layout` arrives.
+- Positions, in stage pt, with `pillL = (stage.width - pill.width) / 2`, `R = pillL + pill.width - ear`,
+  `bannerL = (stage.width - banner.width) / 2`, `contentL = (stage.width - open.width) / 2`:
+  - `#earL`: x `pillL`, 60 wide, the pill's height, content centered. `#warn` in the right ear.
+  - `#art`: one element for every place: a 64 × 64 box (radius 13), or 112 × 63 (radius 8) when wide,
+    `transform-origin: 0 0`, placed by `translate(x, y) scale(s)`:
+
+    | Place | Square (x, y, s) | Wide (x, y, s) |
+    |---|---|---|
+    | ear | `R + 8`, `(pill.height - 18) / 2`, 18/64 | `R + 6`, `(pill.height - 15) / 2`, 26/112 |
+    | banner | `bannerL + 16`, `pill.height + 4`, 34/64 | same x, y, 60/112 |
+    | card | `contentL + 18`, 44, 1 | same |
+
+    It holds two layers that crossfade in 160 ms on an artwork change. Opacity: 0 with no track, or in the ear while
+    `attention > 0`; in the ear 1 while playing and 0.6 while paused; 1 in the banner and the card.
+  - `#earBars`: four 3 × 14 pt bars, 2 pt gaps, at x `R + 33` (`R + 37` wide), centered vertically; each bar animates
+    `scaleY` between its low value and 1, `ease-in-out infinite alternate` (durations 0.62, 0.48, 0.71, 0.55 s, lows
+    0.3, 0.5, 0.22, 0.4, delays 0, -0.2, -0.35, -0.1 s) while playing, and rests at `scaleY(0.24)` otherwise.
+    `#earPause`: a 12 pt glyph at x `R + 35.5` (`R + 39.5` wide). Exactly one of them is at opacity 1 while the
+    artwork is in the ear with a track and no attention; both are at 0 otherwise. They crossfade in 160 ms, delayed
+    120 ms when appearing from neither.
+  - `#content`: x `contentL`, `open.width` wide; the card at (18, 44) as in section 7, then the access line, then the
+    session rows, in normal flow (card block 146 pt including its 8 pt gap, access line 22 pt, rows 22 pt each).
+  - `#banner`: `#bIcon` (34 pt, radius 9, `#171717`, a 10 pt status dot) at (`bannerL + 16`, `pill.height + 4`);
+    text at x `bannerL + 62` (`bannerL + 88` with wide artwork), y `pill.height + 5`: `#bTitle` (13/17 pt, 600) over
+    `#bSub` (11.5/15 pt, `rgba(245,245,245,0.62)`); `#bannerBars` at x `bannerL + 344` for songs.
+- `#earL` and `#warn` rest at opacity 0.82 and go to 1 while peeking or expanded ("ears brighten").
+
+### Phases
+
+`collapsed`, `intent`, `peek`, `expanded`, `banner`, `collapsing`. Each phase has a hit shape: `peek` → `peek`,
+`expanded` → `open`, `banner` → `banner`, the rest → `pill`. The page calls `surface` whenever the pair
+(window mode, hit shape) changes.
+
+| Phase | Event | Next | What happens |
+|---|---|---|---|
+| collapsed, collapsing | hover in | intent | cancel the collapse; after 80 ms, peek |
+| intent | hover out | collapsed | cancel; when the shape is not at the pill (it was collapsing), collapse it as from expanded |
+| intent | 80 ms | peek | window `open`; ears brighten; clip to `peek` in 120 ms `cubic-bezier(0.2, 0, 0, 1)`; after 120 ms, expand |
+| peek | hover out | peek | after 250 ms: collapsed, ears dim, clip to `pill` in 120 ms `cubic-bezier(0.2, 0, 0, 1)` |
+| peek | hover in while that 250 ms runs, or the 120 ms ends | expanded | expand |
+| expanded | hover out | expanded | after 250 ms, collapse; hover in cancels it |
+| banner | hover in | banner | after 80 ms, expand (window `open`) |
+| banner | hover out | banner | after 250 ms, close the banner; hover in cancels it |
+| banner | 2600 ms | collapsing | close the banner |
+| collapsing | 80 ms | collapsing | clip to `pill` and art to the ear in 200 ms `cubic-bezier(0.4, 0, 1, 1)`, ears dim |
+| collapsing | 200 ms more | collapsed | content or banner layer reset (opacity 0, `translateY(4px)`) |
+
+- **Expand:** ears brighten; clip to `open` with the spring; art to the card with the spring; `#content` in (opacity
+  0 → 1 and `translateY(4px)` → 0, 140 ms `ease-out`, 80 ms delay). From a banner, the banner layer fades out in 80 ms.
+- **Collapse / close the banner:** the layer fades out (opacity, 80 ms linear), then the 200 ms close above.
+- **Spring:** stiffness 380, damping 32, mass 1. With `w0 = sqrt(k/m)`, `z = c / (2 sqrt(k m))`, `a = z w0`,
+  `wd = w0 sqrt(1 - z²)`, `x(t) = 1 - e^(-a t) (cos(wd t) + (a/wd) sin(wd t))` and
+  `D = ln(sqrt(1 + (a/wd)²) / 0.005) / a` seconds: a CSS `linear()` of 40 points, point `i` = `x(i / 39 · D)` to
+  4 decimals and point 39 = 1, lasting `round(D · 1000)` = 366 ms.
+- **Layout change while expanded:** the clip springs to the new `open` height.
+- **Reduced motion** (`prefers-reduced-motion: reduce`, also followed live): the clip changes at once; layers fade in
+  120 ms linear with no rise and out in 120 ms linear; the ears' opacity changes in 120 ms linear; the art fades out in
+  60 ms, jumps, and fades in over 60 ms; the ear glyphs crossfade in 120 ms with no delay. Phase timers are the same
+  except the collapse's first step waits 120 ms and its second 120 ms.
+
+### Window
+
+- Grow before the shape needs the room: window `open` on entering `peek` or expanding from a banner; window `banner`
+  on entering `banner`.
+- Shrink only after the shape is back: when the phase becomes `collapsed`, window `pill` is sent once no `clip-path`
+  transition is running on `#panel`, on its `transitionend` (or at once when the clip changed without a transition).
+  Re-entering before that cancels the shrink.
+- Effect: collapsed, the window is the pill exactly, so menu-bar clicks outside the visible shape go to the menu bar.
+  The page never activates the app, so the frontmost app never changes.
+
+### Banners
+
+Shown only while `collapsed`; an event in any other phase shows none and is not queued. Clip to `banner` with the
+spring; `#banner` in like `#content`; closes after 2600 ms.
+
+- **Song:** a `media` event with a track whose (title, artist, app) differs from the last track the page saw, except
+  for the first media the page receives. `#bTitle` is the title; `#bSub` is `<artist>, on <app>` (`in` instead of `on`
+  when the artwork is wide), or `<app>` with no artist. The art moves to the banner with the spring and back to the
+  ear on close; `#bIcon` is hidden and `#bannerBars` shown.
+- **Session:** a `sessions` payload, not the first, with a row whose status differs from that label's status in the
+  previous payload (a new label counts as different) and is now `needs_permission`, `needs_input`, `error` or `done`.
+  The first such row in payload order is shown: `#bTitle` its label, `#bSub` its status text (section 4), `#bIcon` with
+  an amber dot (needs or error) or a gray one (done); `#bannerBars` hidden and the art stays in the ear.
