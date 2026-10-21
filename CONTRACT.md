@@ -68,7 +68,7 @@ pub struct Summary { pub rows: Vec<Row>, pub total: usize, pub attention: usize,
 
 pub const TTL_SECS: u64 = 3 * 3600;
 pub const QUIET_SECS: u64 = 10 * 60;
-pub const MAX_ROWS: usize = 6;
+pub const MAX_ROWS: usize = 4;
 pub const MAX_FILES: usize = 50;
 
 pub fn status_of(r: &Record) -> Option<Status>;
@@ -107,7 +107,7 @@ pub fn sessions_dir() -> std::path::PathBuf;
      (Claude Code sends no `Stop` when you interrupt with Esc);
    - `detail`: that record's `tool_name` when the status is `NeedsPermission`, else `None`;
    - `cwd`: from the record with `agent_id == None` if there is one, else from the record the status came from.
-3. `total` = session count. `attention` = sessions that are `NeedsPermission` or `NeedsInput`. `working` = sessions that
+3. `total` = session count. `attention` = sessions that are `NeedsPermission`, `NeedsInput` or `Error`. `working` = sessions that
    are `Working` (after decay).
 4. `label` = last non-empty `/`-separated component of the session's `cwd`; `cwd` itself if there is none. When two or
    more sessions share a label, each of them becomes `"<label> · <first 4 chars of session_id>"`.
@@ -155,8 +155,8 @@ The app calls it before each `read_dir`.
 - Page load: when `$NOTCH_TRACE` is set and non-empty, the app logs `page: loaded` to stderr once the page has finished
   loading, so a check knows when the page can take clicks.
 - Expanded size: width 420, height `196 + 18 + 4 + 22 * shown_rows + 14` pt, top edge at the screen top, centered on
-  the notch. `shown_rows = max(1, min(total, 4) + (1 if total > 4 else 0))`: up to four session rows, a "N more" row
-  when there are more, and the "No Claude Code sessions" row when there are none. The music block above the sessions
+  the notch. `shown_rows = max(1, rows.len() + (1 if total > rows.len() else 0))`: the session rows (`MAX_ROWS`, 4, at
+  most), a "N more" row when `total` is larger, and the "No Claude Code sessions" row when there are none. The music block above the sessions
   is always there (it shows "Nothing playing" without a track), so the height does not depend on `Media`.
 
 ## 4. UI (`dist/index.html`)
@@ -172,12 +172,12 @@ section 7 "App and UI" are its static part (no motion). Colors: text `#f5f5f5`, 
 - Expanded, the session section starts 196 pt below the panel top, 16 pt from the left, 388 pt wide:
   - header row, 18 pt tall, 600 11 px muted: `Claude Code` on the left; on the right `<attention> need you`
     (`needs you` when 1) in amber when `attention > 0`, else `<working> working` when `working > 0`, else `All quiet`.
-  - 4 pt gap, then one 22 pt row per session for the first four rows: an 8 pt dot (as the left ear's, by that row's
+  - 4 pt gap, then one 22 pt row per entry of `rows`: an 8 pt dot (as the left ear's, by that row's
     status: amber for `needs_permission`, `needs_input`, `error`; green for `working`; gray otherwise), 8 pt gap, the
     label (500 12 px, ellipsis), and the status text right-aligned (muted; amber for `needs_permission`,
     `needs_input`, `error`; ellipsis past 170 pt). Status text: `needs permission: <detail>` (or `needs permission`),
     `needs your input`, `error`, `working`, `done`, `waiting for you`.
-  - when `total > 4`, one more muted row: `<total - 4> more`. With no sessions, one muted row:
+  - when `total > rows.length`, one more muted row: `<total - rows.length> more`. With no sessions, one muted row:
     `No Claude Code sessions`.
 
 ## 5. Install
@@ -365,10 +365,12 @@ pub enum Route {
   (`null` before the first update). When `$NOTCH_TRACE` is set and non-empty, each change is also logged to stderr as
   `media: <via> <health> <playing|paused> "<title>" (<app>)`, or `media: <via> <health> nothing` without a track.
 - The expanded height does not depend on `Media` (section 3).
-- Tint: one color per artwork, used by the equalizer bars, the seek fill and the card glow. It is the average color of
-  the artwork's pixels (drawn into a small canvas; an https artwork is loaded with `crossOrigin = "anonymous"` for
-  this), lifted toward white until `0.2126 r + 0.7152 g + 0.0722 b >= 110`. With no artwork, or one that can't be read
-  (a CORS failure), the tint is `rgb(245,245,245)`. The visible artwork never depends on the tint load succeeding.
+- Tint: one color per artwork, used by the equalizer bars, the seek fill and the card glow. It is the alpha-weighted
+  average color of the artwork's pixels (drawn into a small canvas: a data URL from the loaded visible image, an https
+  artwork through a second image loaded with `crossOrigin = "anonymous"`), lifted toward white until
+  `0.2126 r + 0.7152 g + 0.0722 b >= 110`. While a new artwork's tint is being read, the previous tint stays (no flash
+  to white). With no artwork, one that fails to load, one that can't be read (a CORS failure) or one with no opaque
+  pixels, the tint is `rgb(245,245,245)`. The visible artwork never waits on the tint.
 - Right ear while collapsed, in pt from the collapsed panel's left edge: nothing without a track. With a track: its
   artwork, 18 x 18 at (253, 7), radius 4 (26 x 15 at (251, 8.5), radius 3, when the artwork is at least 1.3 times
   wider than tall), at opacity 1 while playing and 0.6 while paused; then, while playing, four tinted equalizer bars
@@ -381,7 +383,7 @@ pub enum Route {
   - glow: behind the artwork, a radial gradient of the tint (`rgba(tint, 0.34)` at the center, `rgba(tint, 0.08)` at
     60 %, transparent beyond), 170 x 125 pt radii centered at the artwork's center ((48, 76), or (72, 75.5) when
     wide), faded out over the top 30 pt
-    below the ear band so the band stays pure black. No glow without a track.
+    below the ear band so the band stays pure black. No glow without a track, or while the placeholder shows.
   - text at left 92, top 46, width 262 (left 142, width 232 when wide): title 600 14 px / 18 px (ellipsis; when wide,
     13.5 px / 17 px clamped to two lines); artist 500 12 px / 16 px `rgba(245,245,245,0.62)`, 2 pt below; source row
     5 pt below, 500 11 px / 14 px muted: a 5 pt tint dot and the app name.
