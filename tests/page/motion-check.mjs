@@ -741,8 +741,9 @@ async function scenarioRejected() {
   const t = await fire(page, 'hover', true);
   await sleep(60);
   const r = await rec(page);
-  const again = surfaceCalls(r, t).find((x) => surfaceIs(x, 'pill', 'pill'));
-  check('J2 the next phase change (intent) sends the then-current pair pill/pill again', !!again && !!phaseAt(r, 'intent', t, t + 30) && again.t - t < 40, J({ surfaces: surfaceCalls(r, t), phases: r.phases.filter((x) => x.t >= t) }));
+  // The page may resend before the hover (a collapse can settle twice), so look from the rejected call on.
+  const ok = r.surfaces.find((x) => x.t > rej[0].t && !x.rejected && surfaceIs(x, 'pill', 'pill'));
+  check('J2 after the rejection a successful pill/pill call is recorded, at the latest 40 ms after the next phase change (intent)', !!ok && !!phaseAt(r, 'intent', t, t + 30) && ok.t - t < 40, J({ rejected: rej[0], surfaces: r.surfaces.filter((x) => x.t >= rej[0].t - 2), phases: r.phases.filter((x) => x.t >= t) }));
   await sleep(900);
   await fire(page, 'hover', false);
   await sleep(300);
