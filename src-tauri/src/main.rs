@@ -31,6 +31,10 @@ use session::{next_wake, prune, read_dir, sessions_dir, summarize, Summary};
 /// The sessions safety net: a missed file event, a recreated directory, a display change (CONTRACT.md section 3).
 const RESCAN: Duration = Duration::from_secs(5);
 
+/// The longest the mood thread waits for a deadline. Deadlines are wall-clock, but the wait's timer stops while the
+/// Mac sleeps, so after a wake a mood that is due shows within this (CONTRACT.md section 10).
+const MOOD_MAX_WAIT: Duration = Duration::from_secs(60);
+
 // kCGMainMenuWindowLevel is 24; +3 matches what notch apps use to clear the menu bar and its status items.
 const ABOVE_MENU_BAR: isize = 24 + 3;
 
@@ -501,7 +505,7 @@ fn run_moods(app: &AppHandle, rx: &mpsc::Receiver<bool>) {
             }
         }
         let next = match moods.next_change() {
-            Some(at) => rx.recv_timeout(Duration::from_millis(at.saturating_sub(now_ms()))),
+            Some(at) => rx.recv_timeout(Duration::from_millis(at.saturating_sub(now_ms())).min(MOOD_MAX_WAIT)),
             None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
         };
         finished = match next {

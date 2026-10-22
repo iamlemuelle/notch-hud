@@ -1,6 +1,7 @@
 //! The avatar in the left ear: its definition file and the mood it shows. See CONTRACT.md section 10.
 
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::fmt;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -28,19 +29,26 @@ pub struct Avatar {
 }
 
 pub fn avatar_path() -> PathBuf {
-    match std::env::var("NOTCH_AVATAR") {
-        Ok(path) if !path.is_empty() => PathBuf::from(path),
-        _ => PathBuf::from(std::env::var("HOME").unwrap_or_default())
-            .join("Library/Application Support/notch-hud/avatar.json"),
+    avatar_path_from(std::env::var_os("NOTCH_AVATAR").as_deref(), std::env::var_os("HOME").as_deref())
+}
+
+/// `notch_avatar` (`$NOTCH_AVATAR`) when non-empty, else the file under `home`'s Application Support.
+pub fn avatar_path_from(notch_avatar: Option<&OsStr>, home: Option<&OsStr>) -> PathBuf {
+    match notch_avatar.filter(|p| !p.is_empty()) {
+        Some(path) => PathBuf::from(path),
+        None => PathBuf::from(home.unwrap_or_default()).join("Library/Application Support/notch-hud/avatar.json"),
     }
 }
 
 pub fn load(path: &Path) -> Result<Value, String> {
-    let file = match std::fs::File::open(path) {
-        Ok(file) => file,
+    // Checked before opening: the app loads on the main thread at startup, and opening a FIFO would block it.
+    match std::fs::metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err("no file".into()),
         Err(e) => return Err(e.to_string()),
-    };
+        Ok(meta) if !meta.is_file() => return Err("not a file".into()),
+        Ok(_) => {}
+    }
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
     file.take(MAX_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     if bytes.len() > MAX_BYTES {

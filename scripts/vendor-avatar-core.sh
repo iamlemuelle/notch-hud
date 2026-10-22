@@ -2,14 +2,16 @@
 # Rebuilds dist/vendor/avatar-core.js, the avatar renderer, from the pinned npm release of @bible-strong/avatar-core
 # (CONTRACT.md section 10, vendor/VENDORED.md). The page has no bundler, so this makes one classic script that defines
 # window.AvatarCore. The package's one dependency, ajv (JSON Schema validation), is swapped for a stub that throws:
-# Rust validates every avatar before the page gets it. Rerunning it writes the same bytes; it prints their sha256.
+# Rust validates every avatar before the page gets it. It writes the bundle only when its sha256 is BUNDLE_SHA256.
 #
 # Needs npm and network. To update: change VERSION and INTEGRITY (npm view @bible-strong/avatar-core@<v> dist.integrity),
-# rerun, check the page, and update the row in vendor/VENDORED.md.
+# rerun, set BUNDLE_SHA256 to the sha256 it reports, rerun, check the page, and update the row in vendor/VENDORED.md.
 set -euo pipefail
 VERSION=0.1.0
 INTEGRITY=sha512-b5WAn7QiPlfjomKN9MvXm+Cirpff/yszZ7CJW+BfZSWnZSl+IUdG8zhaElimZAVcLNMzQ9WKngluhJlO6mNUCg==
 ESBUILD=0.28.2
+# The bundle this script must produce. A mismatch writes nothing: set this to the new value only after checking why.
+BUNDLE_SHA256=5094f122454a18830da8df387c5da1af5e8f8e65ce347860413a527f806e3c3d
 root="$(cd "$(dirname "$0")/.." && pwd)"
 out="$root/dist/vendor/avatar-core.js"
 
@@ -47,6 +49,11 @@ banner="$banner. Bundled by scripts/vendor-avatar-core.sh with esbuild $ESBUILD;
 (cd "$tmp" && npx --yes "esbuild@$ESBUILD" entry.js --bundle --format=iife --global-name=AvatarCore \
   --alias:ajv=./ajv-stub --target=safari16 --charset=utf8 --log-level=warning "--banner:js=$banner" \
   --outfile=out.js)
+sum="$(shasum -a 256 "$tmp/out.js" | awk '{print $1}')"
+if [ "$sum" != "$BUNDLE_SHA256" ]; then
+  echo "vendor-avatar-core: the bundle's sha256 is $sum, expected $BUNDLE_SHA256; $out left as it was" >&2
+  exit 1
+fi
 mkdir -p "$(dirname "$out")"
 cp "$tmp/out.js" "$out"
-shasum -a 256 "$out" | awk '{print "sha256 " $1}'
+echo "sha256 $sum"
