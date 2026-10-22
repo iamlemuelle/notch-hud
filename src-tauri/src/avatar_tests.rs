@@ -840,9 +840,10 @@ fn avatar_path_from_notch_avatar_wins_without_a_home() {
 }
 
 #[test]
-fn avatar_path_from_does_not_panic_without_notch_avatar_or_home() {
-    let _ = avatar_path_from(None, None);
-    let _ = avatar_path_from(Some(os("").as_os_str()), None);
+fn avatar_path_from_without_a_home_is_the_relative_path() {
+    let rel = PathBuf::from("Library/Application Support/notch-hud/avatar.json");
+    assert_eq!(avatar_path_from(None, None), rel);
+    assert_eq!(avatar_path_from(Some(os("").as_os_str()), None), rel);
 }
 
 #[test]
@@ -853,9 +854,15 @@ fn avatar_path_from_keeps_a_non_utf8_notch_avatar() {
 }
 
 #[test]
-fn avatar_path_reads_the_environment_without_panicking() {
-    // Smoke only: the environment is process wide and other tests change it, so nothing about its value is asserted.
-    let _ = avatar_path();
+fn avatar_path_is_avatar_path_from_the_environment() {
+    // NOTCH_AVATAR is changed by no test, so it can be compared exactly. HOME is changed for a moment by a session
+    // test, so with NOTCH_AVATAR unset only the part that does not depend on HOME is asserted.
+    let p = avatar_path();
+    assert_ne!(p, PathBuf::new());
+    match std::env::var_os("NOTCH_AVATAR") {
+        Some(v) if !v.is_empty() => assert_eq!(p, PathBuf::from(v)),
+        _ => assert!(p.ends_with("Library/Application Support/notch-hud/avatar.json"), "got {p:?}"),
+    }
 }
 
 // --- DEFAULT and the pose table ----------------------------------------------------------------------------------
@@ -1393,4 +1400,174 @@ fn next_change_is_always_later_than_the_last_step() {
             assert!(n > now, "next_change {n} is not after the step at {now}");
         }
     }
+}
+
+// --- review round 2: gaps found by mutation testing ---------------------------------------------------------------
+
+#[test]
+fn load_a_file_that_cannot_be_opened_gives_the_errors_own_text() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tmp("denied");
+    let p = d.join("locked.json");
+    fs::write(&p, text(&base())).unwrap();
+    fs::set_permissions(&p, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::File::open(&p).is_ok() {
+        return; // running as root: the mode does not stop the open, so there is nothing to observe
+    }
+    let e = load(&p).expect_err("a file with mode 000 cannot be read");
+    assert_ne!(e, "no file");
+    assert_ne!(e, "not a file");
+    assert!(e.to_lowercase().contains("permission denied"), "reason was {e:?}");
+    fs::set_permissions(&p, fs::Permissions::from_mode(0o644)).unwrap();
+}
+
+#[test]
+fn parse_a_repeated_key_in_a_later_array_element_names_that_index() {
+    let node = |ty: &str| json!({ "surface": { "type": ty, "width": 1, "height": 1, "depth": 1, "roundness": 0 }, "position": [0, 0, 0], "rotation": [0, 0, 0] });
+    let two = with("/body/nodes", json!([node("cube"), node("cube")]));
+    let t = text(&two);
+    let first = t.find("\"type\":\"cube\"").unwrap();
+    let second = first + 1 + t[first + 1..].find("\"type\":\"cube\"").unwrap();
+    let dup = format!("{}\"type\":\"cube\",{}", &t[..second], &t[second..]);
+    let r = reason_of(&dup);
+    assert!(r.starts_with("/body/nodes/1/surface/type: duplicate key"), "reason was {r:?}");
+    let first_dup = format!("{}\"type\":\"cube\",{}", &t[..first], &t[first..]);
+    let r = reason_of(&first_dup);
+    assert!(r.starts_with("/body/nodes/0/surface/type: duplicate key"), "reason was {r:?}");
+    // and further along: index 2
+    let three = with("/body/nodes", json!([node("cube"), node("cube"), node("cube")]));
+    let t = text(&three);
+    let mut at = 0;
+    let mut spots = vec![];
+    while let Some(i) = t[at..].find("\"type\":\"cube\"") {
+        spots.push(at + i);
+        at += i + 1;
+    }
+    let third = spots[2];
+    let r = reason_of(&format!("{}\"type\":\"cube\",{}", &t[..third], &t[third..]));
+    assert!(r.starts_with("/body/nodes/2/surface/type: duplicate key"), "reason was {r:?}");
+}
+
+#[test]
+fn parse_a_step_expression_that_is_not_a_semantic_key_is_rejected_at_its_pointer() {
+    let long = key_of(65);
+    for bad in [json!("Bad"), json!("a--b"), json!("-a"), json!(long), json!(5), json!(null), json!("")] {
+        let r = reason_of(&text(&with("/animations/idle/steps/0/expression", bad.clone())));
+        assert!(r.starts_with("/animations/idle/steps/0/expression: "), "{bad}: reason was {r:?}");
+    }
+}
+
+#[test]
+fn parse_an_order_entry_that_is_not_a_semantic_key_is_rejected_at_its_pointer() {
+    for bad in [json!("Bad"), json!("a--b"), json!("-a"), json!(key_of(65)), json!(5), json!(null)] {
+        let mut v = base();
+        v["expressionOrder"] = json!(["neutral", "calm", bad.clone()]);
+        let r = reason_of(&text(&v));
+        assert!(r.starts_with("/expressionOrder/2: "), "{bad}: reason was {r:?}");
+        let mut v = base();
+        v["animationOrder"] = json!(["idle", bad.clone()]);
+        let r = reason_of(&text(&v));
+        assert!(r.starts_with("/animationOrder/1: "), "{bad}: reason was {r:?}");
+    }
+}
+
+#[test]
+fn parse_the_member_counts_of_expressions_and_animations_are_rejected_at_the_object() {
+    let mut none = base();
+    none["expressions"] = json!({});
+    none["expressionOrder"] = json!([]);
+    none["animations"] = json!({});
+    none["animationOrder"] = json!([]);
+    let r = reason_of(&text(&none));
+    assert!(r.starts_with("/expressions: "), "reason was {r:?}");
+
+    let mut many = base();
+    let mut order = vec![json!("neutral")];
+    for i in 0..128 {
+        many["expressions"][format!("e{i}")] = expr(i as f64);
+        order.push(json!(format!("e{i}")));
+    }
+    many["expressionOrder"] = Value::Array(order);
+    assert_eq!(many["expressions"].as_object().unwrap().len(), 130);
+    let r = reason_of(&text(&many));
+    assert!(r.starts_with("/expressions: "), "130 expressions: reason was {r:?}");
+
+    let mut exactly = base();
+    let mut order = vec![json!("neutral")];
+    exactly["expressions"] = json!({ "neutral": expr(0.0) });
+    for i in 0..127 {
+        exactly["expressions"][format!("e{i}")] = expr(i as f64);
+        order.push(json!(format!("e{i}")));
+    }
+    exactly["expressionOrder"] = Value::Array(order);
+    exactly["animations"]["idle"]["steps"][0]["expression"] = json!("e0");
+    assert!(parse(&text(&exactly)).is_ok(), "128 expressions is allowed");
+    let mut one_more = exactly.clone();
+    one_more["expressions"]["e127"] = expr(1.0);
+    one_more["expressionOrder"].as_array_mut().unwrap().push(json!("e127"));
+    let r = reason_of(&text(&one_more));
+    assert!(r.starts_with("/expressions: "), "129 expressions: reason was {r:?}");
+
+    let mut anims = base();
+    anims["animations"] = json!({});
+    let mut order = vec![];
+    for i in 0..65 {
+        anims["animations"][format!("a{i}")] = animation();
+        order.push(json!(format!("a{i}")));
+    }
+    anims["animationOrder"] = Value::Array(order);
+    let r = reason_of(&text(&anims));
+    assert!(r.starts_with("/animations: "), "65 animations: reason was {r:?}");
+}
+
+#[test]
+fn parse_the_entry_counts_of_the_orders_are_rejected_at_the_order() {
+    let r = reason_of(&text(&with("/expressionOrder", json!([]))));
+    assert!(r.starts_with("/expressionOrder: "), "empty expressionOrder: reason was {r:?}");
+
+    // 129 entries over 128 expressions: the extra one repeats a key, so only the count can be the first problem.
+    let mut v = base();
+    let mut order = vec![json!("neutral")];
+    for i in 0..127 {
+        v["expressions"][format!("e{i}")] = expr(i as f64);
+        order.push(json!(format!("e{i}")));
+    }
+    v["expressions"].as_object_mut().unwrap().remove("calm");
+    v["animations"]["idle"]["steps"][0]["expression"] = json!("e0");
+    v["expressionOrder"] = Value::Array(order.clone());
+    assert!(parse(&text(&v)).is_ok(), "128 entries is allowed");
+    order.push(json!("e0"));
+    v["expressionOrder"] = Value::Array(order);
+    let r = reason_of(&text(&v));
+    assert!(r.starts_with("/expressionOrder: "), "129 entries: reason was {r:?}");
+
+    let mut a = base();
+    a["animations"] = json!({});
+    let mut order = vec![];
+    for i in 0..64 {
+        a["animations"][format!("a{i}")] = animation();
+        order.push(json!(format!("a{i}")));
+    }
+    a["animationOrder"] = Value::Array(order.clone());
+    assert!(parse(&text(&a)).is_ok(), "64 animations and entries is allowed");
+    order.push(json!("a0"));
+    a["animationOrder"] = Value::Array(order);
+    let r = reason_of(&text(&a));
+    assert!(r.starts_with("/animationOrder: "), "65 entries: reason was {r:?}");
+}
+
+#[test]
+fn wait_ms_is_the_time_to_the_deadline_capped_at_max_wait_ms() {
+    assert_eq!(MAX_WAIT_MS, 60_000);
+    let now = T;
+    assert_eq!(wait_ms(now + 600_000, now), 60_000, "10 minutes away");
+    assert_eq!(wait_ms(now + 5_000, now), 5_000, "5 s away");
+    assert_eq!(wait_ms(now + 60_000, now), 60_000, "exactly the cap");
+    assert_eq!(wait_ms(now + 60_001, now), 60_000, "just past the cap");
+    assert_eq!(wait_ms(now + 59_999, now), 59_999, "just under the cap");
+    assert_eq!(wait_ms(now + 1, now), 1);
+    assert_eq!(wait_ms(now, now), 0, "due now");
+    assert_eq!(wait_ms(now - 1, now), 0, "1 ms late");
+    assert_eq!(wait_ms(now - 600_000, now), 0, "long past");
+    assert_eq!(wait_ms(0, now), 0, "no underflow");
 }
