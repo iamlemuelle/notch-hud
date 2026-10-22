@@ -1,10 +1,11 @@
 #!/bin/bash
 # End to end, on the real release app: the panel window is the pill while collapsed, grows to the open window on hover,
-# shrinks only after the shape is back, and shows banners in the banner window (CONTRACT.md sections 3 and 8). The
-# frontmost app never changes.
+# shrinks only after the shape is back, and shows banners in the banner window (CONTRACT.md sections 3 and 8). A banner
+# that opens under a still cursor resting outside the pill is not a hover; a 1 pt real mouse move inside it is, and
+# opens the panel. The frontmost app never changes.
 #
-# It MOVES THE REAL CURSOR (a warp onto the pill, then to the middle of the screen) and restores it on exit. It never
-# clicks. Do not touch the mouse or switch apps while it runs. It starts its own app, fixture player and watcher and
+# It MOVES THE REAL CURSOR (a warp onto the pill, to the middle of the screen, and to a rest point below the pill; a
+# posted 1 pt mouse move, which needs Accessibility access) and restores it on exit. It never clicks. Do not touch the mouse or switch apps while it runs. It starts its own app, fixture player and watcher and
 # only ever signals those; the notch-hud that may be running as your login item is left alone (windows are filtered by
 # the test app's pid).
 #
@@ -164,6 +165,29 @@ if wait_size "$banner_w" "$banner_h" 3; then
 else
   flunk "song change: window did not become the banner within 3 s: [$last]"; tail -n +$((am + 1)) "$applog"
 fi
+
+# 5b. a banner that opens under a cursor resting inside it but outside the pill is not a hover; a 1 pt move is.
+hook '{"session_id":"mt1","cwd":"/x/motion","hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{}}'
+sleep 0.5
+rest_x=$((pill_x + pill_w / 2)); rest_y=$((pill_y + pill_h + 20))
+"$drive" warp "$rest_x" "$rest_y"
+sleep 1
+am="$(lines "$applog")"
+hook '{"session_id":"mt1","cwd":"/x/motion","hook_event_name":"Notification","notification_type":"elicitation_dialog"}'
+if wait_size "$banner_w" "$banner_h" 2; then
+  pass "resting cursor: window is the banner, $banner_w x $banner_h"
+  sleep 0.8
+  if tail -n +$((am + 1)) "$applog" | grep -qF 'hover: in'; then flunk "resting cursor: hover: in logged while the cursor only rested in the banner"; tail -n +$((am + 1)) "$applog"; else pass "resting cursor: no hover: in for 0.8 s after the banner opened"; fi
+  mm="$(lines "$applog")"
+  "$drive" move $((rest_x + 1)) "$rest_y"
+  if wait_size "$open_w" "$open_h" 1; then pass "1 pt move in the banner: window is $open_w x $open_h within 1 s"; else flunk "1 pt move in the banner: window did not reach $open_w x $open_h within 1 s: [$last]"; fi
+  if tail -n +$((mm + 1)) "$applog" | grep -qF 'hover: in'; then pass "1 pt move in the banner: hover: in logged"; else flunk "1 pt move in the banner: no hover: in logged"; tail -n +$((am + 1)) "$applog"; fi
+else
+  flunk "resting cursor: window did not become the banner $banner_w x $banner_h within 2 s: [$last]"; tail -n +$((am + 1)) "$applog"
+fi
+"$drive" warp $((screen_x + screen_w / 2)) $((screen_y + screen_h / 2))
+if wait_size "$pill_w" "$pill_h" 4; then pass "resting cursor: window is the pill again after the cursor left"; else flunk "resting cursor: window did not return to the pill: [$last]"; fi
+sleep 0.5
 
 # 6. the frontmost app never changed and the app was never activated.
 sleep 0.5
