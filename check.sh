@@ -12,7 +12,10 @@ hook '{"session_id":"s1","cwd":"/x/bianki","hook_event_name":"PermissionRequest"
 hook '{"session_id":"s2","cwd":"/x/lstack","hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{}}'
 hook '{"session_id":"s3","cwd":"/x/patunay","hook_event_name":"Stop","stop_hook_active":false}'
 hook '{"session_id":"s4","cwd":"/x/kerf","hook_event_name":"SessionStart","source":"startup"}'
-./src-tauri/target/release/notch-hud & app=$!
+# The trace (`sessions:` and `avatar:` lines) goes to a file that check-bin reads.
+trace="$(dirname "$NOTCH_DIR")/trace.log"
+NOTCH_TRACE=1 ./src-tauri/target/release/notch-hud 2>"$trace" & app=$!
 trap 'kill "$app" 2>/dev/null' EXIT
-./check-bin "$app"; code=$?
+./check-bin "$app" "$trace"; code=$?
+[ "$code" = 0 ] || echo "app trace: $trace"
 exit $code

@@ -1,8 +1,10 @@
 import AppKit
 import CoreGraphics
 
-// Usage: check-bin <pid>. Asserts brief criteria 1-4 against the live window server; exit 0 only if all hold.
+// Usage: check-bin <pid> <trace file>. Asserts brief criteria 1-4 against the live window server and the app's
+// $NOTCH_TRACE lines, which check.sh sends to <trace file>; exit 0 only if all hold.
 let pid = Int32(CommandLine.arguments[1])!
+let tracePath = CommandLine.arguments[2]
 var failures: [String] = []
 func expect(_ ok: Bool, _ msg: String) { print((ok ? "PASS " : "FAIL ") + msg); if !ok { failures.append(msg) } }
 
@@ -35,14 +37,11 @@ func isAmber(_ c: NSColor?) -> Bool {
     // #f5a623 at 0.82 opacity over black is about r 0.79, g 0.53, b 0.11.
     return c.redComponent > 0.65 && c.greenComponent > 0.4 && c.greenComponent < 0.7 && c.blueComponent < 0.3
 }
-func isGreen(_ c: NSColor?) -> Bool {
+func isText(_ c: NSColor?) -> Bool {
     guard let c = c else { return false }
-    // #34d058 at 0.82 opacity over black is about r 0.17, g 0.68, b 0.23.
-    return c.greenComponent > 0.5 && c.greenComponent - c.redComponent > 0.2 && c.greenComponent - c.blueComponent > 0.2
-}
-func describe(_ c: NSColor?) -> String {
-    guard let c = c else { return "no pixel" }
-    return String(format: "r %.2f g %.2f b %.2f", c.redComponent, c.greenComponent, c.blueComponent)
+    // #f5f5f5 at 0.82 opacity over black is about 0.79 on every channel (0.96 at opacity 1, while peeking).
+    let r = c.redComponent, g = c.greenComponent, b = c.blueComponent
+    return min(r, g, b) > 0.6 && max(r, g, b) - min(r, g, b) < 0.08
 }
 // Color of the pixel at global point p, inside a capture whose origin is `origin`; nil when out of range.
 func color(_ rep: NSBitmapImageRep, _ origin: CGPoint, _ p: CGPoint) -> NSColor? {
@@ -50,6 +49,20 @@ func color(_ rep: NSBitmapImageRep, _ origin: CGPoint, _ p: CGPoint) -> NSColor?
 }
 func brightness(_ rep: NSBitmapImageRep, _ origin: CGPoint, _ p: CGPoint) -> CGFloat {
     color(rep, origin, p)?.brightnessComponent ?? -1
+}
+func trace() -> [String] {
+    ((try? String(contentsOfFile: tracePath, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+}
+// `attention` of the last `sessions:` summary in these lines (CONTRACT.md section 3); nil when there is none.
+func attention(_ lines: ArraySlice<String>) -> Int? {
+    guard let l = lines.last(where: { $0.hasPrefix("sessions: ") }),
+          let s = try? JSONSerialization.jsonObject(with: Data(l.dropFirst(10).utf8)) as? [String: Any] else { return nil }
+    return s["attention"] as? Int
+}
+// The `avatar: <mood>` lines in order (CONTRACT.md section 10), leaving out `avatar: loaded` and load failures.
+func moods(_ lines: ArraySlice<String>) -> [String] {
+    let all: Set<String> = ["alert", "error", "celebrate", "working", "listening", "idle", "drowsy", "sleeping"]
+    return lines.compactMap { $0.hasPrefix("avatar: ") ? String($0.dropFirst(8)) : nil }.filter(all.contains)
 }
 func move(_ pt: CGPoint) {
     CGWarpMouseCursorPosition(pt)
@@ -86,6 +99,18 @@ expect(layer > 24, "2. layer \(layer) > 24 (above menu bar)")
 expect(b.minY == 0, "3a. top edge y == 0 (got \(b.minY))")
 expect(abs(b.midX - screen.frame.width / 2) <= 2, "3b. centered within 2pt (midX \(b.midX) vs \(screen.frame.width / 2))")
 expect(b.width > notchW, "3c. wider than notch (\(b.width) > \(notchW))")
+// `#total`, the session count, has its left edge 41 pt into the pill and is centered on its height (CONTRACT.md
+// section 10, "Page"); one 12 px digit fits in the 12 x 10 pt box from there. Counts its amber and #f5f5f5 pixels.
+func total(_ rep: NSBitmapImageRep, _ origin: CGPoint) -> (amber: Int, text: Int) {
+    var amber = 0, text = 0
+    for x in stride(from: b.minX + 41, to: b.minX + 53, by: 1 / scale) {
+        for y in stride(from: b.midY - 5, to: b.midY + 5, by: 1 / scale) {
+            let c = color(rep, origin, CGPoint(x: x, y: y))
+            if isAmber(c) { amber += 1 } else if isText(c) { text += 1 }
+        }
+    }
+    return (amber, text)
+}
 var wasAmber = false
 let collapsedArea = CGRect(x: b.midX - 260, y: 0, width: 520, height: 70)
 // The first frame paints the empty state; the seeded sessions arrive within the 1s poll.
@@ -93,18 +118,22 @@ var collapsedRep: NSBitmapImageRep? = nil
 _ = until(10) {
     collapsedRep = shot(collapsedArea, "shot.png")
     guard let rep = collapsedRep else { return true }
-    return isAmber(color(rep, collapsedArea.origin, CGPoint(x: b.minX + 24, y: b.midY)))
+    return total(rep, collapsedArea.origin).amber >= 6
 }
 if let rep = collapsedRep {
     let ear = CGPoint(x: left.maxX - 8, y: b.midY)
     let v = brightness(rep, collapsedArea.origin, ear)
     expect(v >= 0 && v < 0.1, "5a. pill drawn on screen: left-ear pixel at \(ear) is black (brightness \(v))")
-    // Only the page can put the green status dot here: the left ear sits 14 pt in, plus half the 8 pt dot.
-    let dot = CGPoint(x: b.minX + 18, y: b.midY)
-    let c = color(rep, collapsedArea.origin, dot)
-    wasAmber = isAmber(c)
-    expect(wasAmber, "6a. a session needs permission, so the status dot at \(dot) is amber (\(describe(c)))")
+    // Only the page can color the count: amber while a session needs you, else #f5f5f5 (CONTRACT.md section 4).
+    let t = total(rep, collapsedArea.origin)
+    wasAmber = t.amber >= 6
+    expect(wasAmber, "6a. a session needs permission, so the count is amber (\(t.amber) amber, \(t.text) #f5f5f5 pixels; want >= 6 amber)")
 }
+// s1 needs permission and no seeded session is an error or needs input, so attention is 1 and the mood is alert.
+_ = until(3) { attention(trace()[...]) == 1 && moods(trace()[...]).last == "alert" }
+let seeded = trace()[...]
+expect(attention(seeded) == 1, "6a. the last traced summary has attention 1 (got \(attention(seeded).map(String.init) ?? "none"))")
+expect(moods(seeded).last == "alert", "6a. the last traced mood is avatar: alert (got \(moods(seeded).last ?? "none"))")
 
 let home = CGEvent(source: nil)!.location
 move(CGPoint(x: b.midX, y: b.midY))
@@ -132,22 +161,28 @@ let shrunk = waitFor { $0.height < 60 }
 expect((shrunk?.height ?? 999) < 60, "4b. leaving shrinks it back (got \(shrunk?.height ?? -1))")
 move(home)
 
-// The permission prompt in s1 is answered and the turn ends: the dot must turn green (s2 is still working).
+// The permission prompt in s1 is answered and the turn ends: attention drops to 0, so the count turns #f5f5f5, and s1
+// just finished, so the avatar celebrates.
+let mark = trace().count
 let hookRun = Process()
 hookRun.executableURL = URL(fileURLWithPath: "/bin/sh")
 hookRun.arguments = ["-c", "printf '%s' '{\"session_id\":\"s1\",\"cwd\":\"/x/bianki\",\"hook_event_name\":\"Stop\"}' | ./hooks/notch-hook.sh"]
 try? hookRun.run(); hookRun.waitUntilExit()
 var turned = false
-var last: NSColor? = nil
+var last = (amber: -1, text: -1)
 for _ in 0..<12 where !turned {
     usleep(250_000)
     let area = CGRect(x: b.midX - 260, y: 0, width: 520, height: 70)
     if let rep = shot(area, "shot-after-stop.png") {
-        last = color(rep, area.origin, CGPoint(x: b.minX + 18, y: b.midY))
-        turned = isGreen(last)
+        last = total(rep, area.origin)
+        turned = last.amber == 0 && last.text >= 6
     }
 }
-expect(wasAmber && turned, "6b. (needs 6a) after s1's Stop goes through the hook, the dot turns green within 3s (\(describe(last)))")
+expect(wasAmber && turned, "6b. (needs 6a) after s1's Stop goes through the hook, the count turns #f5f5f5 within 3s (\(last.amber) amber, \(last.text) #f5f5f5 pixels; want 0 and >= 6)")
+_ = until(3) { attention(trace()[mark...]) == 0 && moods(trace()[mark...]).contains("celebrate") }
+let stopped = trace()[mark...]
+expect(attention(stopped) == 0, "6b. after the Stop the traced summary has attention 0 (got \(attention(stopped).map(String.init) ?? "none"))")
+expect(moods(stopped).contains("celebrate"), "6b. after the Stop the avatar traces celebrate (got \(moods(stopped)))")
 
 print(failures.isEmpty ? "ALL PASS" : "FAILED: \(failures.count)")
 exit(failures.isEmpty ? 0 : 1)
