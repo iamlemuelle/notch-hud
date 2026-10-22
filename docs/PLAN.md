@@ -239,6 +239,10 @@ Every phase ends with `cargo test`, both `tests/*.sh` and `./check.sh` green, pl
 
 ### Phase 6: pets
 
+Superseded 2026-10-22 by the avatar (`CONTRACT.md` section 10): a procedural character drawn by the vendored
+`@bible-strong/avatar-core` replaces the dot in the left ear, a pure mood table in Rust replaces the pet FSM, and the
+user brings their own character file. The sprite atlas, perches and event bus below were not built.
+
 - **Outcome:** the sprite pipeline, the FSM, the event bus, and the perches.
 - **Exit checks:**
   - `cargo test`: one case per FSM table row, plus the rate limit. Across all 32 on/off combinations of the five
@@ -254,6 +258,7 @@ launchd, not as the app's child, so it is not counted (attributing it is unsolve
 | Metric | Budget | Measured by |
 |---|---|---|
 | Idle CPU (collapsed, pet asleep) | ≤ 0.5% of one core, 60 s average | `top -l 61 -s 1 -stats pid,cpu` |
+| Avatar (collapsed) | Asleep: no change from the baseline. Measured 2026-10-22, app pid and its WebContent pid (found as the WebContent process that appears when the app starts and exits with it), 60 s each, the measured panel frontmost and no track playing. Before (dot, empty sessions, 3 runs): app 0.10-0.45 wake-ups/s, 0.01-0.06% CPU; WebContent 0.15-0.30/s, 0.01-0.03%. Asleep (2 runs): app 0.00 and 0.10/s, 0.10 and 0.21%; WebContent 0.00 and 0.02/s, 0.07 and 0.13% (the asleep page sets no timer; the higher CPU readings ran while cargo builds loaded the machine). Working, with the user's avatar (5.6 frames/s at the 20 frames/s cap, counted headless): app 7.8-12.3 wake-ups/s and 0.7-1.1% CPU, WebContent 4.0-6.9/s and 1.9-2.2%, against 1.3-3.4/s and 0.6-1.0% plus 0.4-1.7/s and 0.4-0.9% for the dot build in the same rounds (3 interleaved rounds; a track was playing in some of them, which animates the equalizer in every build). A 10 frames/s build measured 7.0-13.9/s and 0.4-0.9% (app), 2.9-5.5/s and 1.4-1.8% (WebContent): wake-ups did not follow the frame cap, so the cost is per burst of changes in WebKit and AppKit, not per frame; not split further (needs Instruments) | `scripts/perf.sh` on both pids |
 | CPU while expanding | ≤ 15% of one core, over 5 cycles | the same, while `check.swift` hovers |
 | Memory | ≤ 150 MB combined footprint | `footprint` per pid [unverified flags] |
 | Idle wake-ups | ≤ 5/s, target ≤ 1/s. Measured 2026-10-22 (collapsed, a paused track, empty sessions directory, `scripts/perf.sh`): with the 50 ms hover poll 2.32, 2.75, 2.83/s alone and 3.57/s side by side; with the tracking area 0.18, 0.07/s alone and 0.28, 0.25, 0.08/s side by side, CPU 0.16-0.21% before, 0.01-0.02% after. The rest is not the session rescan (a build with a 1 h rescan: 0.13-0.17/s) nor the media provider (also without the media thread: 0.08-0.17/s), so AppKit's run loop and WebKit's in-process side, not split further (that needs root). `perf.sh` divides by 60 top samples, which take about 65 s of wall time (14 rescans 5.00 s apart in each window), so its rates read about 8% high | `scripts/perf.sh` (`top -stats idlew`, app pid only, WebContent not counted) |
