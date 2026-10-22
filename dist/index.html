@@ -547,16 +547,15 @@
       ? m.track.playing === was.playing
       : Math.abs(elapsedMs(m.track) - elapsedMs(was)) <= 2000;
   }
-  let mediaSeen = false, lastSong = null;
+  let lastSong = null;
   function onMedia(m) {
     media = m;
     const sameTrack = pending && m.track && shown.track && m.track.title === shown.track.title;
     if (!(pending && sameTrack && !agrees(m))) settle();
     const t = m.track;
-    if (!t) { mediaSeen = true; return; }
+    if (!t) return;
     const song = [t.title, t.artist || '', t.app].join('\n');
-    const changed = mediaSeen && song !== lastSong;
-    mediaSeen = true;
+    const changed = lastSong !== null && song !== lastSong;
     lastSong = song;
     if (changed) showBanner('song', t);
   }

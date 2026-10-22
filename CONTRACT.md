@@ -557,8 +557,10 @@ arrived first (it is older than the event), so a stale reply never counts as a c
 Shown only while `collapsed`; an event in any other phase shows none and is not queued. Clip to `banner` with the
 spring; `#banner` in like `#content`; closes after 2600 ms.
 
-- **Song:** a `media` event with a track whose (title, artist, app) differs from the last track the page saw, except
-  for the first media the page receives. `#bTitle` is the title; `#bSub` is `<artist>, on <app>` (`in` instead of `on`
+- **Song:** a `media` event with a track whose (title, artist, app) differs from the last track the page saw. The
+  first track the page sees never shows one, even after media with no track: at launch the adapter reports nothing,
+  then the playing track, which is no change. Playback starting from silence shows none either; the art appears in
+  the ear. `#bTitle` is the title; `#bSub` is `<artist>, on <app>` (`in` instead of `on`
   when the artwork is wide), or `<app>` with no artist. The art moves to the banner with the spring and back to the
   ear on close; `#bIcon` is hidden and `#bannerBars` shown.
 - **Session:** a `sessions` payload, not the first, with a row whose label was in the previous payload with a
