@@ -85,7 +85,7 @@ thread_local! {
     /// The visible window: a native non-activating panel that hosts the Tauri window's webview. Created once on
     /// the main thread at startup and kept for the app's lifetime; only the main thread can reach it.
     static PANEL: RefCell<Option<Retained<NSPanel>>> = const { RefCell::new(None) };
-    /// The cursor at the previous hover input.
+    /// The cursor at the previous entered, moved or exited.
     static LAST_CURSOR: Cell<Option<(f64, f64)>> = const { Cell::new(None) };
     static HOVER: Cell<Hover> = const { Cell::new(Hover::new()) };
     /// A placement found the latch set with the button up; the next one that does releases it.
