@@ -338,6 +338,58 @@ async function scenarioRefetch() {
   await page.close();
 }
 
+// Replies held by the test: window.__holds[i] resolves the i-th session_detail call with a value.
+const holdReplies = (page) => page.evaluate(() => {
+  window.__holds = [];
+  window.__reply = () => new Promise((resolve) => { window.__holds.push(resolve); });
+});
+const release = (page, i, value) => page.evaluate(([n, v]) => window.__holds[n](v), [i, value]);
+
+async function scenarioPendingOpen() {
+  for (const kind of ['records', 'sessions']) {
+    const page = await openPage({ tag: `pending-${kind}` });
+    await fire(page, 'sessions', SUMMARY);
+    await expand(page);
+    await holdReplies(page);
+    await page.locator('#rows button.srow').nth(1).click({ timeout: 2000 });
+    await sleep(150);
+    check(`P1 ${kind}: the click called session_detail once and the card is not shown yet`, (await invokes(page, 'session_detail')).length === 1 && (await vis(page, '#detail')).eff < 0.01, J(await invokes(page, 'session_detail')));
+    await fire(page, kind, kind === 'sessions' ? SUMMARY : undefined);
+    await sleep(150);
+    const calls = await invokes(page, 'session_detail');
+    check(`P2 ${kind}: an event while the first reply is pending sends the request again with the same id`, calls.length === 2 && J(calls[1]) === J({ id: 'id-two' }), J(calls));
+    const early = card({ status: 'working', event: 'PreToolUse', tool_name: 'Bash', agents: 0 });
+    const later = card({ status: 'done', event: 'PostToolUse', tool_name: 'Grep', agents: 2 });
+    await release(page, 1, later);
+    await sleep(900);
+    check(`P3 ${kind}: the later request's reply draws the card`, (await vis(page, '#detail')).eff > 0.9 && /^Grep finished ?[45] s ago$/.test((await field(page, 'Last event')).value), J(await fields(page)));
+    await release(page, 0, early);
+    await sleep(300);
+    const f = await fields(page);
+    check(`P4 ${kind}: the earlier reply arriving last does not overwrite it`, f.length === 4 && /^Grep finished/.test(f[2].value) && f[3].value === '2 running' && f[0].value === 'done', J(f));
+    await page.close();
+  }
+
+  const page = await openPage({ tag: 'pending-back' });
+  await fire(page, 'sessions', SUMMARY);
+  await expand(page);
+  await holdReplies(page);
+  await page.locator('#rows button.srow').nth(1).click({ timeout: 2000 });
+  await sleep(150);
+  await page.evaluate(() => document.querySelector('#back').click());
+  await sleep(100);
+  const n = (await invokes(page, 'session_detail')).length;
+  await fire(page, 'records', undefined);
+  await fire(page, 'sessions', SUMMARY);
+  await sleep(200);
+  check('P5 back during a pending open: a later records or sessions event calls nothing', (await invokes(page, 'session_detail')).length === n && n === 1, J(await invokes(page, 'session_detail')));
+  await release(page, 0, card());
+  await sleep(700);
+  const sess = await vis(page, '#sess'), d = await vis(page, '#detail');
+  check('P6 back during a pending open: the late reply does not show the card', sess.eff > 0.9 && d.eff < 0.01, J({ sess, d }));
+  await page.close();
+}
+
 async function scenarioRecordsOnList() {
   const page = await openPage({ tag: 'records-list' });
   await fire(page, 'sessions', SUMMARY);
@@ -400,7 +452,7 @@ async function scenarioReduced() {
   await page.close();
 }
 
-for (const s of [scenarioRows, scenarioOpen, scenarioFields, scenarioRefetch, scenarioRecordsOnList, scenarioCollapse, scenarioNull, scenarioReduced]) {
+for (const s of [scenarioRows, scenarioOpen, scenarioFields, scenarioRefetch, scenarioRecordsOnList, scenarioPendingOpen, scenarioCollapse, scenarioNull, scenarioReduced]) {
   try { await s(); } catch (e) { check(`${s.name} ran`, false, e.stack || String(e)); }
 }
 await browser.close();

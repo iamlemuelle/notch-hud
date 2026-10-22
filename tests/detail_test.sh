@@ -91,6 +91,12 @@ if tail -n +$((am + 1)) "$applog" | grep -qF 'page: detail sess-perm'; then flun
 if tail -n +$((am + 1)) "$applog" | grep -qF 'page: detail rejected'; then flunk "the page sent an id the app rejected"; fi
 sleep 0.8
 
+# A new record that keeps sess-work Working with another tool: the summary does not change, so only the records event
+# can make the open card ask again (CONTRACT.md section 3 and section 4). Expect a second `found` line within 5 s.
+dm="$(lines "$applog")"
+hook '{"session_id":"sess-work","cwd":"/x/workproj","hook_event_name":"PostToolUse","tool_name":"Grep"}'
+if wait_for "$applog" 5 'page: detail sess-work found' "$dm"; then pass "a new record refetched the open card: page: detail sess-work found again"; else flunk "no second 'page: detail sess-work found' within 5 s of a new record"; fi
+
 now="$("$drive" front)"
 if [ "$now" = "$front0" ]; then pass "frontmost app unchanged ($front0)"; else flunk "frontmost app changed from [$front0] to [$now]"; fi
 if grep -q '^activated' "$watchlog"; then flunk "no app activation while driving"; grep '^activated' "$watchlog"; else pass "no app activation while driving"; fi
