@@ -131,13 +131,16 @@ define_class!(
     }
 );
 
-/// Main thread only. An event queued for an area that has since been replaced is dropped.
+/// Main thread only. An entered or exited queued for an area that has since been replaced is dropped. A moved
+/// carries no area (`-[NSEvent trackingArea]` raises for it), so it always counts.
 fn pointer(event: &NSEvent, input: Input) {
-    let current = AREA.with(|a| a.borrow().as_ref().map(|area| Retained::as_ptr(area)));
-    let from = event.trackingArea();
-    if from.as_ref().map(|area| Retained::as_ptr(area)) == current {
-        track_hover(input);
+    if input != Input::Moved {
+        let current = AREA.with(|a| a.borrow().as_ref().map(|area| Retained::as_ptr(area)));
+        if event.trackingArea().as_ref().map(|area| Retained::as_ptr(area)) != current {
+            return;
+        }
     }
+    track_hover(input);
 }
 
 impl HoverOwner {

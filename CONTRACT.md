@@ -197,8 +197,10 @@ The app calls it before each `read_dir`.
     left button up (`pressedMouseButtons() & 1 == 0`) schedules the same deferred up. A press that starts anywhere
     else (a window drag or a text selection passing over the notch) never reaches the monitor, is never latched and
     changes nothing.
-  - The owner ignores an entered, moved or exited whose `trackingArea` is not the current area, so an event queued
-    for a replaced area cannot change the state.
+  - The owner ignores an entered or exited whose `trackingArea` is not the current area, so an event queued for a
+    replaced area cannot change the state. A moved carries no area: `-[NSEvent trackingArea]` raises for any other
+    event type, and an Objective-C exception there aborts the app (measured 2026-10-22: the motion check's 1 pt move
+    crashed it).
   - After every placement and every up, the area is replaced by one for the current hit rect and panel frame, added
     with `AssumeInside` exactly when over was `true` at that input, so AppKit's idea of inside matches the state and
     an area appearing under a still cursor sends no `mouseEntered:`. The rescan places the panel every 5 s, so a
