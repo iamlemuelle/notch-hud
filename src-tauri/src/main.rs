@@ -3,21 +3,24 @@ mod layout;
 mod media;
 mod session;
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Mutex};
+use std::ptr::NonNull;
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use objc2::rc::Retained;
-use objc2::MainThreadOnly;
+use objc2::runtime::AnyObject;
+use objc2::{define_class, msg_send, AnyThread, MainThreadOnly};
 use objc2_app_kit::{
-    NSBackingStoreType, NSColor, NSEvent, NSPanel, NSScreen, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSBackingStoreType, NSColor, NSEvent, NSEventMask, NSEventType, NSPanel, NSScreen, NSTrackingArea,
+    NSTrackingAreaOptions, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
+use objc2_foundation::{MainThreadMarker, NSObject, NSPoint, NSRect, NSSize};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
+use hover::{Hover, Input};
 use layout::{Layout, Shape, Size, Surface, WindowMode};
 use media::Media;
 use notify::{RecursiveMode, Watcher};
@@ -70,12 +73,8 @@ impl Notch {
     }
 }
 
-/// Whether the cursor is in the hit rect (`next_hover`), and whether `hover` was last emitted true.
-static HOVER_IN: AtomicBool = AtomicBool::new(false);
-static EMITTED: AtomicBool = AtomicBool::new(false);
-/// Left button state at the previous hover poll, and whether a press that started inside a grown shape is held.
-static PREV_DOWN: AtomicBool = AtomicBool::new(false);
-static PRESS_LATCHED: AtomicBool = AtomicBool::new(false);
+/// For `emit` from AppKit callbacks, which carry no handle. Set once at startup.
+static APP: OnceLock<AppHandle> = OnceLock::new();
 static LATEST: Mutex<Option<Summary>> = Mutex::new(None);
 static MEDIA: Mutex<Option<Media>> = Mutex::new(None);
 static SURFACE: Mutex<Surface> = Mutex::new(Surface::new());
@@ -86,8 +85,53 @@ thread_local! {
     /// The visible window: a native non-activating panel that hosts the Tauri window's webview. Created once on
     /// the main thread at startup and kept for the app's lifetime; only the main thread can reach it.
     static PANEL: RefCell<Option<Retained<NSPanel>>> = const { RefCell::new(None) };
-    /// The cursor at the previous hover poll.
+    /// The cursor at the previous hover input.
     static LAST_CURSOR: Cell<Option<(f64, f64)>> = const { Cell::new(None) };
+    static HOVER: Cell<Hover> = const { Cell::new(Hover::new()) };
+    /// The tracking area on the panel's content view, replaced on every placement and every release.
+    static AREA: RefCell<Option<Retained<NSTrackingArea>>> = const { RefCell::new(None) };
+    /// The area's owner. AppKit does not retain it, so it lives here for the app's lifetime.
+    static OWNER: OnceCell<Retained<HoverOwner>> = const { OnceCell::new() };
+    /// The left-button monitor, kept for the app's lifetime.
+    static MONITOR: RefCell<Option<Retained<AnyObject>>> = const { RefCell::new(None) };
+}
+
+const TRACKING: NSTrackingAreaOptions = NSTrackingAreaOptions::MouseEnteredAndExited
+    .union(NSTrackingAreaOptions::MouseMoved)
+    .union(NSTrackingAreaOptions::ActiveAlways)
+    .union(NSTrackingAreaOptions::EnabledDuringMouseDrag);
+
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements, and HoverOwner has no Drop.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "NotchHudHoverOwner"]
+    struct HoverOwner;
+
+    impl HoverOwner {
+        #[unsafe(method(mouseEntered:))]
+        fn mouse_entered(&self, _event: &NSEvent) {
+            track_hover(Input::Entered);
+        }
+
+        #[unsafe(method(mouseMoved:))]
+        fn mouse_moved(&self, _event: &NSEvent) {
+            track_hover(Input::Moved);
+        }
+
+        #[unsafe(method(mouseExited:))]
+        fn mouse_exited(&self, _event: &NSEvent) {
+            track_hover(Input::Exited);
+        }
+    }
+);
+
+impl HoverOwner {
+    fn new(mtm: MainThreadMarker) -> Retained<HoverOwner> {
+        let this = HoverOwner::alloc(mtm).set_ivars(());
+        // SAFETY: NSObject's designated initializer.
+        unsafe { msg_send![super(this), init] }
+    }
 }
 
 const PANEL_STYLE: NSWindowStyleMask =
@@ -178,6 +222,7 @@ fn place(app: &AppHandle) {
     if changed {
         let _ = app.emit("layout", layout);
     }
+    track_hover(Input::Placed);
 }
 
 fn place_soon(app: &AppHandle) {
@@ -185,37 +230,72 @@ fn place_soon(app: &AppHandle) {
     let _ = app.run_on_main_thread(move || place(&target));
 }
 
-// The webview gets no mouse events while this non-key window belongs to a background app,
-// so hover is decided natively from the global cursor position, against the shape the page shows.
-fn track_hover(app: &AppHandle) {
+// The webview gets no mouse events while this non-key window belongs to a background app, so hover is decided
+// natively, against the shape the page shows: a tracking area and a left-button monitor feed `Hover`.
+/// Main thread only. Applies one hover input and emits `hover` when it changes. After a placement or a release it
+/// replaces the tracking area, so AppKit's idea of inside matches the state (it can drift during a drag).
+fn track_hover(input: Input) {
+    let Some(app) = APP.get() else { return };
     let Some(frame) = panel_frame() else { return };
     let Some(layout) = *LAYOUT.lock().unwrap_or_else(|e| e.into_inner()) else { return };
     let hit = SURFACE.lock().unwrap_or_else(|e| e.into_inner()).hit;
+    let size = layout::shape_size(&layout, hit);
     // Every rect shares the window's horizontal center and top edge, so the hit rect follows from the frame.
     let center = frame.origin.x + frame.size.width / 2.0;
     let top = frame.origin.y + frame.size.height;
     let p = NSEvent::mouseLocation();
-    let over = layout::hit_contains(layout::shape_size(&layout, hit), center, top, p.x, p.y);
+    let contains = layout::hit_contains(size, center, top, p.x, p.y);
     let moved = LAST_CURSOR.with(|c| c.replace(Some((p.x, p.y)))) != Some((p.x, p.y));
-    let hover_in = layout::next_hover(HOVER_IN.load(Ordering::Relaxed), over, moved);
-    HOVER_IN.store(hover_in, Ordering::Relaxed);
-    // A press that starts in a grown shape keeps hover on until release, so a seek drag that overshoots the
-    // bar does not collapse the panel. A press that starts elsewhere is never latched.
     let down = NSEvent::pressedMouseButtons() & 1 != 0;
-    let pressed = down && !PREV_DOWN.swap(down, Ordering::Relaxed);
-    if !down {
-        PREV_DOWN.store(false, Ordering::Relaxed);
-        PRESS_LATCHED.store(false, Ordering::Relaxed);
-    } else if pressed && hover_in && hit != Shape::Pill {
-        PRESS_LATCHED.store(true, Ordering::Relaxed);
-    }
-    let inside = hover_in || PRESS_LATCHED.load(Ordering::Relaxed);
-    if inside != EMITTED.swap(inside, Ordering::Relaxed) {
+    let mut hover = HOVER.get();
+    let changed = hover.step(input, contains, moved, down, hit);
+    HOVER.set(hover);
+    if let Some(inside) = changed {
         if trace_on() {
             eprintln!("hover: {}", if inside { "in" } else { "out" });
         }
         let _ = app.emit("hover", inside);
     }
+    if matches!(input, Input::Placed | Input::Up) {
+        track_area(frame, size, contains);
+    }
+}
+
+/// Main thread only. Replaces the tracking area with one over the hit rect of `size` in a panel of `frame`, assumed
+/// inside when `inside`, so an area appearing under a still cursor sends no `mouseEntered:`.
+fn track_area(frame: NSRect, size: Size, inside: bool) {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let Some(view) = PANEL.with(|p| p.borrow().as_ref().and_then(|panel| panel.contentView())) else { return };
+    let in_window = NSRect {
+        origin: NSPoint { x: (frame.size.width - size.width) / 2.0, y: frame.size.height - size.height },
+        size: NSSize { width: size.width, height: size.height },
+    };
+    let rect = view.convertRect_fromView(in_window, None);
+    let options = if inside { TRACKING.union(NSTrackingAreaOptions::AssumeInside) } else { TRACKING };
+    let owner = OWNER.with(|o| o.get_or_init(|| HoverOwner::new(mtm)).clone());
+    let owner: &AnyObject = &owner;
+    // SAFETY: the owner implements the three mouse methods the options ask for and outlives the area (OWNER).
+    let area = unsafe {
+        NSTrackingArea::initWithRect_options_owner_userInfo(NSTrackingArea::alloc(), rect, options, Some(owner), None)
+    };
+    if let Some(old) = AREA.with(|a| a.replace(Some(area.clone()))) {
+        view.removeTrackingArea(&old);
+    }
+    view.addTrackingArea(&area);
+}
+
+/// Main thread only. Feeds left presses and releases on the panel to hover; a press in another app never gets here.
+fn monitor_presses() {
+    let handler = block2::RcBlock::new(|event: NonNull<NSEvent>| -> *mut NSEvent {
+        // SAFETY: AppKit passes a valid event for the duration of the call.
+        let kind = unsafe { event.as_ref() }.r#type();
+        track_hover(if kind == NSEventType::LeftMouseDown { Input::Down } else { Input::Up });
+        event.as_ptr()
+    });
+    let mask = NSEventMask::LeftMouseDown | NSEventMask::LeftMouseUp;
+    // SAFETY: the handler returns the event it was given.
+    let monitor = unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &handler) };
+    MONITOR.with(|m| *m.borrow_mut() = monitor);
 }
 
 /// Refreshes the summary and returns the deadline `next_wake` gives for these records.
@@ -400,17 +480,13 @@ fn main() {
                     }
                 })
                 .build()?;
+            let _ = APP.set(app.handle().clone());
             adopt_panel(mtm, &window);
+            monitor_presses();
             place(app.handle());
 
             drop(window);
 
-            let hover = app.handle().clone();
-            std::thread::spawn(move || loop {
-                std::thread::sleep(Duration::from_millis(50));
-                let target = hover.clone();
-                let _ = hover.run_on_main_thread(move || track_hover(&target));
-            });
             let sessions_app = app.handle().clone();
             std::thread::spawn(move || watch_sessions(&sessions_app));
             let media_app = app.handle().clone();
