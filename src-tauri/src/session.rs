@@ -59,7 +59,7 @@ pub struct Summary {
 
 pub const TTL_SECS: u64 = 3 * 3600;
 pub const QUIET_SECS: u64 = 600;
-pub const MAX_ROWS: usize = 6;
+pub const MAX_ROWS: usize = 4;
 pub const MAX_FILES: usize = 50;
 
 pub fn status_of(r: &Record) -> Option<Status> {
@@ -154,7 +154,7 @@ pub fn summarize(records: &[Record], now: u64) -> Summary {
     let total = sessions.len();
     let attention = sessions
         .iter()
-        .filter(|s| matches!(s.status, Status::NeedsPermission | Status::NeedsInput))
+        .filter(|s| matches!(s.status, Status::NeedsPermission | Status::NeedsInput | Status::Error))
         .count();
     let working = sessions.iter().filter(|s| s.status == Status::Working).count();
 

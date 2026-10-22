@@ -183,7 +183,6 @@ fn summarize_detail_only_for_needs_permission() {
             ("np".to_string(), Some("Edit".to_string())),
             ("notool".to_string(), None),
             ("in".to_string(), None),
-            ("work".to_string(), None),
         ]
     );
 }
@@ -208,11 +207,21 @@ fn summarize_sort_priority_order() {
             Status::NeedsPermission,
             Status::NeedsInput,
             Status::Error,
-            Status::Working,
-            Status::Done,
-            Status::Waiting
+            Status::Working
         ]
     );
+}
+
+#[test]
+fn summarize_sort_priority_order_below_working() {
+    let recs = [
+        rec("1", "/p/waiting", "SessionStart", NOW),
+        rec("2", "/p/done", "Stop", NOW),
+        rec("3", "/p/working", "PreToolUse", NOW),
+    ];
+    let s = summarize(&recs, NOW);
+    let statuses: Vec<Status> = s.rows.iter().map(|r| r.status).collect();
+    assert_eq!(statuses, vec![Status::Working, Status::Done, Status::Waiting]);
 }
 
 #[test]
@@ -249,7 +258,7 @@ fn summarize_truncates_but_counts_everything() {
     assert_eq!(s.working, 4);
     assert_eq!(s.rows.len(), MAX_ROWS);
     let labels: Vec<&str> = s.rows.iter().map(|r| r.label.as_str()).collect();
-    assert_eq!(labels, vec!["p0", "p1", "p2", "n0", "w0", "w1"]);
+    assert_eq!(labels, vec!["p0", "p1", "p2", "n0"]);
 }
 
 #[test]
@@ -580,13 +589,32 @@ fn contract_read_dir_caps_at_50_files() {
 }
 
 #[test]
-fn contract_summarize_caps_at_6_rows() {
+fn contract_summarize_caps_at_4_rows() {
     let recs: Vec<Record> = (0..7u64)
         .map(|i| rec(&format!("r{i}"), &format!("/p/r{i}"), "Stop", NOW - i))
         .collect();
     let s = summarize(&recs, NOW);
     assert_eq!(s.total, 7);
-    assert_eq!(s.rows.len(), 6);
+    assert_eq!(s.rows.len(), 4);
+}
+
+#[test]
+fn summarize_seven_sessions_show_four_rows_and_total_seven() {
+    let recs: Vec<Record> = (0..7u64)
+        .map(|i| rec(&format!("s{i}"), &format!("/p/s{i}"), "PreToolUse", NOW - i))
+        .collect();
+    let s = summarize(&recs, NOW);
+    assert_eq!(s.rows.len(), 4);
+    assert_eq!(s.total, 7);
+    assert_eq!(s.working, 7);
+}
+
+#[test]
+fn summarize_lone_error_session_counts_as_attention() {
+    let s = summarize(&[rec("e", "/p/boom", "StopFailure", NOW)], NOW);
+    assert_eq!(s.rows.len(), 1);
+    assert_eq!(s.rows[0].status, Status::Error);
+    assert_eq!((s.total, s.attention, s.working), (1, 1, 0));
 }
 
 #[test]
@@ -647,7 +675,7 @@ fn supersede_boundaries_clear_stale_agent_permission() {
         let label = format!("{} {:?}", main.event, main.notification_type);
         let (row, attention) = one_row(&[stale_perm(), main]);
         assert_eq!(row, Row { label: "proj".into(), status: want, detail: None }, "{label}");
-        assert_eq!(attention, 0, "{label}");
+        assert_eq!(attention, usize::from(want == Status::Error), "{label}");
     }
 }
 

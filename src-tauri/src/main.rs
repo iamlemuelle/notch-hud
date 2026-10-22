@@ -15,7 +15,7 @@ use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
-use media::{Health, Media};
+use media::Media;
 use session::{prune, read_dir, sessions_dir, summarize, Summary};
 
 // kCGMainMenuWindowLevel is 24; +3 matches what notch apps use to clear the menu bar and its status items.
@@ -47,13 +47,10 @@ impl Notch {
         self.screen.origin.y + self.screen.size.height
     }
 
-    /// `expanded`: the session row count and the extra height the media block needs.
+    /// `expanded`: the latest summary's shown row count and total.
     fn panel(&self, expanded: Option<(usize, usize)>) -> NSRect {
         let size = match expanded {
-            Some((rows, media_extra)) => NSSize {
-                width: EXPANDED_WIDTH,
-                height: (44 + media_extra + 22 * rows.max(1) + 14) as f64,
-            },
+            Some((rows, total)) => NSSize { width: EXPANDED_WIDTH, height: expanded_height(rows, total) },
             None => NSSize { width: self.width + 2.0 * EAR, height: self.height },
         };
         let center = self.x + self.width / 2.0;
@@ -62,6 +59,14 @@ impl Notch {
             size,
         }
     }
+}
+
+/// The music block (196), the session header (18), a 4 pt gap, one 22 pt row per shown session row and 14 below.
+/// Shown rows: the summary's session rows, plus a "N more" row when the total exceeds them; one "No Claude Code
+/// sessions" row at zero.
+fn expanded_height(rows: usize, total: usize) -> f64 {
+    let shown_rows = (rows + usize::from(total > rows)).max(1);
+    (196 + 18 + 4 + 22 * shown_rows + 14) as f64
 }
 
 static EXPANDED_NOW: AtomicBool = AtomicBool::new(false);
@@ -121,24 +126,15 @@ fn notched_screen(mtm: MainThreadMarker) -> Option<Notch> {
     NSScreen::screens(mtm).iter().find_map(|s| Notch::read(&s))
 }
 
-fn latest_row_count() -> usize {
-    LATEST.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |s| s.rows.len())
-}
-
-/// Extra expanded height for the now playing block: a track, or the "access is off" line.
-fn media_extra_height() -> usize {
-    match MEDIA.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-        Some(Media { track: Some(_), .. }) => 146,
-        Some(Media { track: None, health: Health::Denied, .. }) => 22,
-        _ => 0,
-    }
+fn latest_counts() -> (usize, usize) {
+    LATEST.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or((0, 0), |s| (s.rows.len(), s.total))
 }
 
 /// Main thread only. Looks the notched screen up again so display changes move the panel.
 fn place(expanded: bool) {
     let Some(mtm) = MainThreadMarker::new() else { return };
     let Some(notch) = notched_screen(mtm) else { return };
-    let target = notch.panel(expanded.then(|| (latest_row_count(), media_extra_height())));
+    let target = notch.panel(expanded.then(latest_counts));
     PANEL.with(|p| {
         if let Some(panel) = p.borrow().as_ref() {
             if panel.frame() != target {
@@ -229,11 +225,6 @@ fn on_media(app: &AppHandle, media: Media) {
         eprintln!("{}", trace_line(&media));
     }
     let _ = app.emit("media", &media);
-    let _ = app.run_on_main_thread(|| {
-        if EXPANDED_NOW.load(Ordering::Relaxed) {
-            place(true);
-        }
-    });
 }
 
 /// Parses, routes against the latest media and applies off the main thread.
@@ -317,3 +308,7 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("tauri run");
 }
+
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod tests;
