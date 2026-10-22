@@ -5,9 +5,9 @@
 # opens the panel. The frontmost app never changes.
 #
 # It MOVES THE REAL CURSOR (a warp onto the pill, to the middle of the screen, and to a rest point below the pill; a
-# posted 1 pt mouse move, which needs Accessibility access) and restores it on exit. It never clicks. Do not touch the mouse or switch apps while it runs. It starts its own app, fixture player and watcher and
-# only ever signals those; the notch-hud that may be running as your login item is left alone (windows are filtered by
-# the test app's pid).
+# posted 1 pt mouse move, which needs Accessibility access) and restores it on exit. It never clicks. Do not touch the
+# mouse or switch apps while it runs. It starts its own app, fixture player and watcher and only ever signals those;
+# the notch-hud that may be running as your login item is left alone (windows are filtered by the test app's pid).
 #
 # Exit 0 when every check passes, 1 when one fails, 2 when the environment cannot run it.
 set -u
