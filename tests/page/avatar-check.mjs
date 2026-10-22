@@ -352,10 +352,11 @@ async function scenarioBudget() {
   await painted(page);
   await sleep(600);
   b = await observe(page, 3500);
-  const bc = clusters(b, 120);
+  // 300 ms sits between any plausible frame spacing inside a 200 ms blink (50 ms, or 130 ms on a slow runner) and the 700 ms quiet interval.
+  const bc = clusters(b, 300);
   const gaps = bc.slice(1).map((c, i) => c.start - bc[i].end);
-  check('B6 blinking in a 5 s hold: frames come in bursts (at least 3 blinks in 3.5 s), each at most 300 ms long', bc.length >= 3 && bc.every((c) => c.end - c.start <= 300), J({ bursts: bc.length, long: bc.filter((c) => c.end - c.start > 300) }));
-  check('B7 ... with no frames between blinks (bursts at least 250 ms apart) and at most one per 50 ms', gaps.length > 0 && gaps.every((g) => g >= 250) && minGap(b) >= 45, J({ gaps, minGap: minGap(b) }));
+  check('B6 blinking in a 5 s hold: frames come in bursts (at least 3 blinks in 3.5 s), each at most 350 ms long (the 200 ms blink plus a frame)', bc.length >= 3 && bc.every((c) => c.end - c.start <= 350), J({ bursts: bc.length, long: bc.filter((c) => c.end - c.start > 350) }));
+  check('B7 ... with no frames between blinks (bursts at least 500 ms apart, the quiet interval is 700) and at most one per 50 ms', gaps.length > 0 && gaps.every((g) => g >= 500) && minGap(b) >= 45, J({ gaps, minGap: minGap(b) }));
   await page.close();
 
   // a once animation that ended keeps its last frame and no timer
