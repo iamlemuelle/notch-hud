@@ -535,8 +535,10 @@ pub fn next_hover(was_in: bool, over: bool, moved: bool) -> bool;
 
 - Grow before the shape needs the room: window `open` on entering `peek` or expanding from a banner; window `banner`
   on entering `banner`. When the window mode changes on the way in, the phase's animations (clip, art, layer, and
-  the phase's own timer) start one animation frame after the `surface` call resolves, not before; a later hover
-  change or phase change cancels that start. When the mode is already right, they start at once.
+  the phase's own timer) start one animation frame after the `surface` call resolves, not before. A phase change
+  before then drops that start. A hover change while waiting sets its timer as usual (the 250 ms leave, or the 80 ms
+  expand from a banner), and the start then keeps that timer instead of its own (peek's 120 ms, the banner's
+  2600 ms). When the mode is already right, they start at once.
 - When a `surface` call rejects, the page sends the same (window, hit) pair again on its next phase change instead
   of treating it as sent.
 - Shrink only after the shape is back: when the phase becomes `collapsed`, window `pill` is sent once no `clip-path`
