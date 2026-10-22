@@ -73,6 +73,7 @@ pub const MAX_FILES: usize = 50;
 
 pub fn status_of(r: &Record) -> Option<Status>;
 pub fn summarize(records: &[Record], now: u64) -> Summary;
+pub fn next_wake(records: &[Record], now: u64) -> Option<u64>;
 pub fn read_dir(dir: &std::path::Path) -> Vec<Record>;
 pub fn prune(dir: &std::path::Path, now: u64);
 pub fn sessions_dir() -> std::path::PathBuf;
@@ -114,6 +115,19 @@ pub fn sessions_dir() -> std::path::PathBuf;
 5. Sort sessions by status priority (`NeedsPermission` 0, `NeedsInput` 1, `Error` 2, `Working` 3, `Done` 4, `Waiting` 5),
    then `ts` descending, then `session_id` ascending. Then truncate `rows` to `MAX_ROWS`.
 
+### `next_wake(records, now)`
+
+The earliest unix second after `now` at which `summarize(records, t)` can differ from `summarize(records, now)` with
+no change to `records`: the smallest of
+
+- `r.ts + TTL_SECS + 1` for every record that step 1 of `summarize` keeps at `now` (the second its age passes
+  `TTL_SECS` and it drops out);
+- `ts + QUIET_SECS + 1` for every session (after superseding, step 2) whose chosen status is `Working` and has not
+  decayed at `now`, where `ts` is the session's largest `ts` (the second it decays to `Waiting`).
+
+`None` when there is neither (no record kept, and no `Working` session left to decay). Every value it returns is
+greater than `now`. Pure: it reads no clock and no files.
+
 ### `read_dir(dir)`
 
 Considers only regular files whose names end in `.json`. Keeps the `MAX_FILES` most recently modified (mtime
@@ -135,10 +149,24 @@ The app calls it before each `read_dir`.
   to stderr and exit 0. Set window level, collection behavior and shadow once.
 - Every time the window is placed (startup, a `surface` call, a layout change), look the notched screen up again on the
   main thread, so plugging in or rearranging displays moves the panel correctly. If none is found, leave the frame.
-- Every 1 s: `prune(&dir, now)`, then `summarize(&read_dir(&dir), now)` with `dir = sessions_dir()`. Also every 1 s, on
-  the main thread: compute the frame the panel should have now (notched screen looked up again, current window mode,
-  section 8) and set it when it differs from the window's frame, so a display change moves the collapsed pill too.
-  When the summary differs from the last one, emit `sessions` with the `Summary` as payload.
+- Sessions refresh: `prune(&dir, now)`, then `records = read_dir(&dir)` and `summarize(&records, now)` with
+  `dir = sessions_dir()`. When the summary differs from the last one, emit `sessions` with the `Summary` as payload
+  and, when `$NOTCH_TRACE` is set and non-empty, log `sessions: ` followed by the summary as one line of JSON to
+  stderr. After every refresh, on the main thread: compute the frame the panel should have now (notched screen looked
+  up again, current window mode, section 8) and set it when it differs from the window's frame, so a display change
+  moves the collapsed pill too.
+- Refreshes are driven by events, not a fixed poll. One thread runs a refresh at startup and then waits for the first
+  of:
+  1. a file-system event in `dir` (FSEvents through the `notify` crate, non-recursive). Events that arrive while a
+     refresh runs are drained before the next one, so a burst (the hook's temp file and `mv`) costs one or two
+     refreshes, not one per event. A hook write reaches the `sessions` event within 300 ms;
+  2. the deadline `next_wake(&records, now)` from the last refresh, so a decay (`Working` to `Waiting`) or a TTL
+     expiry shows with no file event, within 1 s of the second it is due;
+  3. the rescan: `RESCAN_SECS` = 5 s after the last refresh, the safety net for a missed event, a directory that
+     was deleted and recreated, and a display change.
+  At startup the thread creates `dir` (`create_dir_all`, errors ignored) so the watch has something to attach to.
+  When the watch cannot be set up, it is retried on every refresh, and the rescan keeps the panel at most 5 s
+  behind. With no session activity the thread wakes once per rescan, never once per second.
 - Hover: native cursor polling every 50 ms, emits `hover` (bool) when it changes. The cursor is "in" when it is inside
   the hit rect, the shape the page last reported with `surface` (section 8), with these rules (`next_hover` in
   `layout.rs`): it becomes in only on a poll where the cursor moved since the previous poll, so a shape growing under
