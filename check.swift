@@ -93,7 +93,7 @@ var collapsedRep: NSBitmapImageRep? = nil
 _ = until(10) {
     collapsedRep = shot(collapsedArea, "shot.png")
     guard let rep = collapsedRep else { return true }
-    return isAmber(color(rep, collapsedArea.origin, CGPoint(x: b.minX + 18, y: b.midY)))
+    return isAmber(color(rep, collapsedArea.origin, CGPoint(x: b.minX + 24, y: b.midY)))
 }
 if let rep = collapsedRep {
     let ear = CGPoint(x: left.maxX - 8, y: b.midY)
@@ -108,20 +108,20 @@ if let rep = collapsedRep {
 
 let home = CGEvent(source: nil)!.location
 move(CGPoint(x: b.midX, y: b.midY))
-// Four seeded sessions: 196 + 18 + 4 + 22 * 4 + 14.
+// Four seeded sessions: the open window is 452 wide (420 + 2 * 16) and (196 + 18 + 4 + 22 * 4 + 14) + 16 tall.
 let grown = waitFor { $0.height >= 250 }
-expect(grown?.height == 320 && grown?.width == 420, "4a. hover expands to 420x320 for 4 sessions (got \(grown?.size ?? .zero))")
+expect(grown?.height == 336 && grown?.width == 452, "4a. hover grows the window to 452x336 for 4 sessions (got \(grown?.size ?? .zero))")
 if let g = grown {
     usleep(300_000)
     let area = CGRect(x: g.midX - 260, y: 0, width: 520, height: g.height + 30)
     if let rep = shot(area, "shot-expanded.png") {
         var lit = 0
-        for x in stride(from: g.minX + 18, to: g.maxX - 18, by: 1) {
-            for y in stride(from: g.maxY - 60, to: g.maxY - 12, by: 1) where brightness(rep, area.origin, CGPoint(x: x, y: y)) > 0.5 { lit += 1 }
+        for x in stride(from: g.minX + 34, to: g.maxX - 34, by: 1) {
+            for y in stride(from: g.maxY - 76, to: g.maxY - 28, by: 1) where brightness(rep, area.origin, CGPoint(x: x, y: y)) > 0.5 { lit += 1 }
         }
-        let samples = Int((g.width - 36) * 48)
+        let samples = Int((g.width - 68) * 48)
         expect(lit > 200 && lit < samples / 4, "5b. web UI reacted to hover: \(lit) bright text pixels of \(samples) in the detail area (> 200, < 1/4)")
-        let bg = brightness(rep, area.origin, CGPoint(x: g.minX + 8, y: g.maxY - 40))
+        let bg = brightness(rep, area.origin, CGPoint(x: g.minX + 24, y: g.maxY - 56))
         expect(bg >= 0 && bg < 0.03, "5b. expanded panel is painted black, not see-through (brightness \(bg))")
     }
 }

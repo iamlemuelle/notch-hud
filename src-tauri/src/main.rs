@@ -1,7 +1,8 @@
+mod layout;
 mod media;
 mod session;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -15,13 +16,12 @@ use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
+use layout::{Layout, Shape, Size, Surface, WindowMode};
 use media::Media;
 use session::{prune, read_dir, sessions_dir, summarize, Summary};
 
 // kCGMainMenuWindowLevel is 24; +3 matches what notch apps use to clear the menu bar and its status items.
 const ABOVE_MENU_BAR: isize = 24 + 3;
-const EAR: f64 = 60.0;
-const EXPANDED_WIDTH: f64 = 420.0;
 
 /// Notch geometry in AppKit points (bottom-left origin), read afresh on every placement.
 struct Notch {
@@ -47,39 +47,41 @@ impl Notch {
         self.screen.origin.y + self.screen.size.height
     }
 
-    /// `expanded`: the latest summary's shown row count and total.
-    fn panel(&self, expanded: Option<(usize, usize)>) -> NSRect {
-        let size = match expanded {
-            Some((rows, total)) => NSSize { width: EXPANDED_WIDTH, height: expanded_height(rows, total) },
-            None => NSSize { width: self.width + 2.0 * EAR, height: self.height },
-        };
+    /// `size` centered on the notch, its top edge at the screen top.
+    fn rect(&self, size: Size) -> NSRect {
         let center = self.x + self.width / 2.0;
         NSRect {
             origin: NSPoint { x: center - size.width / 2.0, y: self.top() - size.height },
-            size,
+            size: NSSize { width: size.width, height: size.height },
         }
+    }
+
+    fn layout(&self) -> Layout {
+        {
+        let (rows, total) = latest_counts();
+        layout::layout(self.width, self.height, self.screen.size.height, rows, total)
+    }
     }
 }
 
-/// The music block (196), the session header (18), a 4 pt gap, one 22 pt row per shown session row and 14 below.
-/// Shown rows: the summary's session rows, plus a "N more" row when the total exceeds them; one "No Claude Code
-/// sessions" row at zero.
-fn expanded_height(rows: usize, total: usize) -> f64 {
-    let shown_rows = (rows + usize::from(total > rows)).max(1);
-    (196 + 18 + 4 + 22 * shown_rows + 14) as f64
-}
-
-static EXPANDED_NOW: AtomicBool = AtomicBool::new(false);
-/// Left button state at the previous hover poll, and whether a press that started on the expanded panel is held.
+/// Whether the cursor is in the hit rect (`next_hover`), and whether `hover` was last emitted true.
+static HOVER_IN: AtomicBool = AtomicBool::new(false);
+static EMITTED: AtomicBool = AtomicBool::new(false);
+/// Left button state at the previous hover poll, and whether a press that started inside a grown shape is held.
 static PREV_DOWN: AtomicBool = AtomicBool::new(false);
 static PRESS_LATCHED: AtomicBool = AtomicBool::new(false);
 static LATEST: Mutex<Option<Summary>> = Mutex::new(None);
 static MEDIA: Mutex<Option<Media>> = Mutex::new(None);
+static SURFACE: Mutex<Surface> = Mutex::new(Surface::new());
+/// The layout the page was last sent, refreshed on every placement.
+static LAYOUT: Mutex<Option<Layout>> = Mutex::new(None);
 
 thread_local! {
     /// The visible window: a native non-activating panel that hosts the Tauri window's webview. Created once on
     /// the main thread at startup and kept for the app's lifetime; only the main thread can reach it.
     static PANEL: RefCell<Option<Retained<NSPanel>>> = const { RefCell::new(None) };
+    /// The cursor at the previous hover poll.
+    static LAST_CURSOR: Cell<Option<(f64, f64)>> = const { Cell::new(None) };
 }
 
 const PANEL_STYLE: NSWindowStyleMask =
@@ -130,42 +132,82 @@ fn latest_counts() -> (usize, usize) {
     LATEST.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or((0, 0), |s| (s.rows.len(), s.total))
 }
 
-/// Main thread only. Looks the notched screen up again so display changes move the panel.
-fn place(expanded: bool) {
+fn mode_name(mode: WindowMode) -> &'static str {
+    match mode {
+        WindowMode::Pill => "pill",
+        WindowMode::Banner => "banner",
+        WindowMode::Open => "open",
+    }
+}
+
+/// Main thread only. Looks the notched screen up again so display changes move the panel, sizes the window for the
+/// page's current mode, and emits `layout` when it changed.
+fn place(app: &AppHandle) {
     let Some(mtm) = MainThreadMarker::new() else { return };
     let Some(notch) = notched_screen(mtm) else { return };
-    let target = notch.panel(expanded.then(latest_counts));
+    let layout = notch.layout();
+    let (mode, size) = {
+        let mut s = SURFACE.lock().unwrap_or_else(|e| e.into_inner());
+        let size = s.window_size(&layout);
+        (s.window, size)
+    };
+    let target = notch.rect(size);
     PANEL.with(|p| {
         if let Some(panel) = p.borrow().as_ref() {
-            if panel.frame() != target {
+            let frame = panel.frame();
+            if frame != target {
+                if frame.size != target.size && trace_on() {
+                    eprintln!("window: {} {}x{}", mode_name(mode), size.width, size.height);
+                }
                 panel.setFrame_display(target, true);
             }
         }
     });
+    let changed = {
+        let mut last = LAYOUT.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = last.as_ref() != Some(&layout);
+        *last = Some(layout);
+        changed
+    };
+    if changed {
+        let _ = app.emit("layout", layout);
+    }
+}
+
+fn place_soon(app: &AppHandle) {
+    let target = app.clone();
+    let _ = app.run_on_main_thread(move || place(&target));
 }
 
 // The webview gets no mouse events while this non-key window belongs to a background app,
-// so hover is decided natively from the global cursor position.
+// so hover is decided natively from the global cursor position, against the shape the page shows.
 fn track_hover(app: &AppHandle) {
     let Some(frame) = panel_frame() else { return };
+    let Some(layout) = *LAYOUT.lock().unwrap_or_else(|e| e.into_inner()) else { return };
+    let hit = SURFACE.lock().unwrap_or_else(|e| e.into_inner()).hit;
+    // Every rect shares the window's horizontal center and top edge, so the hit rect follows from the frame.
+    let center = frame.origin.x + frame.size.width / 2.0;
+    let top = frame.origin.y + frame.size.height;
     let p = NSEvent::mouseLocation();
-    let over = p.x >= frame.origin.x
-        && p.x <= frame.origin.x + frame.size.width
-        && p.y >= frame.origin.y
-        && p.y <= frame.origin.y + frame.size.height;
-    // A press that starts on the expanded panel keeps it open until release, so a seek drag that overshoots the
-    // bar does not collapse it. A press that starts elsewhere is never latched.
+    let over = layout::hit_contains(layout::shape_size(&layout, hit), center, top, p.x, p.y);
+    let moved = LAST_CURSOR.with(|c| c.replace(Some((p.x, p.y)))) != Some((p.x, p.y));
+    let hover_in = layout::next_hover(HOVER_IN.load(Ordering::Relaxed), over, moved);
+    HOVER_IN.store(hover_in, Ordering::Relaxed);
+    // A press that starts in a grown shape keeps hover on until release, so a seek drag that overshoots the
+    // bar does not collapse the panel. A press that starts elsewhere is never latched.
     let down = NSEvent::pressedMouseButtons() & 1 != 0;
     let pressed = down && !PREV_DOWN.swap(down, Ordering::Relaxed);
     if !down {
         PREV_DOWN.store(false, Ordering::Relaxed);
         PRESS_LATCHED.store(false, Ordering::Relaxed);
-    } else if pressed && over && EXPANDED_NOW.load(Ordering::Relaxed) {
+    } else if pressed && hover_in && hit != Shape::Pill {
         PRESS_LATCHED.store(true, Ordering::Relaxed);
     }
-    let inside = over || PRESS_LATCHED.load(Ordering::Relaxed);
-    if inside != EXPANDED_NOW.swap(inside, Ordering::Relaxed) {
-        place(inside);
+    let inside = hover_in || PRESS_LATCHED.load(Ordering::Relaxed);
+    if inside != EMITTED.swap(inside, Ordering::Relaxed) {
+        if trace_on() {
+            eprintln!("hover: {}", if inside { "in" } else { "out" });
+        }
         let _ = app.emit("hover", inside);
     }
 }
@@ -175,20 +217,14 @@ fn poll_sessions(app: &AppHandle) {
     let dir = sessions_dir();
     prune(&dir, now);
     let summary = summarize(&read_dir(&dir), now);
-    let _ = app.run_on_main_thread(move || place(EXPANDED_NOW.load(Ordering::Relaxed)));
     {
         let mut latest = LATEST.lock().unwrap_or_else(|e| e.into_inner());
-        if latest.as_ref() == Some(&summary) {
-            return;
+        if latest.as_ref() != Some(&summary) {
+            *latest = Some(summary.clone());
+            let _ = app.emit("sessions", &summary);
         }
-        *latest = Some(summary.clone());
     }
-    let _ = app.emit("sessions", &summary);
-    let _ = app.run_on_main_thread(|| {
-        if EXPANDED_NOW.load(Ordering::Relaxed) {
-            place(true);
-        }
-    });
+    place_soon(app);
 }
 
 #[tauri::command]
@@ -262,9 +298,23 @@ fn media() -> Option<Media> {
     MEDIA.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+#[tauri::command]
+fn layout() -> Option<Layout> {
+    *LAYOUT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The page's window mode and hit shape (CONTRACT.md section 8). Serde rejects unknown values before this runs.
+/// Synchronous, so Tauri runs it on the main thread in arrival order, and it returns once the panel is placed: the
+/// page waits for that before animating into a bigger window.
+#[tauri::command]
+fn surface(app: AppHandle, window: WindowMode, hit: Shape) {
+    SURFACE.lock().unwrap_or_else(|e| e.into_inner()).set(window, hit);
+    place(&app);
+}
+
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![sessions, media, act])
+        .invoke_handler(tauri::generate_handler![sessions, media, act, layout, surface])
         .setup(|app| {
             let mtm = MainThreadMarker::new().expect("main thread");
             if notched_screen(mtm).is_none() {
@@ -286,7 +336,7 @@ fn main() {
                 })
                 .build()?;
             adopt_panel(mtm, &window);
-            place(false);
+            place(app.handle());
 
             drop(window);
 
@@ -308,7 +358,3 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("tauri run");
 }
-
-#[cfg(test)]
-#[path = "main_tests.rs"]
-mod tests;

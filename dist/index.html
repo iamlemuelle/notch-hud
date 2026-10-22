@@ -6,18 +6,21 @@
   :root { --tint: 245, 245, 245; }
   html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
     font: 600 12px -apple-system, system-ui, sans-serif; color: #f5f5f5; cursor: default; user-select: none; }
-  #panel { position: absolute; inset: 0; background: #000; border-radius: 0 0 14px 14px; overflow: hidden; }
+  /* The stage keeps its place on screen whatever the window size: Rust centers every window on the notch. */
+  #stage { position: absolute; top: 0; left: calc(50% - var(--stage-w) / 2); width: var(--stage-w); height: var(--stage-h);
+    visibility: hidden; }
+  #stage.ready { visibility: visible; }
+  #panel { position: absolute; inset: 0; background: #000; will-change: clip-path; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #8b8b8b; flex: none; }
   .dot.att { background: #f5a623; box-shadow: 0 0 6px #f5a623; }
   .dot.work { background: #34d058; box-shadow: 0 0 6px #34d058; }
-  .lear { position: absolute; left: 14px; top: 0; height: 32px; display: flex; align-items: center; gap: 6px; z-index: 1; opacity: 0.82; }
-  body.open .lear { opacity: 1; }
+  .lear { position: absolute; left: calc(var(--pill-l) + 14px); top: 0; height: var(--pill-h); display: flex;
+    align-items: center; gap: 6px; z-index: 1; opacity: 0.82; }
   #total { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
-  .bars { display: none; align-items: flex-end; gap: 2px; height: 14px; }
-  .bars.on { display: flex; }
+  .bars { position: absolute; display: flex; align-items: flex-end; gap: 2px; height: 14px; }
   .bars span { width: 3px; height: 14px; border-radius: 1.5px; background: rgb(var(--tint)); transform-origin: 50% 100%;
-    transform: scaleY(0.24); }
+    transform: scaleY(0.24); transition: transform 220ms ease-out; }
   .bars.on span { animation: eq var(--d) ease-in-out infinite alternate; }
   .bars span:nth-child(1) { --d: 0.62s; --lo: 0.3; }
   .bars span:nth-child(2) { --d: 0.48s; --lo: 0.5; animation-delay: -0.2s; }
@@ -26,45 +29,41 @@
   @keyframes eq { from { transform: scaleY(var(--lo)); } to { transform: scaleY(1); } }
   @media (prefers-reduced-motion: reduce) { .bars.on span { animation: none; transform: scaleY(0.6); } }
 
-  .art { position: absolute; overflow: hidden; background: #161616; }
-  .art img { display: none; width: 100%; height: 100%; object-fit: cover; }
-  .art.has img { display: block; }
+  /* Right ear: the last 60 pt of the pill. */
+  #earBars { left: calc(var(--ear-r) + 33px); top: calc((var(--pill-h) - 14px) / 2); opacity: 0; }
+  #panel.video #earBars { left: calc(var(--ear-r) + 37px); }
+  #earPause { position: absolute; left: calc(var(--ear-r) + 35px); top: calc((var(--pill-h) - 12px) / 2); color: #8b8b8b;
+    opacity: 0; }
+  #panel.video #earPause { left: calc(var(--ear-r) + 39px); }
 
-  /* Right ear: the last 60 pt of the collapsed panel. */
-  #earMedia { display: none; position: absolute; right: 0; top: 0; width: 60px; height: 32px; z-index: 1; }
-  #earMedia.on { display: block; }
-  body.open #earMedia { display: none; }
-  #earArt { left: 8px; top: 7px; width: 18px; height: 18px; border-radius: 4px; }
-  #panel.video #earArt { left: 6px; top: 8.5px; width: 26px; height: 15px; border-radius: 3px; }
-  #earMedia.paused #earArt { opacity: 0.6; }
-  #earBars { position: absolute; left: 33px; top: 9px; }
-  #panel.video #earBars { left: 37px; }
-  #earPause { display: none; position: absolute; left: 35px; top: 10px; color: #8b8b8b; }
-  #panel.video #earPause { left: 39px; }
-  #earMedia.paused #earPause { display: block; }
+  /* One artwork for the ear, the banner and the card, moved by transform. */
+  #art { position: absolute; left: 0; top: 0; width: 64px; height: 64px; border-radius: 13px; overflow: hidden;
+    transform-origin: 0 0; background: #161616; opacity: 0; }
+  #panel.video #art { width: 112px; height: 63px; border-radius: 8px; }
+  #art .layer { position: absolute; inset: 0; background-size: cover; background-position: center; opacity: 0; }
+  #art::after { content: ""; position: absolute; inset: 0; border-radius: inherit;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09); pointer-events: none; }
+  .ph { position: absolute; inset: 0; }
+  #art.has .ph { display: none; }
+  .ph::after { content: ""; position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px;
+    border-radius: 50%; box-shadow: inset 0 0 0 2px #2c2c2c; }
+  .ph::before { content: ""; position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
+    border-radius: 50%; background: #2c2c2c; }
 
-  /* Expanded music block, always there while open. */
-  #music { display: none; position: absolute; inset: 0; }
-  body.open #music { display: block; }
+  /* Expanded: the music block and the session section, positioned from the open panel's top-left. */
+  #content { position: absolute; left: var(--content-l); top: 0; width: var(--open-w); height: var(--open-h); opacity: 0;
+    transform: translateY(4px); pointer-events: none; }
+  #music { position: absolute; inset: 0; }
   #glow { display: none; position: absolute; left: -110px; top: 34px; width: 340px; height: 200px;
     background: radial-gradient(170px 125px at 158px 42px, rgba(var(--tint), 0.34), rgba(var(--tint), 0.08) 60%, transparent);
     -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 30px); mask-image: linear-gradient(to bottom, transparent 0, #000 30px); }
   #panel.video #glow { background: radial-gradient(170px 125px at 182px 41.5px, rgba(var(--tint), 0.34), rgba(var(--tint), 0.08) 60%, transparent); }
   #music.lit #glow { display: block; }
-  #cardArt { left: 16px; top: 44px; width: 64px; height: 64px; border-radius: 13px; }
-  #panel.video #cardArt { width: 112px; height: 63px; border-radius: 8px; }
-  #cardArt::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09); }
-  .ph { position: absolute; inset: 0; }
-  #cardArt.has .ph { display: none; }
-  .ph::after { content: ""; position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px;
-    border-radius: 50%; box-shadow: inset 0 0 0 2px #2c2c2c; }
-  .ph::before { content: ""; position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
-    border-radius: 50%; background: #2c2c2c; }
   .meta { position: absolute; left: 92px; top: 46px; width: 262px; }
   #panel.video .meta { left: 142px; width: 232px; }
   .title { font-weight: 600; font-size: 14px; line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     letter-spacing: -0.01em; }
-  #panel.video .title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  #panel.video #content .title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
     font-size: 13.5px; line-height: 17px; }
   .artist { font-weight: 500; font-size: 12px; line-height: 16px; color: rgba(245, 245, 245, 0.62); white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
@@ -74,7 +73,8 @@
   .source i { width: 5px; height: 5px; border-radius: 50%; background: rgb(var(--tint)); flex: none; }
   #cardSource { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .meta.empty .source { display: none; }
-  #cardBars { position: absolute; left: 384px; top: 50px; }
+  #cardBars { display: none; left: 384px; top: 50px; }
+  #cardBars.on { display: flex; }
   .scrub { display: none; position: absolute; left: 16px; top: 116px; width: 388px; height: 16px; grid-template-columns: 46px 1fr 46px;
     align-items: center; gap: 6px; font-weight: 500; font-size: 11px; line-height: 1; color: #8b8b8b; font-variant-numeric: tabular-nums; }
   #music.has .scrub { display: grid; }
@@ -98,10 +98,7 @@
   .cb .i-play, .cb.paused .i-pause { display: none; }
   .cb.paused .i-play { display: block; }
   .cb:active:not(:disabled) { transform: scale(0.92); }
-
-  /* Expanded session section. */
-  .sess { display: none; position: absolute; left: 16px; top: 196px; width: 388px; }
-  body.open .sess { display: block; }
+  .sess { position: absolute; left: 16px; top: 196px; width: 388px; }
   .sess-h { display: flex; justify-content: space-between; height: 18px; font-weight: 600; font-size: 11px; line-height: 18px; color: #8b8b8b; }
   .sess-h .att { color: #f5a623; }
   #rows { margin-top: 4px; }
@@ -110,35 +107,53 @@
   .srow .st { flex: none; max-width: 170px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #8b8b8b; }
   .srow .st.att { color: #f5a623; }
   .srow.more { color: #8b8b8b; }
+
+  /* A short look at what changed, shown under the notch while the panel is closed. */
+  #banner { position: absolute; inset: 0; opacity: 0; transform: translateY(4px); pointer-events: none; }
+  #bIcon { position: absolute; left: calc(var(--banner-l) + 16px); top: calc(var(--pill-h) + 4px); width: 34px; height: 34px;
+    border-radius: 9px; background: #171717; display: grid; place-items: center; opacity: 0; }
+  #bIcon .dot { width: 10px; height: 10px; }
+  #bText { position: absolute; left: calc(var(--banner-l) + 62px); top: calc(var(--pill-h) + 5px); width: 262px; }
+  #panel.video #bText { left: calc(var(--banner-l) + 88px); width: 246px; }
+  #bTitle { font: 600 13px/17px -apple-system, system-ui, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #bSub { margin-top: 1px; font: 500 11.5px/15px -apple-system, system-ui, sans-serif; color: rgba(245, 245, 245, 0.62);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #bannerBars { left: calc(var(--banner-l) + 344px); top: calc(var(--pill-h) + 14px); opacity: 0; }
 </style>
 </head>
-<body>
-  <div id="panel">
-    <div class="lear"><span class="dot" id="dot"></span><span id="total">0</span></div>
-    <div id="earMedia">
-      <div class="art" id="earArt"><img alt=""></div>
+<body data-phase="collapsed">
+  <div id="stage">
+    <div id="panel">
+      <div id="content">
+        <div id="music">
+          <div id="glow"></div>
+          <div class="meta" id="meta">
+            <div class="title" id="cardTitle"></div>
+            <div class="artist" id="cardArtist"></div>
+            <div class="source"><i></i><span id="cardSource"></span></div>
+          </div>
+          <div class="bars" id="cardBars"><span></span><span></span><span></span><span></span></div>
+          <div class="scrub"><span id="tEl"></span><div id="bar"><div class="line"><div id="fill"></div></div><div id="knob"></div></div><span id="tRem"></span></div>
+          <div class="controls">
+            <button type="button" class="cb" id="btnPrev" aria-label="Previous track"><svg viewBox="0 0 16 16" width="16" height="16"><rect x="2" y="3" width="2" height="10" rx=".8" fill="currentColor"/><path d="M13.4 3.3v9.4c0 .45-.5.72-.88.47L5.3 8.47a.56.56 0 0 1 0-.94l7.22-4.7c.38-.25.88.02.88.47z" fill="currentColor"/></svg></button>
+            <button type="button" class="cb main" id="btnMain" aria-label="Pause"><svg class="i-pause" viewBox="0 0 16 16" width="16" height="16"><rect x="3.6" y="2.8" width="3" height="10.4" rx="1" fill="currentColor"/><rect x="9.4" y="2.8" width="3" height="10.4" rx="1" fill="currentColor"/></svg><svg class="i-play" viewBox="0 0 16 16" width="16" height="16"><path d="M4.4 2.9v10.2c0 .5.55.8.97.53l7.85-5.1a.62.62 0 0 0 0-1.06L5.37 2.37c-.42-.27-.97.03-.97.53z" fill="currentColor"/></svg></button>
+            <button type="button" class="cb" id="btnNext" aria-label="Next track"><svg viewBox="0 0 16 16" width="16" height="16"><path d="M2.6 3.3v9.4c0 .45.5.72.88.47l7.22-4.7a.56.56 0 0 0 0-.94L3.48 2.83c-.38-.25-.88.02-.88.47z" fill="currentColor"/><rect x="12" y="3" width="2" height="10" rx=".8" fill="currentColor"/></svg></button>
+          </div>
+        </div>
+        <div class="sess" id="sess">
+          <div class="sess-h"><span>Claude Code</span><span id="sessHead"></span></div>
+          <div id="rows"></div>
+        </div>
+      </div>
+      <div id="banner">
+        <div id="bIcon"><span class="dot"></span></div>
+        <div id="bText"><div id="bTitle"></div><div id="bSub"></div></div>
+        <div class="bars" id="bannerBars"><span></span><span></span><span></span><span></span></div>
+      </div>
+      <div class="lear" id="lear"><span class="dot" id="dot"></span><span id="total">0</span></div>
       <div class="bars" id="earBars"><span></span><span></span><span></span><span></span></div>
-      <svg id="earPause" viewBox="0 0 12 12" width="12" height="12"><rect x="2.5" y="1.5" width="2.4" height="9" rx=".9" fill="currentColor"/><rect x="7.1" y="1.5" width="2.4" height="9" rx=".9" fill="currentColor"/></svg>
-    </div>
-    <div id="music">
-      <div id="glow"></div>
-      <div class="art" id="cardArt"><img alt=""><div class="ph"></div></div>
-      <div class="meta" id="meta">
-        <div class="title" id="cardTitle"></div>
-        <div class="artist" id="cardArtist"></div>
-        <div class="source"><i></i><span id="cardSource"></span></div>
-      </div>
-      <div class="bars" id="cardBars"><span></span><span></span><span></span><span></span></div>
-      <div class="scrub"><span id="tEl"></span><div id="bar"><div class="line"><div id="fill"></div></div><div id="knob"></div></div><span id="tRem"></span></div>
-      <div class="controls">
-        <button type="button" class="cb" id="btnPrev" aria-label="Previous track"><svg viewBox="0 0 16 16" width="16" height="16"><rect x="2" y="3" width="2" height="10" rx=".8" fill="currentColor"/><path d="M13.4 3.3v9.4c0 .45-.5.72-.88.47L5.3 8.47a.56.56 0 0 1 0-.94l7.22-4.7c.38-.25.88.02.88.47z" fill="currentColor"/></svg></button>
-        <button type="button" class="cb main" id="btnMain" aria-label="Pause"><svg class="i-pause" viewBox="0 0 16 16" width="16" height="16"><rect x="3.6" y="2.8" width="3" height="10.4" rx="1" fill="currentColor"/><rect x="9.4" y="2.8" width="3" height="10.4" rx="1" fill="currentColor"/></svg><svg class="i-play" viewBox="0 0 16 16" width="16" height="16"><path d="M4.4 2.9v10.2c0 .5.55.8.97.53l7.85-5.1a.62.62 0 0 0 0-1.06L5.37 2.37c-.42-.27-.97.03-.97.53z" fill="currentColor"/></svg></button>
-        <button type="button" class="cb" id="btnNext" aria-label="Next track"><svg viewBox="0 0 16 16" width="16" height="16"><path d="M2.6 3.3v9.4c0 .45.5.72.88.47l7.22-4.7a.56.56 0 0 0 0-.94L3.48 2.83c-.38-.25-.88.02-.88.47z" fill="currentColor"/><rect x="12" y="3" width="2" height="10" rx=".8" fill="currentColor"/></svg></button>
-      </div>
-    </div>
-    <div class="sess" id="sess">
-      <div class="sess-h"><span>Claude Code</span><span id="sessHead"></span></div>
-      <div id="rows"></div>
+      <svg id="earPause" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><rect x="2.5" y="1.5" width="2.4" height="9" rx=".9" fill="currentColor"/><rect x="7.1" y="1.5" width="2.4" height="9" rx=".9" fill="currentColor"/></svg>
+      <div id="art"><div class="ph"></div><div class="layer"></div><div class="layer"></div></div>
     </div>
   </div>
 <script>
@@ -151,6 +166,24 @@
     needs_permission: (detail) => detail ? 'needs permission: ' + detail : 'needs permission',
   };
   const $ = (id) => document.getElementById(id);
+  const flush = (el) => void el.getBoundingClientRect();
+  const stage = $('stage'), panel = $('panel'), content = $('content'), banner = $('banner'), artEl = $('art');
+  const artLayers = [...artEl.querySelectorAll('.layer')];
+
+  // ---- motion (CONTRACT.md section 8, ported from the approved prototype) ----
+  const SPRING = (() => {
+    const k = 380, c = 32, m = 1, w0 = Math.sqrt(k / m), z = c / (2 * Math.sqrt(k * m)), wd = w0 * Math.sqrt(1 - z * z), a = z * w0;
+    const x = (t) => 1 - Math.exp(-a * t) * (Math.cos(wd * t) + (a / wd) * Math.sin(wd * t));
+    const D = Math.log(Math.sqrt(1 + (a / wd) ** 2) / 0.005) / a, pts = [];
+    for (let i = 0; i < 40; i++) pts.push(i === 39 ? 1 : +x((i / 39) * D).toFixed(4));
+    return { ms: Math.round(D * 1000), css: `linear(${pts.join(', ')})` };
+  })();
+  const EASE = { peek: 'cubic-bezier(0.2, 0, 0, 1)', collapse: 'cubic-bezier(0.4, 0, 1, 1)' };
+  const RADIUS = { pill: 14, peek: 14, banner: 20, open: 22 };
+  const reducedQuery = matchMedia('(prefers-reduced-motion: reduce)');
+  let reduced = reducedQuery.matches;
+  let L = null; // the Layout from Rust
+
   // media: the latest the app sent. shown: what the card draws, which is media plus any optimistic change.
   let media = null;
   let shown = null;
@@ -159,34 +192,126 @@
   let pending = null;
   let pendingSeq = 0;
   let pendingTimer = null;
-  function fmt(sec) {
-    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), r = sec % 60;
-    const ss = String(r).padStart(2, '0');
-    return h > 0 ? h + ':' + String(m).padStart(2, '0') + ':' + ss : m + ':' + ss;
+  let wide = false;
+
+  function applyVars() {
+    const s = stage.style, pillL = (L.stage.width - L.pill.width) / 2;
+    s.setProperty('--stage-w', L.stage.width + 'px');
+    s.setProperty('--stage-h', L.stage.height + 'px');
+    s.setProperty('--pill-h', L.pill.height + 'px');
+    s.setProperty('--pill-l', pillL + 'px');
+    s.setProperty('--ear-r', pillL + L.pill.width - L.ear + 'px');
+    s.setProperty('--banner-l', (L.stage.width - L.banner.width) / 2 + 'px');
+    s.setProperty('--content-l', (L.stage.width - L.open.width) / 2 + 'px');
+    s.setProperty('--open-w', L.open.width + 'px');
+    s.setProperty('--open-h', L.open.height + 'px');
   }
-  function elapsedMs(t) {
-    let e = t.elapsed_ms ?? 0;
-    if (t.playing && t.elapsed_at_ms != null) e += Math.max(0, Date.now() - t.elapsed_at_ms);
-    return t.duration_ms != null ? Math.min(e, t.duration_ms) : e;
+
+  // ---- shape, layers, art ----
+  let shapeAt = 'pill';
+  function clipCSS(name) {
+    const r = L[name], side = (L.stage.width - r.width) / 2, bottom = L.stage.height - r.height, rad = RADIUS[name];
+    return `inset(0px ${side}px ${bottom}px ${side}px round 0px 0px ${rad}px ${rad}px)`;
   }
-  function tick() {
+  function clip(name, dur = 0, ease = 'linear') {
+    shapeAt = name;
+    const d = reduced ? 0 : dur;
+    panel.style.transition = d ? `clip-path ${d}ms ${ease}` : 'none';
+    panel.style.clipPath = clipCSS(name);
+    if (!d) { flush(panel); settleWindow(); }
+  }
+  function layerIn(el) {
+    el.style.pointerEvents = 'auto';
+    if (reduced) { el.style.transition = 'opacity 120ms linear'; el.style.opacity = 1; el.style.transform = 'none'; return; }
+    el.style.transition = 'opacity 140ms ease-out 80ms, transform 140ms ease-out 80ms';
+    el.style.opacity = 1;
+    el.style.transform = 'translateY(0)';
+  }
+  function layerOut(el) {
+    el.style.pointerEvents = 'none';
+    el.style.transition = `opacity ${reduced ? 120 : 80}ms linear`;
+    el.style.opacity = 0;
+  }
+  function layerRest(el) {
+    el.style.transition = 'none';
+    el.style.opacity = 0;
+    el.style.transform = reduced ? 'none' : 'translateY(4px)';
+    el.style.pointerEvents = 'none';
+  }
+  function earsBright(on) {
+    const el = $('lear');
+    el.style.transition = `opacity 120ms ${reduced ? 'linear' : EASE.peek}`;
+    el.style.opacity = on ? 1 : 0.82;
+  }
+
+  let artWhere = 'ear';
+  let artTimer = null; // the reduced-motion art fade, between its out and in halves
+  function artAt(where) {
+    const pillL = (L.stage.width - L.pill.width) / 2, r = pillL + L.pill.width - L.ear;
+    if (where === 'ear') return wide ? { x: r + 6, y: (L.pill.height - 15) / 2, s: 26 / 112 } : { x: r + 8, y: (L.pill.height - 18) / 2, s: 18 / 64 };
+    if (where === 'banner') return { x: (L.stage.width - L.banner.width) / 2 + 16, y: L.pill.height + 4, s: wide ? 60 / 112 : 34 / 64 };
+    return { x: (L.stage.width - L.open.width) / 2 + 16, y: 44, s: 1 };
+  }
+  function artTf(where) { const a = artAt(where); return `translate(${a.x}px, ${a.y}px) scale(${a.s})`; }
+  // In the ear a paused cover dims, so the pause glyph beside it reads as the state. The card shows the placeholder
+  // without a track.
+  function artVis(where) {
     const t = shown && shown.track;
-    if (!t) return;
-    const known = t.duration_ms != null;
-    const posMs = drag !== null && known ? drag * t.duration_ms : elapsedMs(t);
-    const el = Math.floor(posMs / 1000);
-    $('tEl').textContent = fmt(el);
-    if (known) {
-      const dur = Math.floor(t.duration_ms / 1000);
-      const frac = t.duration_ms > 0 ? Math.min(1, posMs / t.duration_ms) : 0;
-      $('tRem').textContent = '-' + fmt(Math.max(0, dur - el));
-      $('fill').style.transform = 'scaleX(' + frac + ')';
-      $('knob').style.left = frac * 100 + '%';
-    } else {
-      $('tRem').textContent = '';
-      $('fill').style.transform = 'scaleX(0)';
+    if (where !== 'ear') return 1;
+    return !t ? 0 : t.playing ? 1 : 0.6;
+  }
+  function moveArt(where, dur = 0, ease = 'linear') {
+    artWhere = where;
+    clearTimeout(artTimer);
+    artTimer = null;
+    if (!L) return;
+    if (reduced && dur) {
+      artEl.style.transition = 'opacity 60ms linear';
+      artEl.style.opacity = 0;
+      artTimer = setTimeout(() => {
+        artTimer = null;
+        artEl.style.transition = 'none';
+        artEl.style.transform = artTf(where);
+        flush(artEl);
+        artEl.style.transition = 'opacity 60ms linear';
+        artEl.style.opacity = artVis(where);
+        syncEarGlyphs();
+      }, 60);
+      return;
+    }
+    artEl.style.transition = dur ? `transform ${dur}ms ${ease}, opacity ${Math.min(dur, 200)}ms linear` : 'none';
+    artEl.style.transform = artTf(where);
+    artEl.style.opacity = artVis(where);
+    if (!dur) flush(artEl);
+    syncEarGlyphs();
+  }
+  let earKey = null;
+  function syncEarGlyphs() {
+    const t = shown && shown.track;
+    const key = !(t && artWhere === 'ear') ? 'off' : t.playing ? 'bars' : 'pause';
+    if (key === earKey) return;
+    const appearing = earKey === 'off' || earKey === null;
+    earKey = key;
+    const d = reduced ? 120 : 160, delay = appearing && !reduced ? 120 : 0;
+    for (const [id, on] of [['earBars', key === 'bars'], ['earPause', key === 'pause']]) {
+      const el = $(id);
+      el.style.transition = `opacity ${d}ms linear ${on ? delay : 0}ms`;
+      el.style.opacity = on ? 1 : 0;
     }
   }
+  // Fades the art to what its place calls for. While the art is moving, only the value changes: replacing the
+  // transition list would cancel the running transform transition and make the art jump.
+  function syncArtOpacity() {
+    if (!L || artTimer) return;
+    const v = String(artVis(artWhere));
+    if (artEl.style.opacity === v) return;
+    if (!artEl.getAnimations().some((a) => a.transitionProperty === 'transform' && a.playState === 'running')) {
+      artEl.style.transition = `opacity ${reduced ? 120 : 160}ms linear`;
+    }
+    artEl.style.opacity = v;
+  }
+
+  // ---- tint (CONTRACT.md section 7) ----
   const WHITE = '245, 245, 245';
   let artUrl = null; // the artwork the page shows now
   function setTint(rgb) {
@@ -216,7 +341,7 @@
     }
   }
   // A remote artwork's tint is read from a separate CORS image, so the visible artwork never waits on it or fails
-  // with it. A data URL needs no second load: showArt reads the visible image.
+  // with it. A data URL needs no second load: showArt reads the image it loads anyway.
   function loadTint(url) {
     const probe = new Image();
     probe.crossOrigin = 'anonymous';
@@ -224,41 +349,241 @@
     probe.onerror = () => { if (artUrl === url) setTint(WHITE); };
     probe.src = url;
   }
+  const cssUrl = (url) => `url("${url.replace(/["\\\n\r]/g, (c) => '\\' + c.charCodeAt(0).toString(16) + ' ')}")`;
+  let artIdx = 0;
+  // Crossfades the art's two layers to a new artwork, and learns its shape and tint from one load of it.
   function showArt(url) {
     if (url === artUrl) return;
     artUrl = url;
-    $('panel').classList.remove('video');
     $('music').classList.toggle('lit', !!url);
     if (!url) setTint(WHITE);
-    for (const box of [$('earArt'), $('cardArt')]) {
-      const img = box.querySelector('img');
-      box.classList.toggle('has', !!url);
-      img.onload = img.onerror = null;
-      if (url) img.src = url; else img.removeAttribute('src');
-    }
-    if (!url) return;
+    const old = artLayers[artIdx], next = artLayers[1 - artIdx];
+    artIdx = 1 - artIdx;
+    next.style.backgroundImage = url ? cssUrl(url) : '';
+    const d = reduced ? 120 : 160;
+    old.style.transition = next.style.transition = `opacity ${d}ms linear`;
+    next.style.opacity = 1;
+    old.style.opacity = 0;
+    artEl.classList.toggle('has', !!url);
+    if (!url) return setWide(false);
     const local = url.startsWith('data:');
-    const img = $('cardArt').querySelector('img');
+    const img = new Image();
     img.onload = () => {
       if (artUrl !== url) return;
-      $('panel').classList.toggle('video', img.naturalWidth >= 1.3 * img.naturalHeight);
+      setWide(img.naturalWidth >= 1.3 * img.naturalHeight);
       if (local) setTint(averageTint(img));
     };
     img.onerror = () => {
       if (artUrl !== url) return;
-      for (const box of [$('earArt'), $('cardArt')]) box.classList.remove('has');
+      next.style.backgroundImage = '';
+      artEl.classList.remove('has');
       $('music').classList.remove('lit');
       setTint(WHITE);
     };
+    img.src = url;
     if (!local) loadTint(url);
+  }
+  function setWide(on) {
+    if (on === wide) return;
+    wide = on;
+    panel.classList.toggle('video', on);
+    if (L && !artTimer) artEl.style.transform = artTf(artWhere);
+    if (bannerSong) $('bSub').textContent = songSub(bannerSong);
+  }
+
+  // ---- window (Rust sizes it; the page says when) ----
+  // winMode: the mode the page wants. placedMode: the mode of the last surface call Rust finished placing.
+  // modeCall: the call that last changed the mode, which is the one that grows the window.
+  let winMode = 'pill', placedMode = 'pill', sentMode = 'pill', sentSurface = '';
+  let surfaceCall = Promise.resolve(), modeCall = surfaceCall;
+  const HIT = { peek: 'peek', expanded: 'open', banner: 'banner' };
+  // A rejected call is sent again on the next change.
+  function sendSurface() {
+    const hit = HIT[phase] || 'pill', key = winMode + ' ' + hit;
+    if (key === sentSurface) return;
+    sentSurface = key;
+    const mode = winMode;
+    surfaceCall = window.__TAURI__.core.invoke('surface', { window: mode, hit })
+      .then(() => { placedMode = mode; }, () => { if (sentSurface === key) sentSurface = ''; });
+    if (mode !== sentMode) modeCall = surfaceCall;
+    sentMode = mode;
+  }
+  const clipRunning = () => panel.getAnimations().some((a) => a.transitionProperty === 'clip-path' && a.playState === 'running');
+  // The window shrinks to the pill only once the shape is back, so no transparent window is left over the menu bar.
+  function settleWindow() {
+    if (phase === 'collapsed' && winMode !== 'pill' && !clipRunning()) winMode = 'pill';
+    sendSurface();
+  }
+  panel.addEventListener('transitionend', (e) => { if (e.target === panel && e.propertyName === 'clip-path') settleWindow(); });
+
+  // ---- phases ----
+  // Each phase has at most one pending step, so one timer holds it and every transition replaces it.
+  let phase = 'collapsed', epoch = 0, phaseTimer = null;
+  function later(ms, fn) {
+    clearTimeout(phaseTimer);
+    phaseTimer = setTimeout(() => { phaseTimer = null; fn(); }, ms);
+  }
+  function cancelTimer() {
+    clearTimeout(phaseTimer);
+    phaseTimer = null;
+  }
+  function setPhase(p) {
+    phase = p;
+    epoch++;
+    document.body.dataset.phase = p;
+    settleWindow();
+    syncClock();
+  }
+  // Enters phase p with window `mode`. Until Rust has placed that mode (this call, or one still in flight), `start`
+  // waits for the placement and one frame, and is dropped if the phase changes meanwhile.
+  function enter(p, mode, start) {
+    const grows = mode !== placedMode;
+    winMode = mode;
+    setPhase(p);
+    const at = epoch;
+    if (!grows) return start();
+    modeCall.then(() => requestAnimationFrame(() => { if (epoch === at) start(); }));
+  }
+  function onEnter() {
+    if (!L) return;
+    if (phase === 'collapsed' || phase === 'collapsing') { setPhase('intent'); later(80, toPeek); }
+    else if (phase === 'banner') later(80, toExpand);
+    else if (phase === 'peek') toExpand();
+    else if (phase === 'expanded') cancelTimer();
+  }
+  function onLeave() {
+    if (!L) return;
+    if (phase === 'intent') {
+      cancelTimer();
+      if (shapeAt === 'pill') { layerRest(content); layerRest(banner); setPhase('collapsed'); } else collapse();
+    } else if (phase === 'banner') later(250, closeBanner);
+    else if (phase === 'peek') later(250, unpeek);
+    else if (phase === 'expanded') later(250, collapse);
+  }
+  // A start that waited for the window keeps any timer a hover set meanwhile (the leave grace, or the expand).
+  function toPeek() {
+    enter('peek', 'open', () => {
+      earsBright(true);
+      clip('peek', 120, EASE.peek);
+      if (!phaseTimer) later(120, toExpand);
+    });
+  }
+  // Also the way out when a collapse was interrupted, so it puts the art and layers back at rest.
+  function unpeek() {
+    earsBright(false);
+    clip('pill', 120, EASE.peek);
+    moveArt('ear', 120, EASE.peek);
+    layerRest(content);
+    layerRest(banner);
+    setPhase('collapsed');
+  }
+  function toExpand() {
+    cancelTimer();
+    if (phase === 'banner') layerOut(banner); else layerRest(banner);
+    bannerSong = null;
+    enter('expanded', 'open', () => {
+      earsBright(true);
+      clip('open', SPRING.ms, SPRING.css);
+      moveArt('card', SPRING.ms, SPRING.css);
+      layerIn(content);
+    });
+  }
+  function closeTo(after) {
+    later(reduced ? 120 : 80, () => {
+      clip('pill', 200, EASE.collapse);
+      moveArt('ear', 200, EASE.collapse);
+      earsBright(false);
+      later(reduced ? 120 : 200, () => { after(); setPhase('collapsed'); });
+    });
+  }
+  function collapse() {
+    setPhase('collapsing');
+    layerOut(content);
+    layerOut(banner);
+    closeTo(() => { layerRest(content); layerRest(banner); });
+  }
+  function closeBanner() {
+    bannerSong = null;
+    setPhase('collapsing');
+    layerOut(banner);
+    closeTo(() => layerRest(banner));
+  }
+  let bannerSong = null; // the track a song banner shows, so its subtitle can follow the artwork's shape
+  function songSub(t) {
+    if (!t.artist) return t.app;
+    return t.artist + ', ' + (wide ? 'in ' : 'on ') + t.app;
+  }
+  function showBanner(kind, data) {
+    if (phase !== 'collapsed' || !L) return;
+    const icon = $('bIcon'), bars = $('bannerBars'), song = kind === 'song';
+    bannerSong = song ? data : null;
+    $('bTitle').textContent = song ? data.title : data.label;
+    $('bSub').textContent = song ? songSub(data) : STATUS_TEXT[data.status](data.detail);
+    if (!song) icon.querySelector('.dot').className = 'dot' + dotClass(data.status);
+    icon.style.opacity = song ? 0 : 1;
+    bars.style.opacity = song ? 1 : 0;
+    enter('banner', 'banner', () => {
+      if (song) moveArt('banner', SPRING.ms, SPRING.css);
+      clip('banner', SPRING.ms, SPRING.css);
+      layerIn(banner);
+      if (!phaseTimer) later(2600, closeBanner);
+    });
+  }
+  // Puts everything where the phase says, with no animation.
+  function syncInstant() {
+    clearTimeout(artTimer);
+    artTimer = null;
+    const open = phase === 'expanded';
+    clip(open ? 'open' : phase === 'banner' ? 'banner' : phase === 'peek' ? 'peek' : 'pill');
+    if (open) { content.style.transition = 'none'; content.style.opacity = 1; content.style.transform = 'none'; content.style.pointerEvents = 'auto'; }
+    else layerRest(content);
+    if (phase !== 'banner') layerRest(banner);
+    moveArt(open ? 'card' : phase === 'banner' && artWhere === 'banner' ? 'banner' : 'ear');
+  }
+  function applyLayout(next) {
+    const prev = L;
+    L = next;
+    applyVars();
+    if (!prev) { stage.classList.add('ready'); syncInstant(); return; }
+    const moved = prev.stage.width !== next.stage.width || prev.stage.height !== next.stage.height
+      || prev.pill.width !== next.pill.width || prev.pill.height !== next.pill.height;
+    if (moved) { clip(shapeAt); if (!artTimer) moveArt(artWhere); }
+    else if (phase === 'expanded' && prev.open.height !== next.open.height) clip('open', SPRING.ms, SPRING.css);
+  }
+
+  // ---- media and sessions ----
+  function fmt(sec) {
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), r = sec % 60;
+    const ss = String(r).padStart(2, '0');
+    return h > 0 ? h + ':' + String(m).padStart(2, '0') + ':' + ss : m + ':' + ss;
+  }
+  function elapsedMs(t) {
+    let e = t.elapsed_ms ?? 0;
+    if (t.playing && t.elapsed_at_ms != null) e += Math.max(0, Date.now() - t.elapsed_at_ms);
+    return t.duration_ms != null ? Math.min(e, t.duration_ms) : e;
+  }
+  function tick() {
+    const t = shown && shown.track;
+    if (!t) return;
+    const known = t.duration_ms != null;
+    const posMs = drag !== null && known ? drag * t.duration_ms : elapsedMs(t);
+    const el = Math.floor(posMs / 1000);
+    $('tEl').textContent = fmt(el);
+    if (known) {
+      const dur = Math.floor(t.duration_ms / 1000);
+      const frac = t.duration_ms > 0 ? Math.min(1, posMs / t.duration_ms) : 0;
+      $('tRem').textContent = '-' + fmt(Math.max(0, dur - el));
+      $('fill').style.transform = 'scaleX(' + frac + ')';
+      $('knob').style.left = frac * 100 + '%';
+    } else {
+      $('tRem').textContent = '';
+      $('fill').style.transform = 'scaleX(0)';
+    }
   }
   function renderMedia() {
     const t = shown && shown.track;
     const playing = !!t && t.playing;
-    $('earMedia').classList.toggle('on', !!t);
-    $('earMedia').classList.toggle('paused', !!t && !t.playing);
-    $('earBars').classList.toggle('on', playing);
-    $('cardBars').classList.toggle('on', playing);
+    for (const id of ['earBars', 'cardBars', 'bannerBars']) $(id).classList.toggle('on', playing);
     $('music').classList.toggle('has', !!t);
     $('meta').classList.toggle('empty', !t);
     showArt(t ? t.artwork || null : null);
@@ -277,12 +602,14 @@
     for (const id of ['btnPrev', 'btnMain', 'btnNext']) $(id).disabled = !t;
     $('btnMain').classList.toggle('paused', !playing);
     $('btnMain').setAttribute('aria-label', playing ? 'Pause' : 'Play');
+    syncArtOpacity();
+    syncEarGlyphs();
     syncClock();
   }
   let timer = null;
   function syncClock() {
     const t = shown && shown.track;
-    const want = document.body.classList.contains('open') && !!t && t.playing;
+    const want = phase === 'expanded' && !!t && t.playing;
     if (want && timer === null) timer = setInterval(tick, 250);
     if (!want && timer !== null) { clearInterval(timer); timer = null; }
     tick();
@@ -321,14 +648,16 @@
     if (s.total === 0) rows.push(mutedRow('No Claude Code sessions'));
     $('rows').replaceChildren(...rows);
   }
-  render({ rows: [], total: 0, attention: 0, working: 0 });
-  renderMedia();
-  window.__TAURI__.event.listen('hover', (e) => {
-    document.body.classList.toggle('open', e.payload);
-    if (!e.payload && drag !== null) { endDrag(); tick(); }
-    syncClock();
-  });
-  window.__TAURI__.event.listen('sessions', (e) => render(e.payload));
+  const BANNER_STATUS = new Set(['needs_permission', 'needs_input', 'error', 'done']);
+  let lastRows = null; // label -> status from the previous payload; null before the first
+  function onSessions(s) {
+    render(s);
+    const prev = lastRows;
+    lastRows = new Map(s.rows.map((r) => [r.label, r.status]));
+    if (!prev) return;
+    const changed = s.rows.find((r) => BANNER_STATUS.has(r.status) && prev.has(r.label) && prev.get(r.label) !== r.status);
+    if (changed) showBanner('session', changed);
+  }
   // Ends the pending change, if any, and shows the latest media the app sent.
   function settle() {
     clearTimeout(pendingTimer);
@@ -342,11 +671,17 @@
       ? m.track.playing === was.playing
       : Math.abs(elapsedMs(m.track) - elapsedMs(was)) <= 2000;
   }
+  let lastSong = null;
   function onMedia(m) {
     media = m;
     const sameTrack = pending && m.track && shown.track && m.track.title === shown.track.title;
-    if (pending && sameTrack && !agrees(m)) return;
-    settle();
+    if (!(pending && sameTrack && !agrees(m))) settle();
+    const t = m.track;
+    if (!t) return;
+    const song = [t.title, t.artist || '', t.app].join('\n');
+    const changed = lastSong !== null && song !== lastSong;
+    lastSong = song;
+    if (changed) showBanner('song', t);
   }
   function setPending(kind) {
     clearTimeout(pendingTimer);
@@ -411,9 +746,26 @@
     if (t && t.duration_ms != null) seekTo(Math.round(frac * t.duration_ms));
   });
   bar.addEventListener('pointercancel', () => { endDrag(); tick(); });
-  window.__TAURI__.event.listen('media', (e) => onMedia(e.payload));
-  window.__TAURI__.core.invoke('media').then((m) => { if (m) onMedia(m); });
-  window.__TAURI__.core.invoke('sessions').then((s) => { if (s) render(s); });
+
+  reducedQuery.addEventListener('change', (e) => { reduced = e.matches; if (L) syncInstant(); renderMedia(); });
+  render({ rows: [], total: 0, attention: 0, working: 0 });
+  renderMedia();
+  const tauri = window.__TAURI__;
+  tauri.event.listen('layout', (e) => applyLayout(e.payload));
+  tauri.event.listen('hover', (e) => {
+    if (e.payload) onEnter();
+    else {
+      onLeave();
+      if (drag !== null) { endDrag(); tick(); }
+    }
+  });
+  // A startup reply older than an event of its kind is ignored.
+  let mediaEvent = false, sessionsEvent = false;
+  tauri.event.listen('sessions', (e) => { sessionsEvent = true; onSessions(e.payload); });
+  tauri.event.listen('media', (e) => { mediaEvent = true; onMedia(e.payload); });
+  tauri.core.invoke('layout').then((l) => { if (l && !L) applyLayout(l); });
+  tauri.core.invoke('media').then((m) => { if (m && !mediaEvent) onMedia(m); });
+  tauri.core.invoke('sessions').then((s) => { if (s && !sessionsEvent) onSessions(s); });
 </script>
 </body>
 </html>
