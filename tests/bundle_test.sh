@@ -51,7 +51,7 @@ if [ -L "$ad/MediaRemoteAdapter.framework/Versions/Current" ]; then pass "framew
 if codesign --verify --strict "$app" 2>"$tmp/verify.err"; then pass "codesign --verify --strict"; else
   flunk "codesign --verify --strict"; cat "$tmp/verify.err"
 fi
-dv="$(codesign -dv "$app" 2>&1)"
+dv="$(codesign -dvv "$app" 2>&1)"
 if [ "$identity" = "-" ]; then
   skip "signature is not ad hoc (identity is -)"
   skip "Authority names the identity (identity is -)"
