@@ -172,19 +172,53 @@ The app calls it before each `read_dir`.
 - Refresh trace: when `$NOTCH_TRACE` is set and non-empty, every refresh first logs `refresh: <cause>` to stderr,
   where cause is `start` (the first refresh), `event` (a file event), `deadline` (the `next_wake` deadline) or
   `rescan`.
-- Hover: native cursor polling every 50 ms, emits `hover` (bool) when it changes. The cursor is "in" when it is inside
-  the hit rect, the shape the page last reported with `surface` (section 8), with these rules (`next_hover` in
-  `layout.rs`): it becomes in only on a poll where the cursor moved since the previous poll, so a shape growing under
-  a still cursor (a banner opening where the cursor rests) is not a hover; it becomes out on any poll where the cursor
-  is outside. A left-button press that the poll first sees
-  (`NSEvent::pressedMouseButtons() & 1` going from up to down) while the cursor is in a hit rect other than `pill`
-  is latched until the button is up again; while it is latched `hover` stays true even when the cursor leaves, so a
-  seek drag that overshoots the bar does not collapse the panel under the pointer. A press that starts anywhere else
-  (a window drag or a text selection passing over the notch) is never latched and changes nothing.
+- Hover: driven by events, with no timer. An `NSTrackingArea` on the panel's content view, options
+  `MouseEnteredAndExited | MouseMoved | ActiveAlways | EnabledDuringMouseDrag`, covers exactly the hit rect: the shape
+  the page last reported with `surface` (section 8), centered on the panel with its top edge at the panel's top. A
+  local event monitor for `LeftMouseDown | LeftMouseUp` sees presses on the panel. `hover` (bool) is emitted when the
+  state below changes, evaluated once per input (`Hover::step` in `hover.rs`):
+  - inputs: the area's `mouseEntered:`, `mouseMoved:` and `mouseExited:`, the monitor's down and up, and every
+    placement (`place`: startup, each `surface` call, each sessions refresh and so each rescan). The monitor runs
+    before AppKit dispatches the event; a down is applied there, an up on the next main run-loop pass
+    (`performSelectorOnMainThread:` with `waitUntilDone: false`), after the webview has passed the mouse-up on. So the
+    page gets `pointerup` before the `hover` out a release outside emits. Applied in the monitor, the out came first
+    and the page ended the seek drag without seeking (measured 2026-10-22: `tests/controls_test.sh` overshoot failed).
+  - over: `true` on entered, `false` on exited, and on a moved, a placement, a down or an up whether `hit_contains`
+    holds for `NSEvent::mouseLocation()` against the hit rect (a superset of AppKit's half-open rect, so a moved from
+    the current area always counts as over).
+  - moved: on entered or moved, whether the cursor differs from where it was at the previous entered, moved or
+    exited; `false` for any other input. So a shape growing under a still cursor (a banner opening where the cursor rests) is not a hover,
+    and moving within it afterwards is.
+  - in: `next_hover(was_in, over, moved)` (`layout.rs`): it becomes out on any input with over `false`.
+  - A press the monitor sees while the cursor is in and the hit rect is not `pill` is latched until the monitor's up
+    is applied; while it is latched `hover` stays true even when the cursor leaves, so a seek drag that overshoots the
+    bar does not collapse the panel under the pointer. No other input unlatches: `NSEvent::pressedMouseButtons()` is
+    the hardware state, already up before AppKit dispatches the mouse-up, so unlatching on it could still send the
+    out ahead of `pointerup`. As a net for an up the monitor never saw, the deferred up is scheduled by the second
+    placement in a row that finds the latch set and the left button up (`pressedMouseButtons() & 1 == 0`); a real
+    up unlatches before the next placement, so the net never runs ahead of one. A missed up lasts at most two
+    rescans (10 s). A press that starts anywhere
+    else (a window drag or a text selection passing over the notch) never reaches the monitor, is never latched and
+    changes nothing.
+  - An entered or exited whose `trackingArea` is not the current area (queued before a placement replaced it) is
+    applied as a moved, so it is judged against the current hit rect: it neither sets in outside the rect nor is
+    lost when the cursor came to rest inside it. A moved carries no area: `-[NSEvent trackingArea]` raises for any
+    other event type, and an Objective-C exception there aborts the app (measured 2026-10-22: the motion check's 1 pt
+    move crashed it).
+  - After every placement and every up, the area is replaced by one for the current hit rect and panel frame, added
+    with `AssumeInside` exactly when over was `true` at that input, so AppKit's idea of inside matches the state and
+    an area appearing under a still cursor sends no `mouseEntered:`. The rescan places the panel every 5 s, so a
+    state that drifted from the cursor (a missed exited) lasts at most 5 s; the poll corrected it within 50 ms.
+  Measured in a spike (2026-10-22, macOS 27, `NSPanel` with a `WKWebView` in an accessory app, Firefox frontmost):
+  the area fires entered, moved and exited while the panel is not key and the app is not active, and the frontmost
+  app does not change; a `CGWarpMouseCursorPosition` warp also fires entered and exited; the screen's top row counts
+  as inside; an area added under a still cursor without `AssumeInside` sends `mouseEntered:` at once and no
+  `mouseMoved:` for a following 1 pt move, while with it a 1 pt move sends `mouseMoved:`; a drag from the area to a
+  point outside it but inside the window sends no `mouseExited:`, which is why the area is replaced after every up.
 - Clicks: the panel is a native `NSPanel` created at startup with style mask `Borderless | NonactivatingPanel`, level,
   collection behavior and no shadow as above, a clear background and `opaque = false`. The Tauri window's content view
   (the webview) is moved into it, the Tauri window itself is never shown, and the webview is built with
-  `accept_first_mouse(true)`. Every frame read and set (placement, hover) is the panel's. After startup no code holds
+  `accept_first_mouse(true)`. Every frame read and set (placement, hover, the tracking area) is the panel's. After startup no code holds
   the Tauri `WebviewWindow`: the threads hold an `AppHandle` (for `emit` and `run_on_main_thread`), not the window. Effect: a click reaches the
   page on the first press, and the frontmost app does not change (the app is never activated). Measured on macOS 27
   (click spike, 2026-10-22): a plain window, a non-activating style mask on it, or swapping its class to an `NSPanel`
@@ -526,6 +560,31 @@ pub fn next_hover(was_in: bool, over: bool, moved: bool) -> bool;
 - `hit_contains`: the point (AppKit coordinates, y up) is inside the rect of `size` centered on `center_x` whose top
   edge is `top`: `|x - center_x| <= width / 2` and `top - height <= y <= top`, edges included.
 - `next_hover`: `false` when not `over`; else `was_in || moved` (section 3).
+
+### Hover (`src-tauri/src/hover.rs`, pure)
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Input { Entered, Moved, Exited, Down, Up, Placed }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hover { /* private: in, latched, the last value returned */ }
+
+impl Hover {
+    pub const fn new() -> Hover;
+    pub fn step(&mut self, input: Input, contains: bool, moved: bool, hit: Shape) -> Option<bool>;
+    pub fn latched(&self) -> bool;
+}
+```
+
+- `Hover::new()`: out, not latched, last value `false`. `latched()`: whether a press is latched now.
+- `step` applies one input (section 3). `contains`: `hit_contains` at the cursor; `moved`: the cursor differs from
+  where it was at the previous pointer input; `hit`: the current hit shape. In order:
+  1. over: `true` for `Entered`, `false` for `Exited`, else `contains`.
+  2. in = `next_hover(in, over, moved && input is Entered or Moved)`.
+  3. latch: `Down` while in and `hit != Pill` latches; `Up` unlatches; no other input changes it.
+  4. the value is `in || latched`. Returns `Some(value)` when it differs from the last value returned (or from
+     `false` before the first), else `None`.
 
 ### Bridge
 

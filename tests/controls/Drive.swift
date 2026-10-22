@@ -4,6 +4,7 @@
 //   drive access                    exit 0 when this process may post events, else exit 2
 //   drive cursor                    prints "<x> <y>"
 //   drive warp <x> <y>              moves the cursor without a click
+//   drive move <x> <y>              posts a real mouseMoved event at the point (needs Accessibility), no warp
 //   drive front                     prints "<pid> <bundle id>" of the frontmost app
 //   drive watch                     prints "watching", then one "activated <pid> <bundle id>" line per app activation
 //   drive hover <pid> [open height] moves onto the app's pill and waits until its window is the open window, 452 wide
@@ -69,7 +70,7 @@ func notched() -> NSScreen? { NSScreen.screens.first { $0.safeAreaInsets.top > 0
 func pump(_ s: Double) { RunLoop.current.run(until: Date().addingTimeInterval(s)) }
 
 let a = CommandLine.arguments
-guard a.count >= 2 else { die(2, "usage: drive <access|cursor|warp|front|watch|hover|bounds|notch|screen|click|drag> ...") }
+guard a.count >= 2 else { die(2, "usage: drive <access|cursor|warp|move|front|watch|hover|bounds|notch|screen|click|drag> ...") }
 
 func num(_ i: Int) -> Double {
     guard a.count > i else { die(2, "missing argument \(i)") }
@@ -92,6 +93,10 @@ case "cursor":
 
 case "warp":
     CGWarpMouseCursorPosition(CGPoint(x: num(2), y: num(3)))
+
+case "move":
+    post(.mouseMoved, CGPoint(x: num(2), y: num(3)))
+    pump(0.05)
 
 case "front":
     pump(0.2)
