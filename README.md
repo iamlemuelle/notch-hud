@@ -115,6 +115,7 @@ at `src-tauri/target/release/notch-hud`, which finds the adapter in `src-tauri/t
 
 ```sh
 cd src-tauri && cargo test && cd ..   # status rules: grouping, priority, decay, pruning, contract values
+./tests/repo_test.sh                  # git-only rules: no avatar file committed, .gitignore, the vendored renderer's hash
 ./tests/hook_test.sh                  # the hook against real payloads in a temp directory
 ./tests/install_test.sh               # the installer against temp copies of settings.json
 ./tests/login_test.sh                 # the login item scripts against a fake launchctl
@@ -128,7 +129,7 @@ cd src-tauri && cargo test && cd ..   # status rules: grouping, priority, decay,
 ./check.sh                            # end to end on the real screen, needs Screen Recording permission
 ```
 
-CI (`.github/workflows/ci.yml`) runs the first five on macOS 15 for every pull request and every push to `main`.
+CI (`.github/workflows/ci.yml`) runs cargo, repo, page, hook, installer and login tests on macOS 15 for every pull request and every push to `main`.
 `page_test.sh` needs `playwright-core` and its headless Chromium shell; locally it uses the npx cache, or the paths in
 `PLAYWRIGHT_CORE` and `CHROMIUM`, and exits 2 (skipped) without them. `media_test.sh`, `controls_test.sh`,
 `motion_test.sh` and `check.sh` run only locally, because they launch the app, which exits without a notched display.

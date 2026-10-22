@@ -2,8 +2,6 @@
 # End to end, on the real release app (CONTRACT.md section 10, and the section 4 and 8 lines that point to it). Checks:
 #   - `notch-hud --check-avatar <path>`: `ok` on stdout and exit 0 for a valid file; exit 1 with the reason on stderr for
 #     an invalid file and for a missing one; it does not start the app (no sessions directory is created);
-#   - .gitignore: `*.avatar.json` is ignored anywhere in the repo, `src-tauri/avatar/default.avatar.json` and the
-#     fixtures under tests/avatar/ are not;
 #   - startup log lines on stderr: a missing file and an invalid file each log
 #     `avatar: <path>: <reason>, using the default` (the first without NOTCH_TRACE: always), a valid file logs
 #     `avatar: loaded <path>`;
@@ -64,14 +62,6 @@ else flunk "--check-avatar on a missing file: exit $rc, stdout [$out], stderr [$
 
 if [ ! -e "$sess" ]; then pass "--check-avatar does not start the app (no sessions directory was created)"
 else flunk "--check-avatar created $sess: it started the app"; fi
-
-# --- .gitignore -----------------------------------------------------------------------------------------------------
-for p in avatar.json some/dir/avatar.json x.avatar.json tests/x.avatar.json src-tauri/avatar/mine.avatar.json deep/er/still/x.avatar.json; do
-  if (cd "$root" && git check-ignore -q "$p"); then pass "git ignores $p"; else flunk "git does not ignore $p"; fi
-done
-for p in src-tauri/avatar/default.avatar.json tests/avatar/fixtures/ball.json; do
-  if (cd "$root" && git check-ignore -q "$p"); then flunk "git ignores $p (it must be committed)"; else pass "git does not ignore $p"; fi
-done
 
 # --- the app --------------------------------------------------------------------------------------------------------
 now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
