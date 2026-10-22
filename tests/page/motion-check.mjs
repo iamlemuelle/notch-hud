@@ -70,7 +70,7 @@ const pageErrors = [];
 const seenProps = new Set();
 
 // Installed before any page script: the fake bridge, the recorders and the viewport emulation hook.
-function installBridge({ layout, windows, holdLayout }) {
+function installBridge({ layout, windows, holdLayout, initial }) {
   const rec = (window.__rec = { events: [], surfaces: [], phases: [], trans: [], resizes: [], invokes: [] });
   const handlers = {};
   const now = () => performance.now();
@@ -82,7 +82,11 @@ function installBridge({ layout, windows, holdLayout }) {
   };
   let releaseLayout;
   window.__releaseLayout = () => releaseLayout && releaseLayout();
-  window.__initial = { media: null, sessions: null };
+  // `surface` resolves after `__surfaceDelay` ms and after the viewport took the requested size, like Rust placing the
+  // window; a call whose "<window> <hit>" key is in `__reject` rejects once instead.
+  window.__surfaceDelay = 0;
+  window.__reject = [];
+  const late = (value) => new Promise((r) => setTimeout(() => r(value), (initial && initial.delay) || 0));
   window.__TAURI__ = {
     event: { listen: (name, h) => { (handlers[name] = handlers[name] || []).push(h); return Promise.resolve(() => {}); } },
     core: {
@@ -92,13 +96,23 @@ function installBridge({ layout, windows, holdLayout }) {
           if (holdLayout) return new Promise((r) => { releaseLayout = () => r(layout); });
           return Promise.resolve(layout);
         }
-        if (cmd === 'media') return Promise.resolve(window.__initial.media);
-        if (cmd === 'sessions') return Promise.resolve(window.__initial.sessions);
+        if (cmd === 'media') return late(initial ? initial.media : null);
+        if (cmd === 'sessions') return late(initial ? initial.sessions : null);
         if (cmd === 'surface') {
-          rec.surfaces.push({ t: now(), args: JSON.parse(JSON.stringify(args ?? null)) });
+          const entry = { t: now(), args: JSON.parse(JSON.stringify(args ?? null)), resolved: null, rejected: false };
+          rec.surfaces.push(entry);
+          const at = window.__reject.indexOf(args && args.window + ' ' + args.hit);
+          if (at >= 0) {
+            window.__reject.splice(at, 1);
+            entry.rejected = true;
+            return Promise.reject(new Error('surface rejected by the mock'));
+          }
           const w = args && windows[args.window];
-          if (w) window.__setWindow(w.w, w.h);
-          return Promise.resolve(null);
+          return new Promise((resolve) => setTimeout(async () => {
+            if (w) await window.__setWindow(w.w, w.h);
+            entry.resolved = now();
+            resolve(null);
+          }, window.__surfaceDelay));
         }
         return Promise.resolve(null);
       },
@@ -134,7 +148,7 @@ function installBridge({ layout, windows, holdLayout }) {
       from = kf[0] && kf[0][camel(e.propertyName)];
       to = kf[kf.length - 1] && kf[kf.length - 1][camel(e.propertyName)];
     }
-    rec.trans.push({ sel: sel(e), prop: e.propertyName, run: now(), start: null, end: null, cancel: null, timing, from, to });
+    rec.trans.push({ sel: sel(e), prop: e.propertyName, run: now(), vw: innerWidth, vh: innerHeight, start: null, end: null, cancel: null, timing, from, to });
   }, true);
   document.addEventListener('transitionstart', (e) => { const r = open(e); if (r) r.start = now(); }, true);
   document.addEventListener('transitionend', (e) => { const r = open(e); if (r) r.end = now(); }, true);
@@ -187,7 +201,7 @@ async function openPage(opts = {}) {
   page.on('console', (m) => { if (m.type() === 'error') pageErrors.push(`${tag}: console: ${m.text()}`); });
   if (opts.reduced) await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.exposeFunction('__setWindow', (w, h) => page.setViewportSize({ width: w, height: h }).catch(() => {}));
-  await page.addInitScript(installBridge, { layout: LAYOUT, windows: WINDOW, holdLayout: !!opts.holdLayout });
+  await page.addInitScript(installBridge, { layout: LAYOUT, windows: WINDOW, holdLayout: !!opts.holdLayout, initial: opts.initial || null });
   await page.goto('file://' + PAGE_FILE);
   if (!opts.holdLayout) await page.waitForFunction(() => document.body.dataset.phase, null, { timeout: 1500 }).catch(() => {});
   return page;
@@ -515,14 +529,21 @@ async function scenarioSessionBanner() {
   const rn = await rec(page);
   check('S5 changes to working or waiting show no banner', !rn.phases.some((p) => p.t >= tNone && p.phase === 'banner'), J(rn.phases.filter((p) => p.t >= tNone)));
 
-  await fire(page, 'sessions', summary([row('paxiv', 'waiting'), row('neo', 'needs_permission', 'Bash'), row('rails', 'done')]));
+  // A label missing from the previous payload never banners: a relabeled row and a brand-new row stay quiet.
+  const tQ = await fire(page, 'sessions', summary([row('paxiv · ab12', 'done'), row('neo', 'needs_permission', 'Bash'), row('rails', 'working')]));
+  await sleep(600);
+  const q = await rec(page);
+  check('S6 a relabeled row ("paxiv" to "paxiv · ab12", done) and a new label (needs_permission) show no banner', !q.phases.some((x) => x.t >= tQ && x.phase === 'banner') && !surfaceCalls(q, tQ).some(notPill), J({ phases: q.phases.filter((x) => x.t >= tQ), surfaces: surfaceCalls(q, tQ) }));
+
+  // A known label changing to a banner status does; the first such row in payload order wins.
+  await fire(page, 'sessions', summary([row('paxiv · ab12', 'needs_input'), row('neo', 'needs_permission', 'Bash'), row('rails', 'done')]));
   await sleep(600);
   const p = await snap(page);
-  check('S6 a new label counts as changed; the first changed row in payload order wins', p.phase === 'banner' && p.el['#bTitle'].text === 'neo' && p.el['#bSub'].text === 'needs permission: Bash' && p.el['#bIcon'].colors.includes(AMBER), J({ phase: p.phase, title: p.el['#bTitle'] && p.el['#bTitle'].text, sub: p.el['#bSub'] && p.el['#bSub'].text }));
+  check('S6a a known label changing to a banner status banners; the first changed row in payload order wins', p.phase === 'banner' && p.el['#bTitle'].text === 'paxiv · ab12' && p.el['#bSub'].text === 'needs your input' && p.el['#bIcon'].colors.includes(AMBER), J({ phase: p.phase, title: p.el['#bTitle'] && p.el['#bTitle'].text, sub: p.el['#bSub'] && p.el['#bSub'].text }));
   await waitPhase(page, 'collapsed', 3600);
   await sleep(250);
 
-  const tE = await fire(page, 'sessions', summary([row('paxiv', 'waiting'), row('neo', 'needs_permission', 'Bash'), row('rails', 'error')]));
+  await fire(page, 'sessions', summary([row('paxiv · ab12', 'needs_input'), row('neo', 'needs_permission', 'Bash'), row('rails', 'error')]));
   await sleep(600);
   const e = await snap(page);
   check('S7 working or done to error: banner "error" with an amber dot', e.phase === 'banner' && e.el['#bTitle'].text === 'rails' && e.el['#bSub'].text === 'error' && e.el['#bIcon'].colors.includes(AMBER), J({ phase: e.phase, title: e.el['#bTitle'] && e.el['#bTitle'].text, sub: e.el['#bSub'] && e.el['#bSub'].text }));
@@ -623,7 +644,205 @@ async function scenarioReduced() {
   await page.close();
 }
 
-const scenarios = [scenarioLayout, scenarioHover, scenarioSongBanner, scenarioWideBanner, scenarioSessionBanner, scenarioEar, scenarioRelayout, scenarioReduced];
+// ---- section 8, "Window": a start waits for the grown window ---------------------------------------------------------
+const clipFrom = (r, from) => trans(r, '#panel', 'clip-path', from)[0];
+const gap = (a, b) => (a == null || b == null ? null : Math.round(a - b));
+
+async function scenarioGrowWait() {
+  const page = await openPage({ tag: 'grow-wait' });
+  const sq = await art(page, 'square');
+  await fire(page, 'sessions', summary([row('paxiv', 'working')]));
+  await fire(page, 'media', media(track(sq)));
+  await sleep(700);
+  await page.evaluate(() => { window.__surfaceDelay = 120; });
+
+  // Peek: the surface call at 80 ms resolves 120 ms later; the clip starts only then.
+  const t0 = await fire(page, 'hover', true);
+  await sleep(900);
+  const r = await rec(page);
+  const call = surfaceCalls(r, t0).find((x) => surfaceIs(x, 'open', 'peek'));
+  const clip = clipFrom(r, t0);
+  check('G1 peek: no clip-path transition starts before the open/peek surface call resolved, and one starts within ~2 frames after',
+    !!call && call.resolved != null && !!clip && clip.run >= call.resolved && clip.run - call.resolved <= 50, J({ resolved: call && gap(call.resolved, t0), clipRun: clip && gap(clip.run, t0) }));
+  check('G2 peek: the viewport is already the grown size 452x242 when the clip starts', !!clip && clip.vw === 452 && clip.vh === 242 && !clipIs(clip.to, 'peek'), J({ vw: clip && clip.vw, vh: clip && clip.vh, to: clip && clip.to }));
+  const exp = phaseAt(r, 'expanded', t0, t0 + 900);
+  check('G3 peek: the page still expands (hover held) and the window ends open', !!exp && (await snap(page, [])).vw === 452, J({ exp: exp && gap(exp.t, t0) }));
+  await fire(page, 'hover', false);
+  await waitPhase(page, 'collapsed', 2500);
+  await sleep(700);
+  const back = await snap(page, []);
+  check('G4 back to the pill window after the delayed shrink', back.vw === 305 && back.vh === 32, J(back));
+
+  // Banner: the 2600 ms close counts from the start, not from the call.
+  const tB = await fire(page, 'media', media(track(sq, { title: 'Second Song' })));
+  await sleep(800);
+  const rb = await rec(page);
+  const bcall = surfaceCalls(rb, tB).find((x) => surfaceIs(x, 'banner', 'banner'));
+  const bclip = clipFrom(rb, tB);
+  check('G5 banner: no clip-path transition starts before the banner/banner surface call resolved, and one starts within ~2 frames after',
+    !!bcall && bcall.resolved != null && !!bclip && bclip.run >= bcall.resolved && bclip.run - bcall.resolved <= 50, J({ resolved: bcall && gap(bcall.resolved, tB), clipRun: bclip && gap(bclip.run, tB) }));
+  check('G6 banner: the viewport is already the banner window 412x94 when the clip starts', !!bclip && bclip.vw === 412 && bclip.vh === 94 && !clipIs(bclip.to, 'banner'), J({ vw: bclip && bclip.vw, vh: bclip && bclip.vh, to: bclip && bclip.to }));
+  await waitPhase(page, 'collapsing', 3600);
+  const rc = await rec(page);
+  const col = phaseAt(rc, 'collapsing', tB + 1000);
+  check('G7 banner: the 2600 ms close counts from the start (after the surface resolved)', !!bcall && !!col && near(col.t - bcall.resolved, 2600, 90), J({ col: col && gap(col.t, tB), resolved: bcall && gap(bcall.resolved, tB) }));
+  await waitPhase(page, 'collapsed', 2500);
+  await sleep(700);
+
+  // Hover in during a delayed banner's wait: expand ~80 ms after the hover, not the 2600 ms close.
+  const tC = await fire(page, 'media', media(track(sq, { title: 'Third Song' })));
+  await sleep(30);
+  const tH = await fire(page, 'hover', true);
+  await sleep(1500);
+  const rh = await rec(page);
+  const ex = phaseAt(rh, 'expanded', tH, tH + 1400);
+  check('G8 hover in during a banner\'s wait: expanded about 80 ms after the hover, no collapsing before', !!ex && near(ex.t - tH, 80, 45) && !rh.phases.some((x) => x.t > tC && x.t < ex.t && x.phase === 'collapsing'), J({ phases: rh.phases.filter((x) => x.t >= tC).map((x) => [x.phase, gap(x.t, tH)]) }));
+  await fire(page, 'hover', false);
+  await waitPhase(page, 'collapsed', 2500);
+  await sleep(300);
+  await page.close();
+}
+
+// A phase change during the wait drops the start.
+async function scenarioDroppedStart() {
+  const page = await openPage({ tag: 'dropped-start' });
+  const sq = await art(page, 'square');
+  await fire(page, 'sessions', summary([row('paxiv', 'working')]));
+  await fire(page, 'media', media(track(sq)));
+  await sleep(700);
+  await page.evaluate(() => { window.__surfaceDelay = 500; });
+  const t0 = await fire(page, 'hover', true);
+  await sleep(100);
+  await fire(page, 'hover', false);
+  await sleep(1800);
+  const r = await rec(page);
+  const s = await snap(page, []);
+  check('D1 hover in, then out before the delayed peek surface resolved: no clip-path transition ever runs', trans(r, '#panel', 'clip-path', t0).length === 0, J(trans(r, '#panel', 'clip-path', t0)));
+  check('D2 ... and the page is collapsed with the window back to the pill', s.phase === 'collapsed' && s.vw === 305 && s.vh === 32 && !r.phases.some((x) => x.t >= t0 && x.phase === 'expanded'), J({ phase: s.phase, vw: s.vw, vh: s.vh, phases: r.phases.filter((x) => x.t >= t0).map((x) => [x.phase, gap(x.t, t0)]) }));
+  await page.close();
+}
+
+// A rejected `surface` is sent again on the next phase change.
+async function scenarioRejected() {
+  const page = await openPage({ tag: 'rejected' });
+  const sq = await art(page, 'square');
+  await fire(page, 'sessions', summary([row('paxiv', 'working')]));
+  await fire(page, 'media', media(track(sq)));
+  await sleep(600);
+  await fire(page, 'hover', true);
+  await sleep(900);
+  await page.evaluate(() => { window.__reject = ['pill pill']; });
+  await fire(page, 'hover', false);
+  await waitPhase(page, 'collapsed', 2500);
+  await sleep(500);
+  const r0 = await rec(page);
+  const rej = r0.surfaces.filter((x) => x.rejected);
+  check('J1 the shrink to pill/pill was rejected by the mock', rej.length === 1 && surfaceIs(rej[0], 'pill', 'pill'), J(r0.surfaces));
+  const t = await fire(page, 'hover', true);
+  await sleep(60);
+  const r = await rec(page);
+  const again = surfaceCalls(r, t).find((x) => surfaceIs(x, 'pill', 'pill'));
+  check('J2 the next phase change (intent) sends the then-current pair pill/pill again', !!again && !!phaseAt(r, 'intent', t, t + 30) && again.t - t < 40, J({ surfaces: surfaceCalls(r, t), phases: r.phases.filter((x) => x.t >= t) }));
+  await sleep(900);
+  await fire(page, 'hover', false);
+  await sleep(300);
+  await page.close();
+}
+
+// ---- section 8, "Startup": a reply older than an event is ignored ---------------------------------------------------
+async function scenarioStartup() {
+  const old = media(track(null, { title: 'Old Song', artist: 'Old Artist' }));
+  const fresh = media(track(null, { title: 'New Song', artist: 'New Artist' }));
+  const page = await openPage({ tag: 'stale-media', initial: { media: old, sessions: null, delay: 400 } });
+  await sleep(100);
+  await fire(page, 'media', fresh);
+  await sleep(900);
+  const r = await rec(page);
+  const s = await snap(page, ['#content']);
+  const text = (s.el['#content'] && s.el['#content'].text) || '';
+  check('T1 a media event before the invoke reply: the late reply is ignored, no song banner, the card shows the event\'s track', !r.phases.some((x) => x.phase === 'banner') && text.includes('New Song') && !text.includes('Old Song'), J({ phases: r.phases.map((x) => x.phase), text }));
+  await page.close();
+
+  const p2 = await openPage({ tag: 'stale-sessions', initial: { media: null, sessions: summary([row('paxiv', 'done')]), delay: 400 } });
+  await sleep(100);
+  await fire(p2, 'sessions', summary([row('paxiv', 'working')]));
+  await sleep(900);
+  const r2 = await rec(p2);
+  const s2 = await snap(p2, ['#content']);
+  check('T2 a sessions event before the invoke reply: the late reply is ignored, no session banner', !r2.phases.some((x) => x.phase === 'banner') && /paxiv/.test((s2.el['#content'] && s2.el['#content'].text) || '') && !r2.surfaces.some(notPill), J({ phases: r2.phases.map((x) => x.phase), surfaces: r2.surfaces, text: s2.el['#content'] && s2.el['#content'].text }));
+  await p2.close();
+
+  // Control: with no event first, the replies are the first payloads and are used.
+  const p3 = await openPage({ tag: 'reply-used', initial: { media: old, sessions: summary([row('paxiv', 'working')]), delay: 100 } });
+  await sleep(500);
+  const s3 = await snap(p3, ['#content']);
+  const t3 = (s3.el['#content'] && s3.el['#content'].text) || '';
+  check('T3 with no event first, the startup replies are used', /Old Song/.test(t3) && /paxiv/.test(t3), J(t3));
+  await p3.close();
+}
+
+// ---- Artwork URLs with quotes and parentheses --------------------------------------------------------------------------
+async function scenarioArtUrl() {
+  const page = await openPage({ tag: 'art-url' });
+  const url = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><!-- ) ( \\ --><rect width="8" height="8" fill="red"/></svg>';
+  await fire(page, 'sessions', summary([row('paxiv', 'working')]));
+  await fire(page, 'media', media(track(url)));
+  await sleep(700);
+  const bg = await page.evaluate(() => [...document.querySelectorAll('#art > *')].map((n) => getComputedStyle(n).backgroundImage));
+  check('U1 an artwork URL with quotes and parentheses still sets a background image on a layer of #art', bg.length > 0 && bg.some((b) => b !== 'none' && b !== ''), J(bg));
+  const s = await snap(page, ['#art']);
+  check('U2 ... and the ear art is shown', near(s.el['#art'] && s.el['#art'].opacity, 1, 0.01) && boxIs(s.el['#art'], 326.5, 7, 18, 18), explain(s.el['#art']));
+  await fire(page, 'hover', true);
+  await sleep(900);
+  const after = await snap(page, []);
+  check('U3 the page keeps working: hover still expands', after.phase === 'expanded', J(after));
+  await fire(page, 'hover', false);
+  await sleep(300);
+  await page.close();
+}
+
+// ---- Song banners and the first track (section 8, "Banners") ---------------------------------------------------------
+const NONE = { via: 'adapter', health: 'ok', track: null };
+async function bannerAfter(page, payload, ms = 450) {
+  const t = await fire(page, 'media', payload);
+  await sleep(ms);
+  return (await rec(page)).phases.some((x) => x.t >= t && x.phase === 'banner');
+}
+async function scenarioFirstTrack() {
+  // nothing, then A (no banner), then B (banner).
+  let page = await openPage({ tag: 'first-track-1' });
+  let sq = await art(page, 'square');
+  await fire(page, 'sessions', summary([row('paxiv', 'working')]));
+  await fire(page, 'media', NONE);
+  await sleep(200);
+  check('F1 nothing, then the first track A: no banner', !(await bannerAfter(page, media(track(sq, { title: 'Song A' })))), J((await rec(page)).phases));
+  check('F2 ... then a different track B: banner', await bannerAfter(page, media(track(sq, { title: 'Song B' }))), J((await rec(page)).phases));
+  await page.close();
+
+  // A, nothing, A: none.
+  page = await openPage({ tag: 'first-track-2' });
+  sq = await art(page, 'square');
+  await fire(page, 'sessions', summary([row('paxiv', 'working')]));
+  await fire(page, 'media', media(track(sq, { title: 'Song A' })));
+  await sleep(300);
+  await fire(page, 'media', NONE);
+  await sleep(300);
+  check('F3 A, then nothing, then A again: no banner', !(await bannerAfter(page, media(track(sq, { title: 'Song A' })))), J((await rec(page)).phases));
+  await page.close();
+
+  // A, nothing, B: banner.
+  page = await openPage({ tag: 'first-track-3' });
+  sq = await art(page, 'square');
+  await fire(page, 'sessions', summary([row('paxiv', 'working')]));
+  await fire(page, 'media', media(track(sq, { title: 'Song A' })));
+  await sleep(300);
+  await fire(page, 'media', NONE);
+  await sleep(300);
+  check('F4 A, then nothing, then B: banner', await bannerAfter(page, media(track(sq, { title: 'Song B' }))), J((await rec(page)).phases));
+  await page.close();
+}
+
+const scenarios = [scenarioLayout, scenarioHover, scenarioSongBanner, scenarioWideBanner, scenarioSessionBanner, scenarioEar, scenarioRelayout, scenarioReduced, scenarioGrowWait, scenarioDroppedStart, scenarioRejected, scenarioStartup, scenarioArtUrl, scenarioFirstTrack];
 for (const s of scenarios) {
   try { await s(); } catch (e) { check(`${s.name} ran to the end`, false, e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : String(e)); }
 }

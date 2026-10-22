@@ -139,3 +139,160 @@ fn layout_serializes_with_the_contract_field_names() {
         })
     );
 }
+
+// Surface, hit_contains and next_hover: CONTRACT.md section 8, "Geometry".
+
+fn surface(window: WindowMode, hit: Shape) -> Surface {
+    let mut s = Surface::new();
+    s.set(window, hit);
+    s
+}
+
+#[test]
+fn a_new_surface_is_pill_and_pill() {
+    let s = Surface::new();
+    assert_eq!((s.window, s.hit), (WindowMode::Pill, Shape::Pill));
+}
+
+#[test]
+fn set_records_both_values() {
+    let s = surface(WindowMode::Banner, Shape::Banner);
+    assert_eq!((s.window, s.hit), (WindowMode::Banner, Shape::Banner));
+    let s = surface(WindowMode::Open, Shape::Peek);
+    assert_eq!((s.window, s.hit), (WindowMode::Open, Shape::Peek));
+}
+
+#[test]
+fn a_fresh_surface_is_the_pill_window() {
+    assert_eq!(Surface::new().window_size(&sample(1, 146.0)), size(305.0, 32.0));
+}
+
+#[test]
+fn an_open_surface_is_the_plain_open_window_at_first() {
+    let mut s = surface(WindowMode::Open, Shape::Open);
+    assert_eq!(s.window_size(&sample(1, 146.0)), size(452.0, 242.0));
+}
+
+#[test]
+fn the_open_height_never_drops_while_open() {
+    let mut s = surface(WindowMode::Open, Shape::Open);
+    assert_eq!(s.window_size(&sample(3, 146.0)), size(452.0, 286.0));
+    // Two rows disappear: the plain open window would be 242, the floor holds it at 286.
+    assert_eq!(s.window_size(&sample(1, 146.0)), size(452.0, 286.0));
+    assert_eq!(s.window_size(&sample(0, 0.0)), size(452.0, 286.0));
+    // Growing past the floor raises it.
+    assert_eq!(s.window_size(&sample(4, 146.0)), size(452.0, 308.0));
+    assert_eq!(s.window_size(&sample(1, 146.0)), size(452.0, 308.0));
+}
+
+#[test]
+fn a_set_with_the_same_mode_keeps_the_floor() {
+    let mut s = surface(WindowMode::Open, Shape::Peek);
+    assert_eq!(s.window_size(&sample(3, 146.0)), size(452.0, 286.0));
+    s.set(WindowMode::Open, Shape::Open);
+    assert_eq!(s.window_size(&sample(1, 146.0)), size(452.0, 286.0));
+}
+
+#[test]
+fn a_set_with_another_mode_resets_the_floor() {
+    for other in [WindowMode::Pill, WindowMode::Banner] {
+        let mut s = surface(WindowMode::Open, Shape::Open);
+        assert_eq!(s.window_size(&sample(3, 146.0)), size(452.0, 286.0));
+        s.set(other, Shape::Pill);
+        s.set(WindowMode::Open, Shape::Peek);
+        assert_eq!(s.window_size(&sample(1, 146.0)), size(452.0, 242.0), "after {other:?}");
+    }
+}
+
+#[test]
+fn the_floor_does_not_touch_pill_and_banner_sizes() {
+    let mut s = surface(WindowMode::Open, Shape::Open);
+    assert_eq!(s.window_size(&sample(3, 146.0)), size(452.0, 286.0));
+    s.set(WindowMode::Banner, Shape::Banner);
+    assert_eq!(s.window_size(&sample(3, 146.0)), size(412.0, 94.0));
+    s.set(WindowMode::Pill, Shape::Pill);
+    assert_eq!(s.window_size(&sample(3, 146.0)), size(305.0, 32.0));
+}
+
+// A 305 x 32 pill centered on x = 100 with its top edge at y = 1000: x from -52.5 to 252.5, y from 968 to 1000.
+#[test]
+fn hit_contains_includes_every_edge() {
+    let pill = size(305.0, 32.0);
+    for (x, y) in [(-52.5, 984.0), (252.5, 984.0), (100.0, 1000.0), (100.0, 968.0), (-52.5, 1000.0), (252.5, 968.0), (100.0, 984.0)] {
+        assert!(hit_contains(pill, 100.0, 1000.0, x, y), "({x}, {y}) should be inside");
+    }
+}
+
+#[test]
+fn hit_contains_excludes_one_point_past_each_edge() {
+    let pill = size(305.0, 32.0);
+    for (x, y) in [(-52.6, 984.0), (252.6, 984.0), (100.0, 1000.1), (100.0, 967.9)] {
+        assert!(!hit_contains(pill, 100.0, 1000.0, x, y), "({x}, {y}) should be outside");
+    }
+}
+
+#[test]
+fn hit_contains_has_y_up() {
+    let pill = size(305.0, 32.0);
+    // Below the top edge is inside, above it is outside; a y-down reading would say the opposite.
+    assert!(hit_contains(pill, 100.0, 1000.0, 100.0, 990.0));
+    assert!(!hit_contains(pill, 100.0, 1000.0, 100.0, 1010.0));
+    assert!(!hit_contains(pill, 100.0, 1000.0, 100.0, 10.0));
+}
+
+#[test]
+fn hit_contains_follows_the_given_center_and_top() {
+    let pill = size(305.0, 32.0);
+    assert!(hit_contains(pill, 1000.0, 50.0, 1100.0, 40.0));
+    assert!(!hit_contains(pill, 1000.0, 50.0, 100.0, 40.0));
+    assert!(!hit_contains(pill, 1000.0, 50.0, 1100.0, 10.0));
+}
+
+#[test]
+fn a_peek_hit_rect_is_wider_and_taller_than_the_pill() {
+    let l = sample(1, 146.0);
+    let (pill, peek) = (shape_size(&l, Shape::Pill), shape_size(&l, Shape::Peek));
+    // x = 254 is 154 from the center: past the pill's 152.5, inside the peek's 154.5.
+    assert!(!hit_contains(pill, 100.0, 1000.0, 254.0, 990.0));
+    assert!(hit_contains(peek, 100.0, 1000.0, 254.0, 990.0));
+    // y = 965 is 35 below the top: past the pill's 32, inside the peek's 36.
+    assert!(!hit_contains(pill, 100.0, 1000.0, 100.0, 965.0));
+    assert!(hit_contains(peek, 100.0, 1000.0, 100.0, 965.0));
+    assert!(!hit_contains(peek, 100.0, 1000.0, 100.0, 963.9));
+}
+
+#[test]
+fn next_hover_over_all_eight_inputs() {
+    // (was_in, over, moved, next)
+    let table = [
+        (false, false, false, false),
+        (false, false, true, false),
+        (true, false, false, false),
+        (true, false, true, false),
+        (false, true, false, false),
+        (false, true, true, true),
+        (true, true, false, true),
+        (true, true, true, true),
+    ];
+    for (was_in, over, moved, want) in table {
+        assert_eq!(next_hover(was_in, over, moved), want, "was_in={was_in} over={over} moved={moved}");
+    }
+}
+
+#[test]
+fn a_still_cursor_under_a_grown_shape_stays_out() {
+    let mut in_now = false;
+    for _ in 0..10 {
+        in_now = next_hover(in_now, true, false);
+    }
+    assert!(!in_now);
+    in_now = next_hover(in_now, true, true);
+    assert!(in_now);
+    // Once in, a still cursor stays in.
+    assert!(next_hover(in_now, true, false));
+}
+
+#[test]
+fn leaving_needs_no_movement() {
+    assert!(!next_hover(true, false, false));
+}
