@@ -71,11 +71,11 @@ x0_line="$("$drive" hover "$app" 2>&1)"; rc=$?
 if [ "$rc" -eq 2 ]; then echo "SKIP $x0_line"; exit 2; fi
 if [ "$rc" -ne 0 ]; then flunk "panel expands on hover"; echo "$x0_line"; exit 1; fi
 x0="${x0_line#x0=}"
-pass "window expanded to 452 x 242 (panel 420 x 226) with the panel's left edge at x=$x0"
+pass "window expanded to 452 x 270 (panel 420 x 254) with the panel's left edge at x=$x0"
 
 y_ctl=162; y_bar=124
 x_play=$((x0 + 210)); x_prev=$((x0 + 210 - 55)); x_next=$((x0 + 210 + 55))
-bar_left=$((x0 + 70)); bar_w=280
+bar_left=$((x0 + 68)); bar_w=284
 
 # Runs a driver command; exit 2 from it means the environment is wrong, not the app.
 drv() {

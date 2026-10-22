@@ -32,11 +32,13 @@ func shot(_ r: CGRect, _ name: String) -> NSBitmapImageRep? {
 }
 func isAmber(_ c: NSColor?) -> Bool {
     guard let c = c else { return false }
-    return c.redComponent > 0.8 && c.greenComponent > 0.45 && c.greenComponent < 0.8 && c.blueComponent < 0.35
+    // #f5a623 at 0.82 opacity over black is about r 0.79, g 0.53, b 0.11.
+    return c.redComponent > 0.65 && c.greenComponent > 0.4 && c.greenComponent < 0.7 && c.blueComponent < 0.3
 }
 func isGreen(_ c: NSColor?) -> Bool {
     guard let c = c else { return false }
-    return c.greenComponent > 0.6 && c.greenComponent - c.redComponent > 0.2 && c.greenComponent - c.blueComponent > 0.2
+    // #34d058 at 0.82 opacity over black is about r 0.17, g 0.68, b 0.23.
+    return c.greenComponent > 0.5 && c.greenComponent - c.redComponent > 0.2 && c.greenComponent - c.blueComponent > 0.2
 }
 func describe(_ c: NSColor?) -> String {
     guard let c = c else { return "no pixel" }
@@ -97,9 +99,8 @@ if let rep = collapsedRep {
     let ear = CGPoint(x: left.maxX - 8, y: b.midY)
     let v = brightness(rep, collapsedArea.origin, ear)
     expect(v >= 0 && v < 0.1, "5a. pill drawn on screen: left-ear pixel at \(ear) is black (brightness \(v))")
-    // Only the page can put the status dot here: the dot, a 5pt gap and "4" centered in the 60pt ear start about
-    // 20pt in, plus half the 8px dot.
-    let dot = CGPoint(x: b.minX + 24, y: b.midY)
+    // Only the page can put the green status dot here: the left ear sits 14 pt in, plus half the 8 pt dot.
+    let dot = CGPoint(x: b.minX + 18, y: b.midY)
     let c = color(rep, collapsedArea.origin, dot)
     wasAmber = isAmber(c)
     expect(wasAmber, "6a. a session needs permission, so the status dot at \(dot) is amber (\(describe(c)))")
@@ -107,9 +108,9 @@ if let rep = collapsedRep {
 
 let home = CGEvent(source: nil)!.location
 move(CGPoint(x: b.midX, y: b.midY))
-// Four seeded sessions and nothing playing: the open window is 452 wide (420 + 2 * 16) and (44 + 22 * 4 + 14) + 16 tall.
-let grown = waitFor { $0.height >= 120 }
-expect(grown?.height == 162 && grown?.width == 452, "4a. hover grows the window to 452x162 for 4 sessions (got \(grown?.size ?? .zero))")
+// Four seeded sessions: the open window is 452 wide (420 + 2 * 16) and (196 + 18 + 4 + 22 * 4 + 14) + 16 tall.
+let grown = waitFor { $0.height >= 250 }
+expect(grown?.height == 336 && grown?.width == 452, "4a. hover grows the window to 452x336 for 4 sessions (got \(grown?.size ?? .zero))")
 if let g = grown {
     usleep(300_000)
     let area = CGRect(x: g.midX - 260, y: 0, width: 520, height: g.height + 30)
@@ -121,7 +122,7 @@ if let g = grown {
         let samples = Int((g.width - 68) * 48)
         expect(lit > 200 && lit < samples / 4, "5b. web UI reacted to hover: \(lit) bright text pixels of \(samples) in the detail area (> 200, < 1/4)")
         let bg = brightness(rep, area.origin, CGPoint(x: g.minX + 24, y: g.maxY - 56))
-        expect(bg >= 0 && bg < 0.1, "5b. expanded panel is painted black, not see-through (brightness \(bg))")
+        expect(bg >= 0 && bg < 0.03, "5b. expanded panel is painted black, not see-through (brightness \(bg))")
     }
 }
 move(CGPoint(x: b.midX, y: 400))

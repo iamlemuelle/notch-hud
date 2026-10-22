@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <style>
+  :root { --tint: 245, 245, 245; }
   html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
     font: 600 12px -apple-system, system-ui, sans-serif; color: #f5f5f5; cursor: default; user-select: none; }
   /* The stage keeps its place on screen whatever the window size: Rust centers every window on the notch. */
@@ -11,16 +12,14 @@
   #stage.ready { visibility: visible; }
   #panel { position: absolute; inset: 0; background: #000; will-change: clip-path; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #8b8b8b; flex: none; }
-  .dot.green { background: #34d058; box-shadow: 0 0 6px #34d058; }
-  .dot.amber { background: #f5a623; box-shadow: 0 0 6px #f5a623; }
-  #earL, #warn { position: absolute; top: 0; width: 60px; height: var(--pill-h); display: flex; align-items: center;
-    justify-content: center; gap: 5px; font-variant-numeric: tabular-nums; opacity: 0.82; }
-  #earL { left: var(--pill-l); }
-  #warn { left: var(--ear-r); color: #f5a623; }
-  .muted { color: #8b8b8b; }
+  .dot.att { background: #f5a623; box-shadow: 0 0 6px #f5a623; }
+  .dot.work { background: #34d058; box-shadow: 0 0 6px #34d058; }
+  .lear { position: absolute; left: calc(var(--pill-l) + 14px); top: 0; height: var(--pill-h); display: flex;
+    align-items: center; gap: 6px; z-index: 1; opacity: 0.82; }
+  #total { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
   .bars { position: absolute; display: flex; align-items: flex-end; gap: 2px; height: 14px; }
-  .bars span { width: 3px; height: 14px; border-radius: 1.5px; background: #f5f5f5; transform-origin: 50% 100%;
+  .bars span { width: 3px; height: 14px; border-radius: 1.5px; background: rgb(var(--tint)); transform-origin: 50% 100%;
     transform: scaleY(0.24); transition: transform 220ms ease-out; }
   .bars.on span { animation: eq var(--d) ease-in-out infinite alternate; }
   .bars span:nth-child(1) { --d: 0.62s; --lo: 0.3; }
@@ -28,52 +27,86 @@
   .bars span:nth-child(3) { --d: 0.71s; --lo: 0.22; animation-delay: -0.35s; }
   .bars span:nth-child(4) { --d: 0.55s; --lo: 0.4; animation-delay: -0.1s; }
   @keyframes eq { from { transform: scaleY(var(--lo)); } to { transform: scaleY(1); } }
+  @media (prefers-reduced-motion: reduce) { .bars.on span { animation: none; transform: scaleY(0.6); } }
+
+  /* Right ear: the last 60 pt of the pill. */
   #earBars { left: calc(var(--ear-r) + 33px); top: calc((var(--pill-h) - 14px) / 2); opacity: 0; }
-  #earPause { position: absolute; left: calc(var(--ear-r) + 35.5px); top: calc((var(--pill-h) - 12px) / 2); width: 12px;
-    height: 12px; color: #8b8b8b; opacity: 0; }
-  .wide #earBars { left: calc(var(--ear-r) + 37px); }
-  .wide #earPause { left: calc(var(--ear-r) + 39.5px); }
+  #panel.video #earBars { left: calc(var(--ear-r) + 37px); }
+  #earPause { position: absolute; left: calc(var(--ear-r) + 35px); top: calc((var(--pill-h) - 12px) / 2); color: #8b8b8b;
+    opacity: 0; }
+  #panel.video #earPause { left: calc(var(--ear-r) + 39px); }
 
   /* One artwork for the ear, the banner and the card, moved by transform. */
   #art { position: absolute; left: 0; top: 0; width: 64px; height: 64px; border-radius: 13px; overflow: hidden;
-    transform-origin: 0 0; background: #141414; opacity: 0; }
-  .wide #art { width: 112px; height: 63px; border-radius: 8px; }
-  #art > div { position: absolute; inset: 0; background-size: cover; background-position: center; opacity: 0; }
+    transform-origin: 0 0; background: #161616; opacity: 0; }
+  #panel.video #art { width: 112px; height: 63px; border-radius: 8px; }
+  #art .layer { position: absolute; inset: 0; background-size: cover; background-position: center; opacity: 0; }
   #art::after { content: ""; position: absolute; inset: 0; border-radius: inherit;
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09); pointer-events: none; }
+  .ph { position: absolute; inset: 0; }
+  #art.has .ph { display: none; }
+  .ph::after { content: ""; position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px;
+    border-radius: 50%; box-shadow: inset 0 0 0 2px #2c2c2c; }
+  .ph::before { content: ""; position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
+    border-radius: 50%; background: #2c2c2c; }
 
-  #content { position: absolute; left: var(--content-l); top: 0; width: var(--open-w); padding-top: 44px; opacity: 0;
+  /* Expanded: the music block and the session section, positioned from the open panel's top-left. */
+  #content { position: absolute; left: var(--content-l); top: 0; width: var(--open-w); height: var(--open-h); opacity: 0;
     transform: translateY(4px); pointer-events: none; }
-  #card { display: none; position: relative; height: 138px; margin: 0 18px 8px; }
-  #card.on { display: block; }
-  #denied { display: none; margin: 0 18px; font-weight: 500; line-height: 22px; white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; }
-  #denied.on { display: block; }
-  .detail { margin: 0 18px; font-weight: 500; line-height: 22px; }
-  .detail div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #cardText { position: absolute; top: 0; right: 0; left: 76px; line-height: 20px; font-weight: 500; }
-  #cardText.wide { left: 124px; }
-  #cardText div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #cardTitle { font-weight: 600; }
-  #cardArtist, #cardApp { color: #8b8b8b; }
-  #prog { position: absolute; left: 0; right: 0; top: 72px; height: 16px; display: grid; grid-template-columns: 46px 1fr 46px;
-    column-gap: 6px; align-items: center; color: #8b8b8b; font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  #music { position: absolute; inset: 0; }
+  #glow { display: none; position: absolute; left: -110px; top: 34px; width: 340px; height: 200px;
+    background: radial-gradient(170px 125px at 158px 42px, rgba(var(--tint), 0.34), rgba(var(--tint), 0.08) 60%, transparent);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 30px); mask-image: linear-gradient(to bottom, transparent 0, #000 30px); }
+  #panel.video #glow { background: radial-gradient(170px 125px at 182px 41.5px, rgba(var(--tint), 0.34), rgba(var(--tint), 0.08) 60%, transparent); }
+  #music.lit #glow { display: block; }
+  .meta { position: absolute; left: 92px; top: 46px; width: 262px; }
+  #panel.video .meta { left: 142px; width: 232px; }
+  .title { font-weight: 600; font-size: 14px; line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    letter-spacing: -0.01em; }
+  #panel.video #content .title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    font-size: 13.5px; line-height: 17px; }
+  .artist { font-weight: 500; font-size: 12px; line-height: 16px; color: rgba(245, 245, 245, 0.62); white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+  .meta.empty .artist { white-space: normal; line-height: 15px; }
+  .source { margin-top: 5px; font-weight: 500; font-size: 11px; line-height: 14px; color: #8b8b8b; display: flex;
+    align-items: center; gap: 5px; }
+  .source i { width: 5px; height: 5px; border-radius: 50%; background: rgb(var(--tint)); flex: none; }
+  #cardSource { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta.empty .source { display: none; }
+  #cardBars { display: none; left: 384px; top: 50px; }
+  #cardBars.on { display: flex; }
+  .scrub { display: none; position: absolute; left: 16px; top: 116px; width: 388px; height: 16px; grid-template-columns: 46px 1fr 46px;
+    align-items: center; gap: 6px; font-weight: 500; font-size: 11px; line-height: 1; color: #8b8b8b; font-variant-numeric: tabular-nums; }
+  #music.has .scrub { display: grid; }
   #tRem { text-align: right; }
   #bar { position: relative; height: 16px; touch-action: none; }
-  .track { position: absolute; left: 0; right: 0; top: 6px; height: 4px; border-radius: 2px;
-    background: rgba(245, 245, 245, 0.16); overflow: hidden; }
-  #fill { height: 100%; background: #f5f5f5; transform-origin: 0 50%; transform: scaleX(0); }
+  .line { position: absolute; left: 0; right: 0; top: 6px; height: 4px; border-radius: 2px; overflow: hidden;
+    background: rgba(245, 245, 245, 0.16); }
+  #bar.drag .line { transform: scaleY(1.5); }
+  #fill { position: absolute; left: 0; top: 0; width: 100%; height: 100%; background: color-mix(in srgb, rgb(var(--tint)) 55%, #fff);
+    transform-origin: 0 50%; transform: scaleX(0); }
   #knob { display: none; position: absolute; top: 3px; left: 0; width: 10px; height: 10px; margin-left: -5px;
     border-radius: 50%; background: #fff; }
   #bar.drag #knob { display: block; }
-  .controls { position: absolute; left: 0; right: 0; top: 98px; height: 40px; display: flex; align-items: center;
+  .controls { position: absolute; left: 0; top: 142px; width: 420px; height: 40px; display: flex; align-items: center;
     justify-content: center; gap: 18px; }
   .cb { width: 34px; height: 34px; border: 0; padding: 0; border-radius: 50%; background: transparent; color: #f5f5f5;
     display: grid; place-items: center; opacity: 0.86; cursor: default; }
   .cb.main { width: 40px; height: 40px; background: #f5f5f5; color: #000; opacity: 1; }
+  .cb:disabled { opacity: 0.3; }
+  .cb.main:disabled { background: #2a2a2a; color: #777; opacity: 1; }
   .cb .i-play, .cb.paused .i-pause { display: none; }
   .cb.paused .i-play { display: block; }
-  .cb:active { transform: scale(0.92); }
+  .cb:active:not(:disabled) { transform: scale(0.92); }
+  .sess { position: absolute; left: 16px; top: 196px; width: 388px; }
+  .sess-h { display: flex; justify-content: space-between; height: 18px; font-weight: 600; font-size: 11px; line-height: 18px; color: #8b8b8b; }
+  .sess-h .att { color: #f5a623; }
+  #rows { margin-top: 4px; }
+  .srow { height: 22px; display: flex; align-items: center; gap: 8px; font-weight: 500; font-size: 12px; line-height: 22px; }
+  .srow .p { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srow .st { flex: none; max-width: 170px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #8b8b8b; }
+  .srow .st.att { color: #f5a623; }
+  .srow.more { color: #8b8b8b; }
 
   /* A short look at what changed, shown under the notch while the panel is closed. */
   #banner { position: absolute; inset: 0; opacity: 0; transform: translateY(4px); pointer-events: none; }
@@ -81,7 +114,7 @@
     border-radius: 9px; background: #171717; display: grid; place-items: center; opacity: 0; }
   #bIcon .dot { width: 10px; height: 10px; }
   #bText { position: absolute; left: calc(var(--banner-l) + 62px); top: calc(var(--pill-h) + 5px); width: 262px; }
-  .wide #bText { left: calc(var(--banner-l) + 88px); width: 246px; }
+  #panel.video #bText { left: calc(var(--banner-l) + 88px); width: 246px; }
   #bTitle { font: 600 13px/17px -apple-system, system-ui, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #bSub { margin-top: 1px; font: 500 11.5px/15px -apple-system, system-ui, sans-serif; color: rgba(245, 245, 245, 0.62);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -92,28 +125,35 @@
   <div id="stage">
     <div id="panel">
       <div id="content">
-        <div id="card">
-          <div id="cardText"><div id="cardTitle"></div><div id="cardArtist"></div><div id="cardApp"></div></div>
-          <div id="prog"><span id="tEl"></span><div id="bar"><div class="track"><div id="fill"></div></div><div id="knob"></div></div><span id="tRem"></span></div>
+        <div id="music">
+          <div id="glow"></div>
+          <div class="meta" id="meta">
+            <div class="title" id="cardTitle"></div>
+            <div class="artist" id="cardArtist"></div>
+            <div class="source"><i></i><span id="cardSource"></span></div>
+          </div>
+          <div class="bars" id="cardBars"><span></span><span></span><span></span><span></span></div>
+          <div class="scrub"><span id="tEl"></span><div id="bar"><div class="line"><div id="fill"></div></div><div id="knob"></div></div><span id="tRem"></span></div>
           <div class="controls">
             <button type="button" class="cb" id="btnPrev" aria-label="Previous track"><svg viewBox="0 0 16 16" width="16" height="16"><rect x="2" y="3" width="2" height="10" rx=".8" fill="currentColor"/><path d="M13.4 3.3v9.4c0 .45-.5.72-.88.47L5.3 8.47a.56.56 0 0 1 0-.94l7.22-4.7c.38-.25.88.02.88.47z" fill="currentColor"/></svg></button>
             <button type="button" class="cb main" id="btnMain" aria-label="Pause"><svg class="i-pause" viewBox="0 0 16 16" width="16" height="16"><rect x="3.6" y="2.8" width="3" height="10.4" rx="1" fill="currentColor"/><rect x="9.4" y="2.8" width="3" height="10.4" rx="1" fill="currentColor"/></svg><svg class="i-play" viewBox="0 0 16 16" width="16" height="16"><path d="M4.4 2.9v10.2c0 .5.55.8.97.53l7.85-5.1a.62.62 0 0 0 0-1.06L5.37 2.37c-.42-.27-.97.03-.97.53z" fill="currentColor"/></svg></button>
             <button type="button" class="cb" id="btnNext" aria-label="Next track"><svg viewBox="0 0 16 16" width="16" height="16"><path d="M2.6 3.3v9.4c0 .45.5.72.88.47l7.22-4.7a.56.56 0 0 0 0-.94L3.48 2.83c-.38-.25-.88.02-.88.47z" fill="currentColor"/><rect x="12" y="3" width="2" height="10" rx=".8" fill="currentColor"/></svg></button>
           </div>
         </div>
-        <div id="denied">Music access is off: allow notch-hud in System Settings, Privacy &amp; Security, Automation</div>
-        <div class="detail" id="detail"></div>
+        <div class="sess" id="sess">
+          <div class="sess-h"><span>Claude Code</span><span id="sessHead"></span></div>
+          <div id="rows"></div>
+        </div>
       </div>
       <div id="banner">
         <div id="bIcon"><span class="dot"></span></div>
         <div id="bText"><div id="bTitle"></div><div id="bSub"></div></div>
         <div class="bars" id="bannerBars"><span></span><span></span><span></span><span></span></div>
       </div>
-      <div id="earL"><span class="dot" id="dot"></span><span id="total">0</span></div>
-      <div id="warn"></div>
+      <div class="lear" id="lear"><span class="dot" id="dot"></span><span id="total">0</span></div>
       <div class="bars" id="earBars"><span></span><span></span><span></span><span></span></div>
-      <div id="earPause" aria-hidden="true"><svg viewBox="0 0 12 12" width="12" height="12"><rect x="2.5" y="1.5" width="2.4" height="9" rx=".9" fill="currentColor"/><rect x="7.1" y="1.5" width="2.4" height="9" rx=".9" fill="currentColor"/></svg></div>
-      <div id="art"><div></div><div></div></div>
+      <svg id="earPause" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><rect x="2.5" y="1.5" width="2.4" height="9" rx=".9" fill="currentColor"/><rect x="7.1" y="1.5" width="2.4" height="9" rx=".9" fill="currentColor"/></svg>
+      <div id="art"><div class="ph"></div><div class="layer"></div><div class="layer"></div></div>
     </div>
   </div>
 <script>
@@ -128,7 +168,7 @@
   const $ = (id) => document.getElementById(id);
   const flush = (el) => void el.getBoundingClientRect();
   const stage = $('stage'), panel = $('panel'), content = $('content'), banner = $('banner'), artEl = $('art');
-  const artLayers = [...artEl.children];
+  const artLayers = [...artEl.querySelectorAll('.layer')];
 
   // ---- motion (CONTRACT.md section 8, ported from the approved prototype) ----
   const SPRING = (() => {
@@ -152,7 +192,6 @@
   let pending = null;
   let pendingSeq = 0;
   let pendingTimer = null;
-  let attention = 0;
   let wide = false;
 
   function applyVars() {
@@ -165,6 +204,7 @@
     s.setProperty('--banner-l', (L.stage.width - L.banner.width) / 2 + 'px');
     s.setProperty('--content-l', (L.stage.width - L.open.width) / 2 + 'px');
     s.setProperty('--open-w', L.open.width + 'px');
+    s.setProperty('--open-h', L.open.height + 'px');
   }
 
   // ---- shape, layers, art ----
@@ -199,10 +239,9 @@
     el.style.pointerEvents = 'none';
   }
   function earsBright(on) {
-    for (const el of [$('earL'), $('warn')]) {
-      el.style.transition = `opacity 120ms ${reduced ? 'linear' : EASE.peek}`;
-      el.style.opacity = on ? 1 : 0.82;
-    }
+    const el = $('lear');
+    el.style.transition = `opacity 120ms ${reduced ? 'linear' : EASE.peek}`;
+    el.style.opacity = on ? 1 : 0.82;
   }
 
   let artWhere = 'ear';
@@ -211,15 +250,15 @@
     const pillL = (L.stage.width - L.pill.width) / 2, r = pillL + L.pill.width - L.ear;
     if (where === 'ear') return wide ? { x: r + 6, y: (L.pill.height - 15) / 2, s: 26 / 112 } : { x: r + 8, y: (L.pill.height - 18) / 2, s: 18 / 64 };
     if (where === 'banner') return { x: (L.stage.width - L.banner.width) / 2 + 16, y: L.pill.height + 4, s: wide ? 60 / 112 : 34 / 64 };
-    return { x: (L.stage.width - L.open.width) / 2 + 18, y: 44, s: 1 };
+    return { x: (L.stage.width - L.open.width) / 2 + 16, y: 44, s: 1 };
   }
   function artTf(where) { const a = artAt(where); return `translate(${a.x}px, ${a.y}px) scale(${a.s})`; }
-  // In the ear a paused cover dims, so the pause glyph beside it reads as the state.
+  // In the ear a paused cover dims, so the pause glyph beside it reads as the state. The card shows the placeholder
+  // without a track.
   function artVis(where) {
     const t = shown && shown.track;
-    if (!t) return 0;
     if (where !== 'ear') return 1;
-    return attention > 0 ? 0 : t.playing ? 1 : 0.6;
+    return !t ? 0 : t.playing ? 1 : 0.6;
   }
   function moveArt(where, dur = 0, ease = 'linear') {
     artWhere = where;
@@ -249,7 +288,7 @@
   let earKey = null;
   function syncEarGlyphs() {
     const t = shown && shown.track;
-    const key = !(t && artWhere === 'ear' && attention === 0) ? 'off' : t.playing ? 'bars' : 'pause';
+    const key = !(t && artWhere === 'ear') ? 'off' : t.playing ? 'bars' : 'pause';
     if (key === earKey) return;
     const appearing = earKey === 'off' || earKey === null;
     earKey = key;
@@ -271,28 +310,83 @@
     }
     artEl.style.opacity = v;
   }
-  let artKey = null, artIdx = 0;
-  function setArt(url) {
-    const key = url ? url.length + ':' + url.slice(-32) : '';
-    if (key === artKey) return;
-    artKey = key;
+
+  // ---- tint (CONTRACT.md section 7) ----
+  const WHITE = '245, 245, 245';
+  let artUrl = null; // the artwork the page shows now
+  function setTint(rgb) {
+    document.documentElement.style.setProperty('--tint', rgb);
+  }
+  // The alpha-weighted average color of the artwork's pixels, lifted toward white until its luminance reaches 110.
+  // White when no pixel is opaque.
+  function averageTint(img) {
+    try {
+      const c = document.createElement('canvas');
+      c.width = c.height = 16;
+      const x = c.getContext('2d');
+      x.drawImage(img, 0, 0, 16, 16);
+      const d = x.getImageData(0, 0, 16, 16).data;
+      let r = 0, g = 0, b = 0, n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const a = d[i + 3];
+        r += d[i] * a; g += d[i + 1] * a; b += d[i + 2] * a; n += a;
+      }
+      if (n === 0) return WHITE;
+      [r, g, b] = [r / n, g / n, b / n];
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const t = lum >= 110 ? 0 : (110 - lum) / (255 - lum);
+      return [r, g, b].map((v) => Math.min(255, Math.ceil(v + (255 - v) * t))).join(', ');
+    } catch {
+      return WHITE; // a cross-origin artwork without CORS taints the canvas
+    }
+  }
+  // A remote artwork's tint is read from a separate CORS image, so the visible artwork never waits on it or fails
+  // with it. A data URL needs no second load: showArt reads the image it loads anyway.
+  function loadTint(url) {
+    const probe = new Image();
+    probe.crossOrigin = 'anonymous';
+    probe.onload = () => { if (artUrl === url && $('music').classList.contains('lit')) setTint(averageTint(probe)); };
+    probe.onerror = () => { if (artUrl === url) setTint(WHITE); };
+    probe.src = url;
+  }
+  const cssUrl = (url) => `url("${url.replace(/["\\\n\r]/g, (c) => '\\' + c.charCodeAt(0).toString(16) + ' ')}")`;
+  let artIdx = 0;
+  // Crossfades the art's two layers to a new artwork, and learns its shape and tint from one load of it.
+  function showArt(url) {
+    if (url === artUrl) return;
+    artUrl = url;
+    $('music').classList.toggle('lit', !!url);
+    if (!url) setTint(WHITE);
     const old = artLayers[artIdx], next = artLayers[1 - artIdx];
     artIdx = 1 - artIdx;
-    next.style.backgroundImage = url ? `url("${url.replace(/["\\\n\r]/g, (c) => '\\' + c.charCodeAt(0).toString(16) + ' ')}")` : '';
+    next.style.backgroundImage = url ? cssUrl(url) : '';
     const d = reduced ? 120 : 160;
     old.style.transition = next.style.transition = `opacity ${d}ms linear`;
     next.style.opacity = 1;
     old.style.opacity = 0;
+    artEl.classList.toggle('has', !!url);
     if (!url) return setWide(false);
+    const local = url.startsWith('data:');
     const img = new Image();
-    img.onload = () => { if (artKey === key) setWide(img.naturalWidth >= 1.3 * img.naturalHeight); };
+    img.onload = () => {
+      if (artUrl !== url) return;
+      setWide(img.naturalWidth >= 1.3 * img.naturalHeight);
+      if (local) setTint(averageTint(img));
+    };
+    img.onerror = () => {
+      if (artUrl !== url) return;
+      next.style.backgroundImage = '';
+      artEl.classList.remove('has');
+      $('music').classList.remove('lit');
+      setTint(WHITE);
+    };
     img.src = url;
+    if (!local) loadTint(url);
   }
   function setWide(on) {
     if (on === wide) return;
     wide = on;
-    stage.classList.toggle('wide', on);
-    $('cardText').classList.toggle('wide', on);
+    panel.classList.toggle('video', on);
     if (L && !artTimer) artEl.style.transform = artTf(artWhere);
     if (bannerSong) $('bSub').textContent = songSub(bannerSong);
   }
@@ -425,7 +519,7 @@
     bannerSong = song ? data : null;
     $('bTitle').textContent = song ? data.title : data.label;
     $('bSub').textContent = song ? songSub(data) : STATUS_TEXT[data.status](data.detail);
-    if (!song) icon.querySelector('.dot').className = 'dot' + (data.status === 'done' ? '' : ' amber');
+    if (!song) icon.querySelector('.dot').className = 'dot' + dotClass(data.status);
     icon.style.opacity = song ? 0 : 1;
     bars.style.opacity = song ? 1 : 0;
     enter('banner', 'banner', () => {
@@ -488,18 +582,28 @@
   }
   function renderMedia() {
     const t = shown && shown.track;
-    $('card').classList.toggle('on', !!t);
-    $('denied').classList.toggle('on', !t && !!shown && shown.health === 'denied');
-    for (const id of ['earBars', 'bannerBars']) $(id).classList.toggle('on', !!t && t.playing && !reduced);
-    setArt(t ? t.artwork : null);
+    const playing = !!t && t.playing;
+    for (const id of ['earBars', 'cardBars', 'bannerBars']) $(id).classList.toggle('on', playing);
+    $('music').classList.toggle('has', !!t);
+    $('meta').classList.toggle('empty', !t);
+    showArt(t ? t.artwork || null : null);
+    if (t) {
+      $('cardTitle').textContent = t.title;
+      $('cardArtist').textContent = t.artist || '';
+      $('cardSource').textContent = t.app;
+    } else {
+      const denied = !!shown && shown.health === 'denied';
+      $('cardTitle').textContent = denied ? 'Music access is off' : 'Nothing playing';
+      $('cardArtist').textContent = denied
+        ? 'Turn on notch-hud in System Settings, Privacy & Security, Automation.'
+        : 'Play something in Apple Music or Spotify and it shows up here.';
+      $('cardSource').textContent = '';
+    }
+    for (const id of ['btnPrev', 'btnMain', 'btnNext']) $(id).disabled = !t;
+    $('btnMain').classList.toggle('paused', !playing);
+    $('btnMain').setAttribute('aria-label', playing ? 'Pause' : 'Play');
     syncArtOpacity();
     syncEarGlyphs();
-    if (!t) return syncClock();
-    $('cardTitle').textContent = t.title;
-    $('cardArtist').textContent = t.artist || '';
-    $('cardApp').textContent = t.app;
-    $('btnMain').classList.toggle('paused', !t.playing);
-    $('btnMain').setAttribute('aria-label', t.playing ? 'Pause' : 'Play');
     syncClock();
   }
   let timer = null;
@@ -510,28 +614,39 @@
     if (!want && timer !== null) { clearInterval(timer); timer = null; }
     tick();
   }
+  const ATTENTION = new Set(['needs_permission', 'needs_input', 'error']);
+  const dotClass = (status) => ATTENTION.has(status) ? ' att' : status === 'working' ? ' work' : '';
+  function sessionRow(row) {
+    const line = document.createElement('div');
+    line.className = 'srow';
+    const dot = document.createElement('span');
+    dot.className = 'dot' + dotClass(row.status);
+    const label = document.createElement('span');
+    label.className = 'p';
+    label.textContent = row.label;
+    const st = document.createElement('span');
+    st.className = 'st' + (ATTENTION.has(row.status) ? ' att' : '');
+    st.textContent = STATUS_TEXT[row.status](row.detail);
+    line.append(dot, label, st);
+    return line;
+  }
+  function mutedRow(text) {
+    const line = document.createElement('div');
+    line.className = 'srow more';
+    line.textContent = text;
+    return line;
+  }
   function render(s) {
-    attention = s.attention;
-    $('dot').className = 'dot ' + (s.attention > 0 ? 'amber' : s.working > 0 ? 'green' : '');
+    $('dot').className = 'dot' + (s.attention > 0 ? ' att' : s.working > 0 ? ' work' : '');
     $('total').textContent = s.total;
-    $('warn').textContent = s.attention > 0 ? '⚠ ' + s.attention : '';
-    const detail = $('detail');
-    detail.replaceChildren();
-    if (s.rows.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'muted';
-      empty.textContent = 'no Claude Code sessions';
-      detail.append(empty);
-    }
-    for (const row of s.rows) {
-      const line = document.createElement('div');
-      const muted = document.createElement('span');
-      muted.className = 'muted';
-      muted.textContent = ' — ' + STATUS_TEXT[row.status](row.detail);
-      line.append(row.label, muted);
-      detail.append(line);
-    }
-    renderMedia();
+    const head = $('sessHead');
+    head.className = s.attention > 0 ? 'att' : '';
+    head.textContent = s.attention > 0 ? s.attention + (s.attention === 1 ? ' needs you' : ' need you')
+      : s.working > 0 ? s.working + ' working' : 'All quiet';
+    const rows = s.rows.map(sessionRow);
+    if (s.total > s.rows.length) rows.push(mutedRow(s.total - s.rows.length + ' more'));
+    if (s.total === 0) rows.push(mutedRow('No Claude Code sessions'));
+    $('rows').replaceChildren(...rows);
   }
   const BANNER_STATUS = new Set(['needs_permission', 'needs_input', 'error', 'done']);
   let lastRows = null; // label -> status from the previous payload; null before the first
@@ -594,7 +709,7 @@
     patchTrack({ playing: !t.playing, elapsed_ms: elapsedMs(t), elapsed_at_ms: Date.now() });
     send({ kind: 'toggle' }, id);
   });
-  $('btnNext').addEventListener('click', () => send({ kind: 'next' }));
+  $('btnNext').addEventListener('click', () => { if (shown && shown.track) send({ kind: 'next' }); });
   $('btnPrev').addEventListener('click', () => {
     const t = shown && shown.track;
     if (!t) return;
@@ -634,6 +749,7 @@
 
   reducedQuery.addEventListener('change', (e) => { reduced = e.matches; if (L) syncInstant(); renderMedia(); });
   render({ rows: [], total: 0, attention: 0, working: 0 });
+  renderMedia();
   const tauri = window.__TAURI__;
   tauri.event.listen('layout', (e) => applyLayout(e.payload));
   tauri.event.listen('hover', (e) => {

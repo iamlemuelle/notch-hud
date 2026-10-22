@@ -17,7 +17,7 @@ use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use layout::{Layout, Shape, Size, Surface, WindowMode};
-use media::{Health, Media};
+use media::Media;
 use session::{prune, read_dir, sessions_dir, summarize, Summary};
 
 // kCGMainMenuWindowLevel is 24; +3 matches what notch apps use to clear the menu bar and its status items.
@@ -57,7 +57,10 @@ impl Notch {
     }
 
     fn layout(&self) -> Layout {
-        layout::layout(self.width, self.height, self.screen.size.height, latest_row_count(), media_extra_height())
+        {
+        let (rows, total) = latest_counts();
+        layout::layout(self.width, self.height, self.screen.size.height, rows, total)
+    }
     }
 }
 
@@ -125,17 +128,8 @@ fn notched_screen(mtm: MainThreadMarker) -> Option<Notch> {
     NSScreen::screens(mtm).iter().find_map(|s| Notch::read(&s))
 }
 
-fn latest_row_count() -> usize {
-    LATEST.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |s| s.rows.len())
-}
-
-/// Extra expanded height for the now playing block: a track, or the "access is off" line.
-fn media_extra_height() -> f64 {
-    match MEDIA.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-        Some(Media { track: Some(_), .. }) => 146.0,
-        Some(Media { track: None, health: Health::Denied, .. }) => 22.0,
-        _ => 0.0,
-    }
+fn latest_counts() -> (usize, usize) {
+    LATEST.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or((0, 0), |s| (s.rows.len(), s.total))
 }
 
 fn mode_name(mode: WindowMode) -> &'static str {
@@ -267,7 +261,6 @@ fn on_media(app: &AppHandle, media: Media) {
         eprintln!("{}", trace_line(&media));
     }
     let _ = app.emit("media", &media);
-    place_soon(app);
 }
 
 /// Parses, routes against the latest media and applies off the main thread.

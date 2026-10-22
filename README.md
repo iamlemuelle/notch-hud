@@ -1,19 +1,21 @@
 # notch-hud
 
 A MacBook notch panel that shows what each Claude Code session is doing. The collapsed pill sits over the notch, above
-the menu bar. Hover over it to see one row per session.
+the menu bar. Hover over it to open the panel: what is playing on top, your sessions below.
 
 | Dot | Meaning |
 |---|---|
-| Amber, with `⚠ N` | N sessions wait on a permission prompt or on your answer |
+| Amber | A session waits on a permission prompt or on your answer |
 | Green | At least one session is working |
 | Gray | Every session is done or waiting for your next prompt |
 
-Expanded rows read like `bianki — needs permission: Bash`, `lstack — working`, `patunay — done`.
+Under a `Claude Code` header (`1 needs you`, `2 working` or `All quiet`), each session gets a row with its own dot,
+like `bianki` with `needs permission: Bash` in amber, `lstack` `working`, `patunay` `done`. Up to four rows show,
+then `N more`.
 
-It also shows what is playing: the right ear carries the artwork with a small equalizer (or a pause mark), and the
-expanded panel adds a card with the artwork, title, artist, the app, a seek bar, and previous, play/pause and next
-buttons. Anything macOS lists as Now Playing shows up, so Apple Music, Spotify, and video in Safari or Chrome (YouTube
+It also shows what is playing: the right ear carries the artwork with a small equalizer tinted by the artwork (or a
+pause mark), and the expanded panel opens on a card with the artwork and a soft glow of its color, title, artist, the
+app, a seek bar, and previous, play/pause and next buttons. With nothing playing, the card says so. Anything macOS lists as Now Playing shows up, so Apple Music, Spotify, and video in Safari or Chrome (YouTube
 included, shown as the browser) all work. A wide thumbnail switches the card to a video layout. Clicking a control
 doesn't bring notch-hud to the front: the app you were in stays active.
 

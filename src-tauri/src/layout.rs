@@ -41,14 +41,22 @@ pub const BANNER_WIDTH: f64 = 380.0;
 /// Room around the banner and open shapes for the spring's overshoot.
 pub const MARGIN: f64 = 16.0;
 
-pub fn layout(notch_width: f64, notch_height: f64, screen_height: f64, rows: usize, media_extra: f64) -> Layout {
+/// The music block (196), the session header (18), a 4 pt gap, one 22 pt row per shown session row and 14 below.
+/// Shown rows: the summary's session rows, plus a "N more" row when the total exceeds them; one "No Claude Code
+/// sessions" row at zero.
+pub fn expanded_height(rows: usize, total: usize) -> f64 {
+    let shown_rows = (rows + usize::from(total > rows)).max(1);
+    (196 + 18 + 4 + 22 * shown_rows + 14) as f64
+}
+
+pub fn layout(notch_width: f64, notch_height: f64, screen_height: f64, rows: usize, total: usize) -> Layout {
     let pill = Size { width: notch_width + 2.0 * EAR, height: notch_height };
     Layout {
         stage: Size { width: EXPANDED_WIDTH + 2.0 * MARGIN, height: screen_height },
         pill,
         peek: Size { width: pill.width + 4.0, height: pill.height + 4.0 },
         banner: Size { width: BANNER_WIDTH, height: notch_height + 46.0 },
-        open: Size { width: EXPANDED_WIDTH, height: 44.0 + media_extra + 22.0 * rows.max(1) as f64 + 14.0 },
+        open: Size { width: EXPANDED_WIDTH, height: expanded_height(rows, total) },
         ear: EAR,
     }
 }

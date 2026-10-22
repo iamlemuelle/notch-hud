@@ -296,3 +296,13 @@ fn a_still_cursor_under_a_grown_shape_stays_out() {
 fn leaving_needs_no_movement() {
     assert!(!next_hover(true, false, false));
 }
+
+#[test]
+fn expanded_height_follows_shown_rows() {
+    assert_eq!(expanded_height(0, 0), 254.0);
+    assert_eq!(expanded_height(1, 1), 254.0);
+    assert_eq!(expanded_height(3, 3), 298.0);
+    assert_eq!(expanded_height(4, 4), 320.0);
+    assert_eq!(expanded_height(4, 5), 342.0);
+    assert_eq!(expanded_height(4, 50), 342.0);
+}
