@@ -8,7 +8,7 @@
 //   drive watch                     prints "watching", then one "activated <pid> <bundle id>" line per app activation
 //   drive hover <pid> [open height] moves onto the app's pill and waits until its window is the open window, 452 wide
 //                                   and <open height> + 16 tall (default 226); prints "x0=<n>", the panel's left edge
-//                                   (the window's left edge + 16)
+//                                   (the window's left edge + 16), once the panel has expanded
 //   drive bounds <pid>              prints "<x> <y> <w> <h>" of the app's panel window, exit 1 when it has none
 //   drive notch                     prints "<width> <height>" of the notch on the notched screen
 //   drive screen                    prints "<x> <y> <w> <h>" of the notched screen in global top-left coordinates
@@ -133,7 +133,13 @@ case "hover":
         pump(0.1)
         if let r = panel(of: pid) {
             last = r
-            if abs(r.width - 452) < 0.5 && abs(r.height - wantHeight) < 0.5 { out("x0=\(Int((r.minX + 16).rounded()))"); exit(0) }
+            if abs(r.width - 452) < 0.5 && abs(r.height - wantHeight) < 0.5 {
+                // The window grows when the 120 ms peek starts, while the hit rect is still the peek shape: wait for
+                // the expand (CONTRACT.md section 8), or a move down to the controls counts as leaving.
+                pump(0.3)
+                out("x0=\(Int((r.minX + 16).rounded()))")
+                exit(0)
+            }
         }
     }
     die(1, "window did not reach 452 x \(Int(wantHeight)) on hover; last bounds \(last)")
