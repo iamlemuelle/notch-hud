@@ -3,11 +3,26 @@
 A MacBook notch panel that shows what each Claude Code session is doing. The collapsed pill sits over the notch, above
 the menu bar. Hover over it to open the panel: what is playing on top, your sessions below.
 
-| Dot | Meaning |
+The left ear holds a small avatar and the session count. The avatar acts out what your sessions are doing:
+
+| Avatar | When |
 |---|---|
-| Amber | A session waits on a permission prompt or on your answer |
-| Green | At least one session is working |
-| Gray | Every session is done or waiting for your next prompt |
+| Surprised, count amber | A session waits on a permission prompt or on your answer |
+| Sad, count amber | A session stopped with an error |
+| Celebrating, for 4 s | A session just finished (with its banner) |
+| Working | At least one session is working |
+| Listening | Music is playing and nothing is working |
+| Idle, then drowsy after 2 min, asleep after 5 min | Everything is quiet |
+
+It ships with a default character. To use your own, make one in the
+[Bible Strong avatar lab](https://github.com/smontlouis/bible-strong-avatar-lab), export it (`*.avatar.json`, schema
+`bible-strong/avatar-definition` v1) and save it as `~/Library/Application Support/notch-hud/avatar.json`, or point
+`NOTCH_AVATAR` at it. Check a file with `src-tauri/target/notch-hud.app/Contents/MacOS/notch-hud --check-avatar <file>`,
+then restart the app (`launchctl kickstart -k gui/$(id -u)/com.lem.notch-hud`). The avatar plays the animations named
+`surprised`, `sad`, `celebrate`, `working`, `listening`, `idle`, `drowsy` and `sleeping` (with fallbacks, CONTRACT.md
+section 10); a missing one holds the `neutral` face. A file that is missing or invalid falls back to the default, and
+the reason goes to `~/Library/Logs/notch-hud.log` (`avatar: ...`). Avatar files are personal: `.gitignore` keeps
+`*.avatar.json` out of the repository.
 
 Under a `Claude Code` header (`1 needs you`, `2 working` or `All quiet`), each session gets a row with its own dot,
 like `bianki` with `needs permission: Bash` in amber, `lstack` `working`, `patunay` `done`. Up to four rows show,
@@ -26,12 +41,15 @@ doesn't bring notch-hud to the front: the app you were in stays active.
 2. The app (Tauri v2, Rust, one HTML page) reads that directory every second, works out a status per session, and
    draws the panel.
 
-3. Now Playing comes from the vendored [mediaremote-adapter](vendor/VENDORED.md), run as a `/usr/bin/perl`
+3. The avatar is drawn by the vendored [`@bible-strong/avatar-core`](vendor/VENDORED.md) renderer. Rust validates
+   the avatar file and picks the mood; the page paints only while the face moves, so a sleeping avatar costs nothing.
+
+4. Now Playing comes from the vendored [mediaremote-adapter](vendor/VENDORED.md), run as a `/usr/bin/perl`
    subprocess that streams JSON. It relies on a private macOS framework through a loophole Apple could close, so when
    its self-test fails the app falls back to asking Music and Spotify directly over AppleScript (macOS asks once for
    Automation access) and keeps retrying the adapter every minute. The controls go back the same way: the adapter's
    `send` and `seek` commands, or `tell application "Music"` (or `"Spotify"`) when on the fallback.
-4. The panel is a native non-activating `NSPanel` that hosts the Tauri webview. A plain Tauri window, even one turned
+5. The panel is a native non-activating `NSPanel` that hosts the Tauri webview. A plain Tauri window, even one turned
    into a panel after it is created, activates the app when clicked on macOS 27, which would take focus from the app
    you are working in.
 
@@ -97,6 +115,7 @@ at `src-tauri/target/release/notch-hud`, which finds the adapter in `src-tauri/t
 
 ```sh
 cd src-tauri && cargo test && cd ..   # status rules: grouping, priority, decay, pruning, contract values
+./tests/repo_test.sh                  # git-only rules: no avatar file committed, .gitignore, the vendored renderer's hash
 ./tests/hook_test.sh                  # the hook against real payloads in a temp directory
 ./tests/install_test.sh               # the installer against temp copies of settings.json
 ./tests/login_test.sh                 # the login item scripts against a fake launchctl
@@ -105,10 +124,12 @@ cd src-tauri && cargo test && cd ..   # status rules: grouping, priority, decay,
 ./tests/media_test.sh                 # Now Playing end to end on the bundled app: a fixture player through the real adapter, then the fallback
 ./tests/controls_test.sh              # real clicks on the controls drive the fixture player; the front app must not change
 ./tests/motion_test.sh                # the window grows on hover and for banners, and shrinks back to the pill
+./tests/avatar_test.sh                # --check-avatar, the avatar: log lines and mood traces on the real app, and the .gitignore rule
+./tests/avatar_schema_test.sh         # Rust's avatar parser against avatar-core 0.1.0 on a corpus of ~900 files (needs npm and the network)
 ./check.sh                            # end to end on the real screen, needs Screen Recording permission
 ```
 
-CI (`.github/workflows/ci.yml`) runs the first five on macOS 15 for every pull request and every push to `main`.
+CI (`.github/workflows/ci.yml`) runs cargo, repo, page, hook, installer and login tests on macOS 15 for every pull request and every push to `main`.
 `page_test.sh` needs `playwright-core` and its headless Chromium shell; locally it uses the npx cache, or the paths in
 `PLAYWRIGHT_CORE` and `CHROMIUM`, and exits 2 (skipped) without them. `media_test.sh`, `controls_test.sh`,
 `motion_test.sh` and `check.sh` run only locally, because they launch the app, which exits without a notched display.
@@ -141,3 +162,8 @@ screen pixels: the amber dot, the expanded rows, and the dot turning green after
 - While nothing is playing, the adapter's self-test briefly
   publishes a test track at startup and after a restart, which other Now Playing displays can see for a moment.
 - The adapter is looked up next to `target/<profile>/notch-hud`; a bundled `.app` will need a new path.
+
+## License
+
+AGPL-3.0 (`LICENSE`). The avatar renderer, `@bible-strong/avatar-core`, is AGPL-3.0-only, so the whole app is. The
+vendored mediaremote-adapter keeps its BSD-3-Clause license (`vendor/VENDORED.md`).

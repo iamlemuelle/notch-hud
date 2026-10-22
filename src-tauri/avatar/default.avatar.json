@@ -1,0 +1,1115 @@
+{
+  "schema": "bible-strong/avatar-definition",
+  "schemaVersion": 1,
+  "name": "Notchling",
+  "body": {
+    "primary": {
+      "type": "capsule",
+      "width": 250,
+      "height": 190,
+      "depth": 210,
+      "roundness": 1
+    },
+    "nodes": []
+  },
+  "colors": {
+    "body": "#ececec",
+    "eyes": "#141414"
+  },
+  "expressions": {
+    "neutral": {
+      "head": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "eyes": {
+        "left": {
+          "width": 42,
+          "height": 50,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 42,
+          "height": 50,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 81
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "look-left": {
+      "head": {
+        "x": 2,
+        "y": -24,
+        "z": 0
+      },
+      "eyes": {
+        "left": {
+          "width": 42,
+          "height": 50,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 42,
+          "height": 50,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 78
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "look-right": {
+      "head": {
+        "x": 2,
+        "y": 24,
+        "z": 0
+      },
+      "eyes": {
+        "left": {
+          "width": 42,
+          "height": 50,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 42,
+          "height": 50,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 78
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "look-up": {
+      "head": {
+        "x": 14,
+        "y": 6,
+        "z": -4
+      },
+      "eyes": {
+        "left": {
+          "width": 42,
+          "height": 52,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 42,
+          "height": 52,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 81
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "look-down": {
+      "head": {
+        "x": -16,
+        "y": 0,
+        "z": 0
+      },
+      "eyes": {
+        "left": {
+          "width": 42,
+          "height": 44,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 42,
+          "height": 44,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 81
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "focus-left": {
+      "head": {
+        "x": -8,
+        "y": -14,
+        "z": 3
+      },
+      "eyes": {
+        "left": {
+          "width": 40,
+          "height": 29,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 40,
+          "height": 29,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 75
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "focus-right": {
+      "head": {
+        "x": -8,
+        "y": 14,
+        "z": -3
+      },
+      "eyes": {
+        "left": {
+          "width": 40,
+          "height": 29,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 40,
+          "height": 29,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 75
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "tilt-left": {
+      "head": {
+        "x": 4,
+        "y": -10,
+        "z": -12
+      },
+      "eyes": {
+        "left": {
+          "width": 42,
+          "height": 52,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 42,
+          "height": 52,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 81
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "tilt-right": {
+      "head": {
+        "x": 4,
+        "y": 10,
+        "z": 12
+      },
+      "eyes": {
+        "left": {
+          "width": 42,
+          "height": 52,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 42,
+          "height": 52,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 81
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "sway-left": {
+      "head": {
+        "x": -10,
+        "y": -6,
+        "z": -9
+      },
+      "eyes": {
+        "left": {
+          "width": 43,
+          "height": 20,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 43,
+          "height": 20,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 81
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "sway-right": {
+      "head": {
+        "x": -10,
+        "y": 6,
+        "z": 9
+      },
+      "eyes": {
+        "left": {
+          "width": 43,
+          "height": 20,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 43,
+          "height": 20,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 81
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "wide": {
+      "head": {
+        "x": 10,
+        "y": 0,
+        "z": 0
+      },
+      "eyes": {
+        "left": {
+          "width": 57,
+          "height": 70,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 57,
+          "height": 70,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 86
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "wide-tilt": {
+      "head": {
+        "x": 10,
+        "y": -8,
+        "z": -8
+      },
+      "eyes": {
+        "left": {
+          "width": 57,
+          "height": 70,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 57,
+          "height": 70,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 86
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "squint": {
+      "head": {
+        "x": 8,
+        "y": 0,
+        "z": 0
+      },
+      "eyes": {
+        "left": {
+          "width": 51,
+          "height": 14,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 51,
+          "height": 14,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 83
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "squint-left": {
+      "head": {
+        "x": 8,
+        "y": -10,
+        "z": -10
+      },
+      "eyes": {
+        "left": {
+          "width": 51,
+          "height": 14,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 51,
+          "height": 14,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 83
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "squint-right": {
+      "head": {
+        "x": 8,
+        "y": 10,
+        "z": 10
+      },
+      "eyes": {
+        "left": {
+          "width": 51,
+          "height": 14,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 51,
+          "height": 14,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 83
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "half": {
+      "head": {
+        "x": -8,
+        "y": 0,
+        "z": 5
+      },
+      "eyes": {
+        "left": {
+          "width": 46,
+          "height": 22,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 46,
+          "height": 22,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 81
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "closed": {
+      "head": {
+        "x": -12,
+        "y": 0,
+        "z": 6
+      },
+      "eyes": {
+        "left": {
+          "width": 51,
+          "height": 7,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 51,
+          "height": 7,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 81
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "closed-low": {
+      "head": {
+        "x": -16,
+        "y": 0,
+        "z": 8
+      },
+      "eyes": {
+        "left": {
+          "width": 51,
+          "height": 7,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "right": {
+          "width": 51,
+          "height": 7,
+          "x": 0,
+          "y": 0,
+          "angle": 0
+        },
+        "spacing": 81
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "sad": {
+      "head": {
+        "x": -14,
+        "y": 0,
+        "z": -4
+      },
+      "eyes": {
+        "left": {
+          "width": 50,
+          "height": 24,
+          "x": 0,
+          "y": 0,
+          "angle": 20
+        },
+        "right": {
+          "width": 50,
+          "height": 24,
+          "x": 0,
+          "y": 0,
+          "angle": -20
+        },
+        "spacing": 78
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "sad-low": {
+      "head": {
+        "x": -20,
+        "y": -6,
+        "z": -6
+      },
+      "eyes": {
+        "left": {
+          "width": 50,
+          "height": 22,
+          "x": 0,
+          "y": 0,
+          "angle": 22
+        },
+        "right": {
+          "width": 50,
+          "height": 22,
+          "x": 0,
+          "y": 0,
+          "angle": -22
+        },
+        "spacing": 78
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "frown": {
+      "head": {
+        "x": -6,
+        "y": -6,
+        "z": 0
+      },
+      "eyes": {
+        "left": {
+          "width": 50,
+          "height": 24,
+          "x": 0,
+          "y": 0,
+          "angle": -24
+        },
+        "right": {
+          "width": 50,
+          "height": 24,
+          "x": 0,
+          "y": 0,
+          "angle": 24
+        },
+        "spacing": 73
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "none"
+      }
+    },
+    "frown-shake": {
+      "head": {
+        "x": -6,
+        "y": 6,
+        "z": 0
+      },
+      "eyes": {
+        "left": {
+          "width": 50,
+          "height": 24,
+          "x": 0,
+          "y": 0,
+          "angle": -24
+        },
+        "right": {
+          "width": 50,
+          "height": 24,
+          "x": 0,
+          "y": 0,
+          "angle": 24
+        },
+        "spacing": 73
+      },
+      "perspective": 1,
+      "motion": {
+        "eyes": "none",
+        "body": "shake"
+      }
+    }
+  },
+  "expressionOrder": [
+    "neutral",
+    "look-left",
+    "look-right",
+    "look-up",
+    "look-down",
+    "focus-left",
+    "focus-right",
+    "tilt-left",
+    "tilt-right",
+    "sway-left",
+    "sway-right",
+    "wide",
+    "wide-tilt",
+    "squint",
+    "squint-left",
+    "squint-right",
+    "half",
+    "closed",
+    "closed-low",
+    "sad",
+    "sad-low",
+    "frown",
+    "frown-shake"
+  ],
+  "animations": {
+    "idle": {
+      "playbackMode": "loop",
+      "steps": [
+        {
+          "expression": "neutral",
+          "holdMs": 4200,
+          "transitionMs": 450,
+          "transition": "smooth"
+        },
+        {
+          "expression": "look-left",
+          "holdMs": 2200,
+          "transitionMs": 450,
+          "transition": "smooth"
+        },
+        {
+          "expression": "neutral",
+          "holdMs": 3200,
+          "transitionMs": 450,
+          "transition": "smooth"
+        },
+        {
+          "expression": "look-up",
+          "holdMs": 1800,
+          "transitionMs": 450,
+          "transition": "smooth"
+        }
+      ],
+      "blink": {
+        "enabled": true,
+        "initialDelayMs": 2400,
+        "minIntervalMs": 3200,
+        "maxIntervalMs": 6000,
+        "durationMs": 220
+      }
+    },
+    "listening": {
+      "playbackMode": "loop",
+      "steps": [
+        {
+          "expression": "sway-left",
+          "holdMs": 900,
+          "transitionMs": 600,
+          "transition": "smooth"
+        },
+        {
+          "expression": "sway-right",
+          "holdMs": 900,
+          "transitionMs": 600,
+          "transition": "smooth"
+        }
+      ],
+      "blink": {
+        "enabled": false,
+        "initialDelayMs": 2400,
+        "minIntervalMs": 3200,
+        "maxIntervalMs": 6000,
+        "durationMs": 220
+      }
+    },
+    "working": {
+      "playbackMode": "loop",
+      "steps": [
+        {
+          "expression": "focus-left",
+          "holdMs": 1800,
+          "transitionMs": 350,
+          "transition": "snappy"
+        },
+        {
+          "expression": "focus-right",
+          "holdMs": 1800,
+          "transitionMs": 350,
+          "transition": "snappy"
+        },
+        {
+          "expression": "look-down",
+          "holdMs": 1400,
+          "transitionMs": 350,
+          "transition": "snappy"
+        }
+      ],
+      "blink": {
+        "enabled": true,
+        "initialDelayMs": 2000,
+        "minIntervalMs": 2800,
+        "maxIntervalMs": 5000,
+        "durationMs": 200
+      }
+    },
+    "thinking": {
+      "playbackMode": "loop",
+      "steps": [
+        {
+          "expression": "look-up",
+          "holdMs": 2200,
+          "transitionMs": 450,
+          "transition": "smooth"
+        },
+        {
+          "expression": "tilt-left",
+          "holdMs": 1800,
+          "transitionMs": 450,
+          "transition": "smooth"
+        },
+        {
+          "expression": "look-up",
+          "holdMs": 1600,
+          "transitionMs": 450,
+          "transition": "smooth"
+        },
+        {
+          "expression": "tilt-right",
+          "holdMs": 1800,
+          "transitionMs": 450,
+          "transition": "smooth"
+        }
+      ],
+      "blink": {
+        "enabled": true,
+        "initialDelayMs": 2000,
+        "minIntervalMs": 2800,
+        "maxIntervalMs": 5000,
+        "durationMs": 200
+      }
+    },
+    "surprised": {
+      "playbackMode": "loop",
+      "steps": [
+        {
+          "expression": "wide",
+          "holdMs": 1400,
+          "transitionMs": 250,
+          "transition": "spring"
+        },
+        {
+          "expression": "wide-tilt",
+          "holdMs": 1400,
+          "transitionMs": 300,
+          "transition": "spring"
+        }
+      ],
+      "blink": {
+        "enabled": true,
+        "initialDelayMs": 1200,
+        "minIntervalMs": 1800,
+        "maxIntervalMs": 3600,
+        "durationMs": 180
+      }
+    },
+    "curious": {
+      "playbackMode": "loop",
+      "steps": [
+        {
+          "expression": "tilt-left",
+          "holdMs": 1600,
+          "transitionMs": 350,
+          "transition": "spring"
+        },
+        {
+          "expression": "tilt-right",
+          "holdMs": 1600,
+          "transitionMs": 350,
+          "transition": "spring"
+        }
+      ],
+      "blink": {
+        "enabled": true,
+        "initialDelayMs": 1500,
+        "minIntervalMs": 2000,
+        "maxIntervalMs": 4000,
+        "durationMs": 200
+      }
+    },
+    "celebrate": {
+      "playbackMode": "loop",
+      "steps": [
+        {
+          "expression": "squint",
+          "holdMs": 500,
+          "transitionMs": 250,
+          "transition": "spring"
+        },
+        {
+          "expression": "squint-right",
+          "holdMs": 500,
+          "transitionMs": 250,
+          "transition": "spring"
+        },
+        {
+          "expression": "squint",
+          "holdMs": 500,
+          "transitionMs": 250,
+          "transition": "spring"
+        },
+        {
+          "expression": "squint-left",
+          "holdMs": 500,
+          "transitionMs": 250,
+          "transition": "spring"
+        }
+      ],
+      "blink": {
+        "enabled": false,
+        "initialDelayMs": 2400,
+        "minIntervalMs": 3200,
+        "maxIntervalMs": 6000,
+        "durationMs": 220
+      }
+    },
+    "happy": {
+      "playbackMode": "loop",
+      "steps": [
+        {
+          "expression": "squint",
+          "holdMs": 1600,
+          "transitionMs": 450,
+          "transition": "smooth"
+        },
+        {
+          "expression": "neutral",
+          "holdMs": 1800,
+          "transitionMs": 450,
+          "transition": "smooth"
+        }
+      ],
+      "blink": {
+        "enabled": true,
+        "initialDelayMs": 2400,
+        "minIntervalMs": 3200,
+        "maxIntervalMs": 6000,
+        "durationMs": 220
+      }
+    },
+    "excited": {
+      "playbackMode": "loop",
+      "steps": [
+        {
+          "expression": "wide",
+          "holdMs": 700,
+          "transitionMs": 250,
+          "transition": "spring"
+        },
+        {
+          "expression": "squint",
+          "holdMs": 700,
+          "transitionMs": 250,
+          "transition": "spring"
+        }
+      ],
+      "blink": {
+        "enabled": false,
+        "initialDelayMs": 2400,
+        "minIntervalMs": 3200,
+        "maxIntervalMs": 6000,
+        "durationMs": 220
+      }
+    },
+    "sad": {
+      "playbackMode": "loop",
+      "steps": [
+        {
+          "expression": "sad",
+          "holdMs": 3000,
+          "transitionMs": 800,
+          "transition": "smooth"
+        },
+        {
+          "expression": "sad-low",
+          "holdMs": 3000,
+          "transitionMs": 800,
+          "transition": "smooth"
+        }
+      ],
+      "blink": {
+        "enabled": true,
+        "initialDelayMs": 3000,
+        "minIntervalMs": 5000,
+        "maxIntervalMs": 8000,
+        "durationMs": 320
+      }
+    },
+    "angry": {
+      "playbackMode": "loop",
+      "steps": [
+        {
+          "expression": "frown",
+          "holdMs": 1600,
+          "transitionMs": 300,
+          "transition": "snappy"
+        },
+        {
+          "expression": "frown-shake",
+          "holdMs": 600,
+          "transitionMs": 200,
+          "transition": "snappy"
+        }
+      ],
+      "blink": {
+        "enabled": true,
+        "initialDelayMs": 2000,
+        "minIntervalMs": 2800,
+        "maxIntervalMs": 5000,
+        "durationMs": 200
+      }
+    },
+    "drowsy": {
+      "playbackMode": "loop",
+      "steps": [
+        {
+          "expression": "half",
+          "holdMs": 3000,
+          "transitionMs": 900,
+          "transition": "smooth"
+        },
+        {
+          "expression": "closed",
+          "holdMs": 1600,
+          "transitionMs": 900,
+          "transition": "smooth"
+        },
+        {
+          "expression": "half",
+          "holdMs": 2600,
+          "transitionMs": 900,
+          "transition": "smooth"
+        }
+      ],
+      "blink": {
+        "enabled": false,
+        "initialDelayMs": 2400,
+        "minIntervalMs": 3200,
+        "maxIntervalMs": 6000,
+        "durationMs": 220
+      }
+    },
+    "bored": {
+      "playbackMode": "loop",
+      "steps": [
+        {
+          "expression": "half",
+          "holdMs": 3200,
+          "transitionMs": 800,
+          "transition": "smooth"
+        },
+        {
+          "expression": "look-left",
+          "holdMs": 2400,
+          "transitionMs": 800,
+          "transition": "smooth"
+        }
+      ],
+      "blink": {
+        "enabled": true,
+        "initialDelayMs": 3000,
+        "minIntervalMs": 5000,
+        "maxIntervalMs": 8000,
+        "durationMs": 320
+      }
+    },
+    "sleeping": {
+      "playbackMode": "loop",
+      "steps": [
+        {
+          "expression": "closed",
+          "holdMs": 4000,
+          "transitionMs": 1200,
+          "transition": "smooth"
+        },
+        {
+          "expression": "closed-low",
+          "holdMs": 4000,
+          "transitionMs": 1200,
+          "transition": "smooth"
+        }
+      ],
+      "blink": {
+        "enabled": false,
+        "initialDelayMs": 2400,
+        "minIntervalMs": 3200,
+        "maxIntervalMs": 6000,
+        "durationMs": 220
+      }
+    }
+  },
+  "animationOrder": [
+    "idle",
+    "listening",
+    "working",
+    "thinking",
+    "surprised",
+    "curious",
+    "celebrate",
+    "happy",
+    "excited",
+    "sad",
+    "angry",
+    "drowsy",
+    "bored",
+    "sleeping"
+  ]
+}

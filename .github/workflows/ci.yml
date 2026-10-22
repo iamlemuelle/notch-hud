@@ -31,6 +31,10 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Repo tests
+        # Needs only git: no tracked avatar definition outside the default and fixtures, .gitignore keeps avatar files
+        # out, and the vendored renderer matches its recorded hash.
+        run: ./tests/repo_test.sh
       - name: Page tests
         # dist/index.html in headless Chromium against a fake bridge (tests/page_test.sh). Playwright is installed under
         # RUNNER_TEMP so the repo gets no package.json. tests/page_test.sh exits 2 when a dependency is missing; that

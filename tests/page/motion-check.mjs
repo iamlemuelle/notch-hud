@@ -14,6 +14,7 @@
 // Env: PLAYWRIGHT_CORE (path to playwright-core), CHROMIUM (path to a headless chromium), NOTCH_PAGE (page to load,
 // default dist/index.html). Exit 0 when every check passes, 1 when one fails, 2 when the browser cannot start.
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,6 +22,7 @@ const require = createRequire(import.meta.url);
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PW = process.env.PLAYWRIGHT_CORE || '/Users/lem/.npm/_npx/a1722018f28f9df2/node_modules/playwright-core';
 const CHROMIUM = process.env.CHROMIUM || '/Users/lem/Library/Caches/ms-playwright/chromium_headless_shell-1208/chrome-headless-shell-mac-arm64/chrome-headless-shell';
+const AVATAR = JSON.parse(readFileSync(join(repo, 'tests', 'avatar', 'fixtures', 'ball.json'), 'utf8'));
 const PAGE_FILE = resolve(process.env.NOTCH_PAGE || join(repo, 'dist', 'index.html'));
 
 let chromium;
@@ -78,7 +80,7 @@ const pageErrors = [];
 const seenProps = new Set();
 
 // Installed before any page script: the fake bridge, the recorders and the viewport emulation hook.
-function installBridge({ layout, windows, holdLayout, initial }) {
+function installBridge({ layout, windows, holdLayout, initial, avatar }) {
   const rec = (window.__rec = { events: [], surfaces: [], phases: [], trans: [], resizes: [], invokes: [] });
   const handlers = {};
   const now = () => performance.now();
@@ -119,6 +121,8 @@ function installBridge({ layout, windows, holdLayout, initial }) {
         }
         if (cmd === 'media') return late(initial ? initial.media : null);
         if (cmd === 'sessions') return late(initial ? initial.sessions : null);
+        if (cmd === 'avatar') return Promise.resolve({ source: 'default', definition: avatar });
+        if (cmd === 'mood') return Promise.resolve({ mood: 'idle', animations: ['idle'], still: false });
         if (cmd === 'surface') {
           const entry = { t: now(), args: JSON.parse(JSON.stringify(args ?? null)), resolved: null, rejected: false };
           rec.surfaces.push(entry);
@@ -215,7 +219,7 @@ function installBridge({ layout, windows, holdLayout, initial }) {
   };
 }
 
-const ELEMENTS = ['#stage', '#panel', '#lear', '#earBars', '#earPause', '#art', '#content', '#banner', '#bTitle', '#bSub', '#bIcon', '#bannerBars'];
+const ELEMENTS = ['#stage', '#panel', '#lear', '#avatar', '#total', '#earBars', '#earPause', '#art', '#content', '#banner', '#bTitle', '#bSub', '#bIcon', '#bannerBars'];
 
 async function openPage(opts = {}) {
   const page = await browser.newPage({ viewport: { width: WINDOW.pill.w, height: WINDOW.pill.h } });
@@ -224,7 +228,7 @@ async function openPage(opts = {}) {
   page.on('console', (m) => { if (m.type() === 'error') pageErrors.push(`${tag}: console: ${m.text()}`); });
   if (opts.reduced) await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.exposeFunction('__setWindow', (w, h) => page.setViewportSize({ width: w, height: h }).catch(() => {}));
-  await page.addInitScript(installBridge, { layout: LAYOUT, windows: WINDOW, holdLayout: !!opts.holdLayout, initial: opts.initial || null });
+  await page.addInitScript(installBridge, { layout: LAYOUT, windows: WINDOW, holdLayout: !!opts.holdLayout, initial: opts.initial || null, avatar: AVATAR });
   await page.goto('file://' + PAGE_FILE);
   if (!opts.holdLayout) await page.waitForFunction(() => document.body.dataset.phase, null, { timeout: 1500 }).catch(() => {});
   return page;
@@ -343,7 +347,9 @@ async function scenarioHover() {
   const rest = await snap(page);
   check('H0 collapsed at rest: phase, stage, clip, ear art, ears at 0.82, window pill', rest.phase === 'collapsed' && stageStays(rest) && rest.vw === 305 && rest.vh === 32 && boxIs(rest.el['#panel'], 0, 0, STAGE.w, STAGE.h) && !clipIs(rest.el['#panel'] && rest.el['#panel'].clip, 'pill') && near(rest.el['#lear'] && rest.el['#lear'].opacity, 0.82, 0.01),
     J({ phase: rest.phase, vw: rest.vw, vh: rest.vh, stage: rest.stage, panel: explain(rest.el['#panel']), clip: rest.el['#panel'] && clipIs(rest.el['#panel'].clip, 'pill'), lear: explain(rest.el['#lear']) }));
-  check('H0c the left ear #lear is at stage x 87.5 (pillL + 14), as tall as the pill, and there is no #warn', !!rest.el['#lear'] && near(rest.el['#lear'].x, 87.5, 1) && near(rest.el['#lear'].y, 0, 1) && near(rest.el['#lear'].h, 32, 1) && (await page.evaluate(() => !document.querySelector('#warn, #earL'))), explain(rest.el['#lear']));
+  check('H0c the avatar #avatar is 24 x 24 at stage (85.5, 4) (pillL + 12), #total starts at x 114.5 (pillL + 41) centered on y 16, and there is no #warn',
+    boxIs(rest.el['#avatar'], 85.5, 4, 24, 24, 1) && !!rest.el['#total'] && near(rest.el['#total'].x, 114.5, 1) && near(rest.el['#total'].y + rest.el['#total'].h / 2, 16, 1) && (await page.evaluate(() => !document.querySelector('#warn, #earL'))),
+    J({ avatar: explain(rest.el['#avatar']), total: explain(rest.el['#total']) }));
   check('H0a collapsed #art is a square 18x18 at stage (326.5, 7)', boxIs(rest.el['#art'], 326.5, 7, 18, 18), explain(rest.el['#art']));
   check('H0b nothing but the resting pill is sent to surface before any hover', (await rec(page)).surfaces.every((s) => !notPill(s)), J((await rec(page)).surfaces));
   await collectProps(page);
@@ -643,7 +649,7 @@ async function scenarioEar() {
   await sleep(800);
   const at = await snap(p2);
   check('A1 attention > 0: no #warn, and the ear art, equalizer bars and the dot are all still shown (no "⚠ N")', (await p2.evaluate(() => !document.querySelector('#warn'))) && visible(at.el['#art']) && near(at.el['#art'].opacity, 1, 0.01) && boxIs(at.el['#art'], 326.5, 7, 18, 18) && visible(at.el['#earBars']) && hidden(at.el['#earPause']) && !/⚠/.test(at.el['#lear'] ? at.el['#lear'].text : '') , J({ art: explain(at.el['#art']), bars: explain(at.el['#earBars']), pause: explain(at.el['#earPause']), lear: at.el['#lear'] && at.el['#lear'].text }));
-  check('A2 attention > 0: the left ear reads the total (2) with an amber dot, at opacity 0.82 collapsed', !!at.el['#lear'] && at.el['#lear'].text === '2' && near(at.el['#lear'].opacity, 0.82, 0.01) && (await p2.evaluate(() => getComputedStyle(document.querySelector('#dot')).backgroundColor)) === AMBER, J({ lear: explain(at.el['#lear']), text: at.el['#lear'] && at.el['#lear'].text }));
+  check('A2 attention > 0: the left ear reads the total (2) in amber, at opacity 0.82 collapsed', !!at.el['#lear'] && at.el['#lear'].text === '2' && near(at.el['#lear'].opacity, 0.82, 0.01) && (await p2.evaluate(() => getComputedStyle(document.querySelector('#total')).color)) === AMBER, J({ lear: explain(at.el['#lear']), text: at.el['#lear'] && at.el['#lear'].text }));
   await fire(p2, 'hover', true);
   await sleep(900);
   const ex = await snap(p2);
@@ -652,10 +658,10 @@ async function scenarioEar() {
   await sleep(1100);
   const bk = await snap(p2);
   check('A4 collapsed again: #lear back at 0.82, the ear art back in the ear and shown', near(bk.el['#lear'] && bk.el['#lear'].opacity, 0.82, 0.01) && visible(bk.el['#art']) && boxIs(bk.el['#art'], 326.5, 7, 18, 18), J({ lear: explain(bk.el['#lear']), art: explain(bk.el['#art']) }));
-  // An error row counts as attention: the dot is amber.
+  // An error row counts as attention: the total is amber.
   await fire(p2, 'sessions', summary([row('paxiv', 'error')]));
   await sleep(300);
-  check('A5 an error row makes the left-ear dot amber (error counts as attention)', (await p2.evaluate(() => getComputedStyle(document.querySelector('#dot')).backgroundColor)) === AMBER, 'dot is not amber');
+  check('A5 an error row makes the left-ear total amber (error counts as attention)', (await p2.evaluate(() => getComputedStyle(document.querySelector('#total')).color)) === AMBER, 'total is not amber');
   await p2.close();
 }
 

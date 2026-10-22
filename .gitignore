@@ -4,3 +4,8 @@ shot*.png
 check-bin
 .DS_Store
 .claude/
+
+# Avatar files are personal (CONTRACT.md section 10). Only the default is committed.
+avatar.json
+*.avatar.json
+!src-tauri/avatar/default.avatar.json

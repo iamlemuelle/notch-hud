@@ -237,10 +237,12 @@ The approved prototype (https://claude.ai/artifact/96cCAcQdoj6VVTnpDFEdCa) is th
 section 7 "App and UI" are its static part (no motion). Colors: text `#f5f5f5`, muted `#8b8b8b`, amber `#f5a623`
 (attention), green `#34d058` (working), gray `#8b8b8b` (idle); the pill is pure black. Font: the system UI font.
 
-- Collapsed (305 x 32 on a 185 pt notch: the notch plus a 60 pt ear each side), left ear: an 8 pt dot and `total`,
-  600 12 px tabular, at 0.82 opacity (1 while expanded). Dot: amber with a 6 px glow of its color when
-  `attention > 0`; else green with glow when `working > 0`; else gray, no glow.
-- Collapsed right ear: Now Playing only (section 7). Attention shows on the dot only; there is no `⚠ N`.
+- Collapsed (305 x 32 on a 185 pt notch: the notch plus a 60 pt ear each side), left ear: the avatar (section 10)
+  and `total`, 600 12 px tabular, at 0.82 opacity (1 while expanded). `total` is amber when `attention > 0`, else
+  `#f5f5f5`. Only when the avatar cannot be shown (section 10, "Page") does the 8 pt dot stand in its place: amber
+  with a 6 px glow of its color when `attention > 0`; else green with glow when `working > 0`; else gray, no glow.
+- Collapsed right ear: Now Playing only (section 7). Attention shows in the left ear only (the amber count and the
+  avatar's mood, section 10); there is no `⚠ N`.
 - Expanded, the session section starts 196 pt below the panel top, 16 pt from the left, 388 pt wide:
   - header row, 18 pt tall, 600 11 px muted: `Claude Code` on the left; on the right `<attention> need you`
     (`needs you` when 1) in amber when `attention > 0`, else `<working> working` when `working > 0`, else `All quiet`.
@@ -603,13 +605,13 @@ impl Hover {
 - `#stage`: `stage.width` × `stage.height`, at `left: calc(50% - stage.width / 2)`, `top: 0`, so it stays put on screen
   whatever the window size. `#panel`: the black shape filling the stage, clipped by
   `inset(0 L (stage.height - h) L round 0 0 r r)` with `L = (stage.width - w) / 2` for the current shape (w, h) and
-  radius `r`: pill 14, peek 14, banner 20, open 22. Children of `#panel` (so the clip cuts them): `.lear` (dot,
-  count), `#earBars`, `#earPause`, `#art`, `#content` (the music block and the session section of sections 4 and 7,
+  radius `r`: pill 14, peek 14, banner 20, open 22. Children of `#panel` (so the clip cuts them): `.lear` (avatar,
+  dot, count), `#earBars`, `#earPause`, `#art`, `#content` (the music block and the session section of sections 4 and 7,
   positioned from its top-left as there), `#banner`. `#panel` has the `video` class while the artwork is wide.
 - `body.dataset.phase` is the current phase name (below). The stage stays hidden until the first `layout` arrives.
 - Positions, in stage pt, with `pillL = (stage.width - pill.width) / 2`, `R = pillL + pill.width - ear`,
   `bannerL = (stage.width - banner.width) / 2`, `contentL = (stage.width - open.width) / 2`:
-  - `.lear`: at x `pillL + 14`, the pill's height (section 4).
+  - `.lear`: the avatar and the count, placed by section 10's table ("Page").
   - `#art`: one element for every place, replacing section 7's separate ear and card artwork: a 64 × 64 box (radius
     13), or 112 × 63 (radius 8) when wide, with the hairline and, without an image, the placeholder of section 7,
     `transform-origin: 0 0`, placed by `translate(x, y) scale(s)`. The radius scales with it (about 3.7 pt in the
@@ -766,3 +768,185 @@ Any failing step exits non-zero and leaves an existing `src-tauri/target/notch-h
   `cdhash` instead). So two builds with the same certificate print the same requirement, and TCC, which matches on
   it, keeps its grants.
 
+
+## 10. Avatar
+
+A small procedural character in the left ear acts out what the sessions are doing. Rust picks a mood from the
+sessions and Now Playing and loads the avatar file; the page draws it with the vendored renderer.
+
+### Renderer (`dist/vendor/avatar-core.js`)
+
+- `@bible-strong/avatar-core` 0.1.0 (npm, AGPL-3.0-only), bundled by `scripts/vendor-avatar-core.sh` into one classic
+  script that defines `window.AvatarCore` (esbuild, IIFE, not minified). The script downloads the pinned tarball,
+  refuses it unless its sha512 equals the integrity in `vendor/VENDORED.md`, and replaces the package's one
+  dependency, `ajv`, with a stub whose validator throws, so no JSON Schema validator reaches the page: Rust
+  validates every definition before the page sees it (below). The script reads the bundle's expected sha256 from
+  `vendor/VENDORED.md` and writes nothing when its output differs (esbuild itself is fetched by version, not by hash, so this is the check
+  that catches a changed toolchain). The committed bundle's sha256 equals the one in `vendor/VENDORED.md`.
+- The page uses only the package's playback and scene functions (`playAvatarAnimation`, `advanceAvatarPlayback`,
+  `sampleAvatarFrame`, `renderAvatarFrame`, `renderAvatarDefinition`), never `validateAvatarDefinition` or
+  `parseAvatarDefinition`.
+- The repository is licensed AGPL-3.0 (`LICENSE`), because the renderer is AGPL-3.0-only.
+
+### Avatar file (`src-tauri/src/avatar.rs`)
+
+```rust
+pub const MAX_BYTES: usize = 262_144;
+pub const DEFAULT: &str = include_str!("../avatar/default.avatar.json");
+
+pub fn avatar_path() -> std::path::PathBuf;
+pub fn avatar_path_from(notch_avatar: Option<&std::ffi::OsStr>, home: Option<&std::ffi::OsStr>) -> std::path::PathBuf;
+pub fn parse(text: &str) -> Result<serde_json::Value, String>;
+pub fn load(path: &std::path::Path) -> Result<serde_json::Value, String>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Source { User, Default }
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Avatar { pub source: Source, pub definition: serde_json::Value }
+```
+
+- `avatar_path()` is `avatar_path_from` of the environment's `NOTCH_AVATAR` and `HOME`.
+  `avatar_path_from(notch_avatar, home)` (pure): `notch_avatar` if present and non-empty, else
+  `<home>/Library/Application Support/notch-hud/avatar.json` (with no `home`, that path relative to the working
+  directory; launchd always sets `HOME`).
+- `parse(text)` accepts exactly what avatar-core 0.1.0's `parseAvatarDefinition` accepts, and returns the parsed
+  JSON, with one difference: a string holding an unpaired UTF-16 surrogate escape (`"\ud800"`), which JavaScript
+  accepts, is rejected, because a Rust string cannot hold it. Numbers are read exactly (serde_json's `float_roundtrip`),
+  so a bound is never passed by rounding. `Err(reason)` otherwise, where `reason` starts with the RFC 6901 pointer
+  of the offending member and `: ` (`/animations/idle/steps/0/expression: unknown expression 'nap'`) when there is
+  one. The rules are written out in Rust rather than run from the package's schema file by a JSON Schema crate: one
+  fewer dependency for a pinned version, and `tests/avatar_schema_test.sh` checks the verdicts against avatar-core
+  itself. The rules:
+  1. At most `MAX_BYTES` UTF-8 bytes. Valid JSON, and no object has the same key twice.
+  2. The v1 schema (`avatarDefinition.schema.json` in the package): top level `schema` = `"bible-strong/avatar-definition"`,
+     `schemaVersion` = 1, optional `name` (at most 120 characters), `body`, `colors`, `expressions`, `expressionOrder`,
+     `animations`, `animationOrder`, optional `standardAnimationSet` = 1, and no other member. Every object in the
+     schema rejects members it does not list. Semantic keys (expression and animation names, step expressions, order
+     entries) match `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$` and have at most 64 characters. Colors match `^#[0-9a-f]{6}$`.
+     `expressions` has 1 to 128 members and must include `neutral`; `animations` at most 64; `expressionOrder` 1 to
+     128 unique entries; `animationOrder` at most 64 unique entries; `body.nodes` at most 16, whose surface type is
+     not `mickey` or `cursor`; each animation 1 to 128 steps. Numeric ranges: surface `width`, `height`, `depth`
+     0.001 to 10000; `roundness`, `morphRoundness`, `tipRoundness`, `baseRoundness` 0 to 1; node `position` 3 numbers
+     from -10000 to 10000, `rotation` 3 numbers from -360 to 360; every head, eye and `spacing` number -10000 to 10000;
+     `perspective` 0.1 to 10; `holdMs` 100 to 60000; `transitionMs` 0 to 5000; blink `initialDelayMs` 0 to 60000,
+     `minIntervalMs` and `maxIntervalMs` 250 to 120000, `durationMs` 50 to 2000. Enums: surface type `sphere`,
+     `mickey`, `cursor`, `cube`, `capsule`, `cylinder`, `cone`, `diamond`; motion eyes `none`, `microSaccades`,
+     `shake`; motion body `none`, `slowDrift`, `shake`; `playbackMode` `loop`, `once`, `pingPong`; `transition`
+     `spring`, `smooth`, `snappy`. An expression's optional `colors` has at least one of `body`, `eyes`; an
+     animation's optional `metadata` at least one of `label` (at most 120 characters), `description` (512), `group`
+     (64).
+  3. `expressionOrder` starts with `neutral`, and it and `animationOrder` list exactly the keys of `expressions` and
+     `animations`; every blink has `minIntervalMs <= maxIntervalMs`; every step's `expression` is a key of
+     `expressions`.
+- `load(path)`: `Err("no file")` when nothing is at `path`; `Err("not a file")` when it is not a regular file (a
+  directory, or a FIFO, which it opens without blocking; symlinks are followed); the error's own text for any other
+  failure to open (permission denied, for example); `Err("larger than 262144 bytes")` when the file is larger,
+  without reading more than `MAX_BYTES + 1` bytes; `Err` for a read error or bytes that are not UTF-8; otherwise
+  `parse` of the contents.
+- `DEFAULT` is the committed default avatar, `src-tauri/avatar/default.avatar.json`: an original character made in
+  this format (not any existing character, and not the avatar lab's own). `parse(DEFAULT)` is `Ok`, and it defines the
+  first animation of every row of the mood table below.
+- At startup the app loads `avatar_path()` once. Success logs `avatar: loaded <path>` to stderr. A failure logs
+  `avatar: <path>: <reason>, using the default` to stderr (always, not only under `$NOTCH_TRACE`) and uses `DEFAULT`.
+  The command `avatar` returns the `Avatar` (`source` `user` or `default`). A changed file is read at the next
+  launch.
+- `notch-hud --check-avatar <path>` runs `load(path)` and exits without starting the app: on `Ok` it prints `ok` to
+  stdout and exits 0; on `Err(reason)` it prints `reason` to stderr and exits 1.
+- The user's file is never in the repository: `.gitignore` ignores `avatar.json` and `*.avatar.json` anywhere,
+  except the default. No tracked JSON file outside `src-tauri/avatar/default.avatar.json` and
+  `tests/avatar/fixtures/` has `"schema": "bible-strong/avatar-definition"`. `tests/repo_test.sh` checks both rules
+  and the vendored bundle's hash with nothing but git, and runs in CI on its own.
+
+### Mood (`src-tauri/src/avatar.rs`, pure)
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mood { Alert, Error, Celebrate, Working, Listening, Idle, Drowsy, Sleeping }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Signals { pub needs_you: bool, pub error: bool, pub working: bool, pub playing: bool }
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Pose { pub mood: Mood, pub animations: &'static [&'static str], pub still: bool }
+
+pub const CELEBRATE_MS: u64 = 4_000;
+pub const DROWSY_MS: u64 = 120_000;
+pub const SLEEP_MS: u64 = 300_000;
+pub const MAX_WAIT_MS: u64 = 60_000;
+
+pub fn signals(summary: Option<&Summary>, media: Option<&Media>) -> Signals;
+pub fn finished(prev: Option<&Summary>, next: &Summary) -> bool;
+pub fn pose(mood: Mood) -> Pose;
+pub fn wait_ms(at: u64, now: u64) -> u64;
+
+pub struct Moods { /* private: celebrate_until, quiet_since, the last step's time */ }
+impl Moods {
+    pub fn new(now_ms: u64) -> Moods;
+    pub fn step(&mut self, signals: Signals, finished: bool, now_ms: u64) -> Mood;
+    pub fn next_change(&self) -> Option<u64>;
+}
+```
+
+| Priority | Mood | When | `animations` (the first one the avatar has plays) | `still` |
+|---|---|---|---|---|
+| 1 | `alert` | a row is `needs_permission` or `needs_input` | `surprised`, `curious` | no |
+| 2 | `error` | a row is `error` | `sad`, `angry` | no |
+| 3 | `celebrate` | less than `CELEBRATE_MS` since a session finished | `celebrate`, `happy`, `excited` | no |
+| 4 | `working` | `working > 0` | `working`, `thinking` | no |
+| 5 | `listening` | a track is playing | `listening` | no |
+| 6 | `idle` | quiet for less than `DROWSY_MS` | `idle` | no |
+| 7 | `drowsy` | quiet for `DROWSY_MS` to `SLEEP_MS` | `drowsy`, `bored` | no |
+| 8 | `sleeping` | quiet for `SLEEP_MS` or more | `sleeping` | yes |
+
+- `signals`: `needs_you` and `error` from the summary's `rows` (the status sort puts every such session in `rows`),
+  `working` = `summary.working > 0`, `playing` = the media's track is `playing`. `None` gives `false`.
+- `finished(prev, next)`: a row of `next` is `done` and its label is in `prev`'s rows with a different status (the
+  session banner's rule, section 8). `false` when `prev` is `None`.
+- `pose(mood)`: the row's `animations` and `still`.
+- `Moods::new(now)` starts quiet at `now`. `step` applies one update at `now` (milliseconds since the Unix epoch):
+  1. `finished` sets the celebration to end at `now + CELEBRATE_MS`.
+  2. The mood is the first row of the table whose condition holds. "Quiet" means none of rows 1 to 5 holds; the
+     quiet time counts from the first step that found it quiet (or from `new`), and any step that is not quiet ends
+     it. A celebration that started while a row above it held still ends at its own time.
+- `next_change()`: the smallest of these that is later than the last step's `now`: the celebration's end; and,
+  while quiet, the quiet start plus `DROWSY_MS` and plus `SLEEP_MS`. `None` when there is none, so a sleeping avatar
+  sets no timer at all.
+- `wait_ms(at, now)`: `at - now` (0 when `at` is not later), at most `MAX_WAIT_MS`.
+- The app runs `Moods` on a thread of its own that waits for an update or for `wait_ms(next_change(), now)`
+  milliseconds, whichever comes first, and with no `next_change()` for an update only. The cap is there because the
+  deadlines are wall-clock time and the wait's timer stops while the Mac sleeps.
+  Updates come from the sessions refresh (when the summary changes, with `finished` against the previous summary)
+  and from Now Playing (when the media changes). When the pose changes the app emits `mood` with the `Pose`, and
+  with `$NOTCH_TRACE` logs `avatar: <mood>`. The command `mood` returns the current `Pose`.
+
+### Page
+
+- The page asks for `avatar` and `mood` at load (section 8's startup rule applies to `mood`) and listens for `mood`.
+- `#avatar`, inside `.lear`: an inline SVG, `viewBox="-150 -150 300 300"`, painted as `@bible-strong/avatar-web`
+  0.1.0 paints a scene: body back paths, the head path in the body color, the two eye paths in the eye color clipped
+  to the head path (opacity 0 when not visible), then body front paths.
+- Places, in stage pt (section 8's names), with transform only:
+
+  | Phases | `#avatar` box | `#total` |
+  |---|---|---|
+  | all but `expanded` | 24 × 24 at (`pillL + 12`, `(pill.height - 24) / 2`) | left edge at `pillL + 41`, centered on the pill's height |
+  | `expanded` | 36 × 36 at (`contentL + 16`, 4) | left edge at `contentL + 58`, centered on y 22 |
+
+  They move when `#art` moves, with its duration and easing (the spring on expand, 200 ms on collapse, 120 ms on
+  un-peek). With reduced motion they jump.
+- Playing a pose: the first name in `animations` that the definition has. A mood change starts it with
+  `playAvatarAnimation(definition, name, now, from)` where `from` is `sampleAvatarFrame` of what is on screen, so the
+  face eases out of the old pose. When the pose is `still`, when reduced motion is on (followed live), or when the
+  definition has none of the names, the page paints `renderAvatarDefinition(definition, key)` once, where `key` is
+  that animation's first step's expression (`neutral` when there is no animation), and sets no timer: one expression
+  per mood.
+- Budget: no `requestAnimationFrame` loop and no CSS animation on the avatar. The page paints a frame only when the
+  picture can change: during a step's transition, during a blink, or while the shown expression's `motion` is not
+  `none` (ambient motion), at most one frame per 50 ms (20 frames/s). Otherwise one timer waits for the next change:
+  the end of the hold or the next blink (`blinkDueAt`). A `once` animation that ended keeps its last frame and no
+  timer. Measured numbers are in `docs/PLAN.md` section 7.
+- Fallback: when `window.AvatarCore` is missing, the `avatar` reply is missing or rejected, or painting throws, the
+  page hides `#avatar`, shows section 4's dot in its place, and stops the avatar's timers.

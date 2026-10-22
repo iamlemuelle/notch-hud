@@ -1,3 +1,4 @@
+mod avatar;
 mod hover;
 mod layout;
 mod media;
@@ -20,6 +21,7 @@ use objc2_foundation::{MainThreadMarker, NSObject, NSPoint, NSRect, NSSize};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
+use avatar::{Avatar, Moods, Pose, Source};
 use hover::{Hover, Input};
 use layout::{Layout, Shape, Size, Surface, WindowMode};
 use media::Media;
@@ -80,6 +82,10 @@ static MEDIA: Mutex<Option<Media>> = Mutex::new(None);
 static SURFACE: Mutex<Surface> = Mutex::new(Surface::new());
 /// The layout the page was last sent, refreshed on every placement.
 static LAYOUT: Mutex<Option<Layout>> = Mutex::new(None);
+static AVATAR: OnceLock<Avatar> = OnceLock::new();
+static POSE: Mutex<Option<Pose>> = Mutex::new(None);
+/// Wakes the mood thread; the value is whether a session just finished.
+static MOOD_TX: OnceLock<mpsc::Sender<bool>> = OnceLock::new();
 
 thread_local! {
     /// The visible window: a native non-activating panel that hosts the Tauri window's webview. Created once on
@@ -360,8 +366,10 @@ fn refresh_sessions(app: &AppHandle, dir: &Path) -> Option<u64> {
             if trace_on() {
                 eprintln!("sessions: {}", serde_json::to_string(&summary).unwrap_or_default());
             }
+            let finished = avatar::finished(latest.as_ref(), &summary);
             *latest = Some(summary.clone());
             let _ = app.emit("sessions", &summary);
+            nudge_mood(finished);
         }
     }
     place_soon(app);
@@ -456,6 +464,81 @@ fn on_media(app: &AppHandle, media: Media) {
         eprintln!("{}", trace_line(&media));
     }
     let _ = app.emit("media", &media);
+    nudge_mood(false);
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+fn nudge_mood(finished: bool) {
+    if let Some(tx) = MOOD_TX.get() {
+        let _ = tx.send(finished);
+    }
+}
+
+/// Owns the mood (CONTRACT.md section 10): steps it on every nudge and at its next deadline, and emits `mood` when the
+/// pose changes. With no deadline (asleep) it blocks until the next nudge.
+fn run_moods(app: &AppHandle, rx: &mpsc::Receiver<bool>) {
+    let mut moods = Moods::new(now_ms());
+    let mut finished = false;
+    loop {
+        let signals = {
+            let summary = LATEST.lock().unwrap_or_else(|e| e.into_inner());
+            let media = MEDIA.lock().unwrap_or_else(|e| e.into_inner());
+            avatar::signals(summary.as_ref(), media.as_ref())
+        };
+        let pose = avatar::pose(moods.step(signals, finished, now_ms()));
+        {
+            let mut current = POSE.lock().unwrap_or_else(|e| e.into_inner());
+            if current.as_ref() != Some(&pose) {
+                if trace_on() {
+                    let mood = serde_json::to_value(pose.mood).unwrap_or_default();
+                    eprintln!("avatar: {}", mood.as_str().unwrap_or("?"));
+                }
+                *current = Some(pose.clone());
+                let _ = app.emit("mood", &pose);
+            }
+        }
+        let next = match moods.next_change() {
+            Some(at) => rx.recv_timeout(Duration::from_millis(avatar::wait_ms(at, now_ms()))),
+            None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+        };
+        finished = match next {
+            Ok(f) => f,
+            Err(mpsc::RecvTimeoutError::Timeout) => false,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        };
+        while let Ok(f) = rx.try_recv() {
+            finished |= f;
+        }
+    }
+}
+
+/// Loads the user's avatar, or the default with the reason logged (CONTRACT.md section 10).
+fn load_avatar() -> Avatar {
+    let path = avatar::avatar_path();
+    match avatar::load(&path) {
+        Ok(definition) => {
+            eprintln!("avatar: loaded {}", path.display());
+            Avatar { source: Source::User, definition }
+        }
+        Err(reason) => {
+            eprintln!("avatar: {}: {reason}, using the default", path.display());
+            let definition = avatar::parse(avatar::DEFAULT).expect("the default avatar is valid (avatar_tests)");
+            Avatar { source: Source::Default, definition }
+        }
+    }
+}
+
+#[tauri::command]
+fn avatar() -> Option<Avatar> {
+    AVATAR.get().cloned()
+}
+
+#[tauri::command]
+fn mood() -> Option<Pose> {
+    POSE.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 /// Parses, routes against the latest media and applies off the main thread.
@@ -507,9 +590,31 @@ fn surface(app: AppHandle, window: WindowMode, hit: Shape) {
     place(&app);
 }
 
+/// `notch-hud --check-avatar <path>`: validates an avatar file without starting the app.
+fn check_avatar(path: Option<String>) -> ! {
+    let Some(path) = path else {
+        eprintln!("usage: notch-hud --check-avatar <path>");
+        std::process::exit(1);
+    };
+    match avatar::load(Path::new(&path)) {
+        Ok(_) => {
+            println!("ok");
+            std::process::exit(0);
+        }
+        Err(reason) => {
+            eprintln!("{reason}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() {
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() == Some("--check-avatar") {
+        check_avatar(args.next());
+    }
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![sessions, media, act, layout, surface])
+        .invoke_handler(tauri::generate_handler![sessions, media, act, layout, surface, avatar, mood])
         .setup(|app| {
             let mtm = MainThreadMarker::new().expect("main thread");
             if notched_screen(mtm).is_none() {
@@ -517,6 +622,11 @@ fn main() {
                 std::process::exit(0);
             }
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            let _ = AVATAR.set(load_avatar());
+            let (mood_tx, mood_rx) = mpsc::channel();
+            let _ = MOOD_TX.set(mood_tx);
+            let mood_app = app.handle().clone();
+            std::thread::spawn(move || run_moods(&mood_app, &mood_rx));
             let window = WebviewWindowBuilder::new(app, "notch", WebviewUrl::App("index.html".into()))
                 .decorations(false)
                 .transparent(true)
