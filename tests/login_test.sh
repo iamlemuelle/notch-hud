@@ -128,12 +128,12 @@ if need_script "default binary" "$INSTALL"; then
   reset; rm -rf "$ROOT/agents" "$FAKE_REPO/src-tauri"
   mkdir -p "$(dirname "$DEFAULT_BIN")"
   printf '#!/bin/sh\nexit 0\n' > "$DEFAULT_BIN"; chmod +x "$DEFAULT_BIN"
-  (unset NOTCH_HUD_BIN; run "$FAKE_INSTALL" "$PLIST")
+  unset NOTCH_HUD_BIN; run "$FAKE_INSTALL" "$PLIST"; export NOTCH_HUD_BIN="$BIN"
   check_eq "default bundle binary: exit 0" "$RC" "0"
   check_eq "default bundle binary: ProgramArguments.0" "$(extract "$PLIST" ProgramArguments.0)" "$DEFAULT_BIN"
 
   reset; rm -rf "$ROOT/agents" "$FAKE_REPO/src-tauri"
-  (unset NOTCH_HUD_BIN; run "$FAKE_INSTALL" "$PLIST")
+  unset NOTCH_HUD_BIN; run "$FAKE_INSTALL" "$PLIST"; export NOTCH_HUD_BIN="$BIN"
   check_eq "default bundle binary absent: exit 1" "$RC" "1"
   check_eq "default bundle binary absent: stderr" "$(cat "$ROOT/err")" "$MSG"
   check_eq "default bundle binary absent: no plist" "$([ -e "$PLIST" ] && echo present || echo absent)" "absent"

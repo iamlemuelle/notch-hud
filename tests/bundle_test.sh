@@ -22,7 +22,7 @@ trap 'rm -rf "$tmp"' EXIT
 build() { # tag
   "$root/scripts/build-app.sh" >"$tmp/$1.out" 2>"$tmp/$1.err"; RC=$?
 }
-cdhash() { codesign -dv "$app" 2>&1 | grep '^CDHash='; }
+cdhash() { codesign -dvvv "$app" 2>&1 | grep '^CDHash='; }
 requirement() { codesign -d -r- "$app" 2>/dev/null; }
 
 # 1. Build

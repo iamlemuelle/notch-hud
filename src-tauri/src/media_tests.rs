@@ -717,7 +717,7 @@ fn adapter_dir_dev_debug_exe_uses_target_adapter() {
 fn adapter_dir_macos_dir_not_under_contents_is_not_a_bundle() {
     assert_eq!(
         adapter_dir_for(None, Some(Path::new("/x/MacOS/notch-hud"))),
-        PathBuf::from("/adapter")
+        PathBuf::from("/x/adapter")
     );
 }
 
