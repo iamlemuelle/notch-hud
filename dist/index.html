@@ -299,23 +299,26 @@
 
   // ---- window (Rust sizes it; the page says when) ----
   // winMode: the mode the page wants. placedMode: the mode of the last surface call Rust finished placing.
-  let winMode = 'pill', placedMode = 'pill', sentSurface = '', surfaceCall = Promise.resolve();
+  // modeCall: the call that last changed the mode, which is the one that grows the window.
+  let winMode = 'pill', placedMode = 'pill', sentMode = 'pill', sentSurface = '';
+  let surfaceCall = Promise.resolve(), modeCall = surfaceCall;
   const HIT = { peek: 'peek', expanded: 'open', banner: 'banner' };
-  // Resolves once Rust has placed the window. A rejected call is sent again on the next change.
+  // A rejected call is sent again on the next change.
   function sendSurface() {
     const hit = HIT[phase] || 'pill', key = winMode + ' ' + hit;
-    if (key === sentSurface) return surfaceCall;
+    if (key === sentSurface) return;
     sentSurface = key;
     const mode = winMode;
     surfaceCall = window.__TAURI__.core.invoke('surface', { window: mode, hit })
       .then(() => { placedMode = mode; }, () => { if (sentSurface === key) sentSurface = ''; });
-    return surfaceCall;
+    if (mode !== sentMode) modeCall = surfaceCall;
+    sentMode = mode;
   }
   const clipRunning = () => panel.getAnimations().some((a) => a.transitionProperty === 'clip-path' && a.playState === 'running');
   // The window shrinks to the pill only once the shape is back, so no transparent window is left over the menu bar.
   function settleWindow() {
     if (phase === 'collapsed' && winMode !== 'pill' && !clipRunning()) winMode = 'pill';
-    return sendSurface();
+    sendSurface();
   }
   panel.addEventListener('transitionend', (e) => { if (e.target === panel && e.propertyName === 'clip-path') settleWindow(); });
 
@@ -334,18 +337,18 @@
     phase = p;
     epoch++;
     document.body.dataset.phase = p;
-    const placed = settleWindow();
+    settleWindow();
     syncClock();
-    return placed;
   }
   // Enters phase p with window `mode`. Until Rust has placed that mode (this call, or one still in flight), `start`
   // waits for the placement and one frame, and is dropped if the phase changes meanwhile.
   function enter(p, mode, start) {
     const grows = mode !== placedMode;
     winMode = mode;
-    const placed = setPhase(p), at = epoch;
+    setPhase(p);
+    const at = epoch;
     if (!grows) return start();
-    placed.then(() => requestAnimationFrame(() => { if (epoch === at) start(); }));
+    modeCall.then(() => requestAnimationFrame(() => { if (epoch === at) start(); }));
   }
   function onEnter() {
     if (!L) return;
