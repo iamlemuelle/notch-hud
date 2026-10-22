@@ -2,6 +2,7 @@ mod avatar;
 mod hover;
 mod layout;
 mod media;
+mod panel;
 mod session;
 
 use std::cell::{Cell, OnceCell, RefCell};
@@ -13,26 +14,21 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, sel, AnyThread, MainThreadOnly};
-use objc2_app_kit::{
-    NSBackingStoreType, NSColor, NSEvent, NSEventMask, NSEventType, NSPanel, NSScreen, NSTrackingArea,
-    NSTrackingAreaOptions, NSWindowCollectionBehavior, NSWindowStyleMask,
-};
+use objc2_app_kit::{NSEvent, NSEventMask, NSEventType, NSScreen, NSTrackingArea, NSTrackingAreaOptions};
 use objc2_foundation::{MainThreadMarker, NSObject, NSPoint, NSRect, NSSize};
 use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Emitter, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, WebviewUrl, WebviewWindowBuilder};
 
 use avatar::{Avatar, Moods, Pose, Source};
 use hover::{Hover, Input};
 use layout::{Layout, Shape, Size, Surface, WindowMode};
 use media::Media;
+use panel::{adopt_panel, PANEL};
 use notify::{RecursiveMode, Watcher};
 use session::{next_wake, prune, read_dir, sessions_dir, summarize, Detail, Record, Summary};
 
 /// The sessions safety net: a missed file event, a recreated directory, a display change (CONTRACT.md section 3).
 const RESCAN: Duration = Duration::from_secs(5);
-
-// kCGMainMenuWindowLevel is 24; +3 matches what notch apps use to clear the menu bar and its status items.
-const ABOVE_MENU_BAR: isize = 24 + 3;
 
 /// Notch geometry in AppKit points (bottom-left origin), read afresh on every placement.
 struct Notch {
@@ -90,9 +86,6 @@ static POSE: Mutex<Option<Pose>> = Mutex::new(None);
 static MOOD_TX: OnceLock<mpsc::Sender<bool>> = OnceLock::new();
 
 thread_local! {
-    /// The visible window: a native non-activating panel that hosts the Tauri window's webview. Created once on
-    /// the main thread at startup and kept for the app's lifetime; only the main thread can reach it.
-    static PANEL: RefCell<Option<Retained<NSPanel>>> = const { RefCell::new(None) };
     /// The cursor at the previous entered, moved or exited.
     static LAST_CURSOR: Cell<Option<(f64, f64)>> = const { Cell::new(None) };
     static HOVER: Cell<Hover> = const { Cell::new(Hover::new()) };
@@ -162,41 +155,6 @@ impl HoverOwner {
             .clone()
         })
     }
-}
-
-const PANEL_STYLE: NSWindowStyleMask =
-    NSWindowStyleMask::Borderless.union(NSWindowStyleMask::NonactivatingPanel);
-
-/// Main thread only: moves the webview of `window` into a new non-activating panel and shows the panel.
-/// A plain window, or one turned into a panel afterwards, activates the app on click; this one does not.
-/// The Tauri window stays hidden and must never be shown: it would activate the app on click.
-fn adopt_panel(mtm: MainThreadMarker, window: &WebviewWindow) {
-    let ptr = window.ns_window().expect("ns_window") as *const objc2_app_kit::NSWindow;
-    // SAFETY: Tauri owns this window for the app's lifetime; we only read it here, on the main thread.
-    let tao = unsafe { &*ptr };
-    let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
-        NSPanel::alloc(mtm),
-        tao.frame(),
-        PANEL_STYLE,
-        NSBackingStoreType::Buffered,
-        false,
-    );
-    panel.setLevel(ABOVE_MENU_BAR);
-    panel.setCollectionBehavior(
-        NSWindowCollectionBehavior::CanJoinAllSpaces
-            | NSWindowCollectionBehavior::Stationary
-            | NSWindowCollectionBehavior::FullScreenAuxiliary
-            | NSWindowCollectionBehavior::IgnoresCycle,
-    );
-    panel.setHasShadow(false);
-    panel.setOpaque(false);
-    panel.setBackgroundColor(Some(&NSColor::clearColor()));
-    // SAFETY: the panel is held by PANEL, never closed by AppKit on its own.
-    unsafe { panel.setReleasedWhenClosed(false) };
-    let content = tao.contentView().expect("content view");
-    panel.setContentView(Some(&content));
-    panel.orderFrontRegardless();
-    PANEL.with(|p| *p.borrow_mut() = Some(panel));
 }
 
 /// Main thread only. The panel's frame, or `None` before it exists.
