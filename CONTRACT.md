@@ -185,18 +185,24 @@ The app calls it before each `read_dir`.
     and the page ended the seek drag without seeking (measured 2026-10-22: `tests/controls_test.sh` overshoot failed).
   - over: `true` on entered or moved, `false` on exited, and on a placement, a down or an up whether
     `hit_contains` holds for `NSEvent::mouseLocation()` against the hit rect.
-  - moved: on entered or moved, whether the cursor differs from where it was at the previous input; `false` for any
-    other input. So a shape growing under a still cursor (a banner opening where the cursor rests) is not a hover,
+  - moved: on entered or moved, whether the cursor differs from where it was at the previous entered, moved or
+    exited; `false` for any other input. So a shape growing under a still cursor (a banner opening where the cursor rests) is not a hover,
     and moving within it afterwards is.
   - in: `next_hover(was_in, over, moved)` (`layout.rs`): it becomes out on any input with over `false`.
-  - A press the monitor sees while the cursor is in and the hit rect is not `pill` is latched until the monitor's up,
-    or until any input finds the left button up (`NSEvent::pressedMouseButtons() & 1 == 0`); while it is latched
-    `hover` stays true even when the cursor leaves, so a seek drag that overshoots the bar does not collapse the panel
-    under the pointer. A press that starts anywhere else (a window drag or a text selection passing over the notch)
-    never reaches the monitor, is never latched and changes nothing.
+  - A press the monitor sees while the cursor is in and the hit rect is not `pill` is latched until the monitor's up
+    is applied; while it is latched `hover` stays true even when the cursor leaves, so a seek drag that overshoots the
+    bar does not collapse the panel under the pointer. No other input unlatches: `NSEvent::pressedMouseButtons()` is
+    the hardware state, already up before AppKit dispatches the mouse-up, so unlatching on it could still send the
+    out ahead of `pointerup`. As a net for an up the monitor never saw, a placement that finds the latch set and the
+    left button up (`pressedMouseButtons() & 1 == 0`) schedules the same deferred up. A press that starts anywhere
+    else (a window drag or a text selection passing over the notch) never reaches the monitor, is never latched and
+    changes nothing.
+  - The owner ignores an entered, moved or exited whose `trackingArea` is not the current area, so an event queued
+    for a replaced area cannot change the state.
   - After every placement and every up, the area is replaced by one for the current hit rect and panel frame, added
     with `AssumeInside` exactly when over was `true` at that input, so AppKit's idea of inside matches the state and
-    an area appearing under a still cursor sends no `mouseEntered:`.
+    an area appearing under a still cursor sends no `mouseEntered:`. The rescan places the panel every 5 s, so a
+    state that drifted from the cursor (a missed exited) lasts at most 5 s; the poll corrected it within 50 ms.
   Measured in a spike (2026-10-22, macOS 27, `NSPanel` with a `WKWebView` in an accessory app, Firefox frontmost):
   the area fires entered, moved and exited while the panel is not key and the app is not active, and the frontmost
   app does not change; a `CGWarpMouseCursorPosition` warp also fires entered and exited; the screen's top row counts
@@ -560,17 +566,17 @@ pub struct Hover { /* private: in, latched, the last value returned */ }
 
 impl Hover {
     pub const fn new() -> Hover;
-    pub fn step(&mut self, input: Input, contains: bool, moved: bool, button_down: bool, hit: Shape) -> Option<bool>;
+    pub fn step(&mut self, input: Input, contains: bool, moved: bool, hit: Shape) -> Option<bool>;
+    pub fn latched(&self) -> bool;
 }
 ```
 
-- `Hover::new()`: out, not latched, last value `false`.
+- `Hover::new()`: out, not latched, last value `false`. `latched()`: whether a press is latched now.
 - `step` applies one input (section 3). `contains`: `hit_contains` at the cursor; `moved`: the cursor differs from
-  the previous input's; `button_down`: the left button is down now; `hit`: the current hit shape. In order:
+  where it was at the previous pointer input; `hit`: the current hit shape. In order:
   1. over: `true` for `Entered` and `Moved`, `false` for `Exited`, else `contains`.
   2. in = `next_hover(in, over, moved && input is Entered or Moved)`.
-  3. latch: `Down` while in and `hit != Pill` latches; `Up` unlatches; any other input with `button_down == false`
-     unlatches.
+  3. latch: `Down` while in and `hit != Pill` latches; `Up` unlatches; no other input changes it.
   4. the value is `in || latched`. Returns `Some(value)` when it differs from the last value returned (or from
      `false` before the first), else `None`.
 

@@ -24,9 +24,10 @@ impl Hover {
         Hover { hover_in: false, latched: false, last: false }
     }
 
-    /// `contains`: the cursor is in the hit rect; `moved`: it differs from the previous input's; `button_down`: the
-    /// left button is down now. Returns the new `hover` value when it changed.
-    pub fn step(&mut self, input: Input, contains: bool, moved: bool, button_down: bool, hit: Shape) -> Option<bool> {
+    /// `contains`: the cursor is in the hit rect; `moved`: it differs from where it was at the previous pointer input.
+    /// Returns the new `hover` value when it changed. Only `Up` unlatches: the live button state is up before AppKit
+    /// dispatches the release, so unlatching on it could send hover out ahead of the page's `pointerup`.
+    pub fn step(&mut self, input: Input, contains: bool, moved: bool, hit: Shape) -> Option<bool> {
         let pointer = matches!(input, Input::Entered | Input::Moved);
         let over = match input {
             Input::Entered | Input::Moved => true,
@@ -36,13 +37,15 @@ impl Hover {
         self.hover_in = next_hover(self.hover_in, over, pointer && moved);
         match input {
             Input::Down if self.hover_in && hit != Shape::Pill => self.latched = true,
-            Input::Down => {}
             Input::Up => self.latched = false,
-            _ if !button_down => self.latched = false,
             _ => {}
         }
         let value = self.hover_in || self.latched;
         (value != std::mem::replace(&mut self.last, value)).then_some(value)
+    }
+
+    pub fn latched(&self) -> bool {
+        self.latched
     }
 }
 

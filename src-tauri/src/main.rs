@@ -110,18 +110,18 @@ define_class!(
 
     impl HoverOwner {
         #[unsafe(method(mouseEntered:))]
-        fn mouse_entered(&self, _event: &NSEvent) {
-            track_hover(Input::Entered);
+        fn mouse_entered(&self, event: &NSEvent) {
+            pointer(event, Input::Entered);
         }
 
         #[unsafe(method(mouseMoved:))]
-        fn mouse_moved(&self, _event: &NSEvent) {
-            track_hover(Input::Moved);
+        fn mouse_moved(&self, event: &NSEvent) {
+            pointer(event, Input::Moved);
         }
 
         #[unsafe(method(mouseExited:))]
-        fn mouse_exited(&self, _event: &NSEvent) {
-            track_hover(Input::Exited);
+        fn mouse_exited(&self, event: &NSEvent) {
+            pointer(event, Input::Exited);
         }
 
         #[unsafe(method(released))]
@@ -130,6 +130,15 @@ define_class!(
         }
     }
 );
+
+/// Main thread only. An event queued for an area that has since been replaced is dropped.
+fn pointer(event: &NSEvent, input: Input) {
+    let current = AREA.with(|a| a.borrow().as_ref().map(|area| Retained::as_ptr(area)));
+    let from = event.trackingArea();
+    if from.as_ref().map(|area| Retained::as_ptr(area)) == current {
+        track_hover(input);
+    }
+}
 
 impl HoverOwner {
     /// Main thread only: the one owner, created on first use.
@@ -256,10 +265,10 @@ fn track_hover(input: Input) {
     let top = frame.origin.y + frame.size.height;
     let p = NSEvent::mouseLocation();
     let contains = layout::hit_contains(size, center, top, p.x, p.y);
-    let moved = LAST_CURSOR.with(|c| c.replace(Some((p.x, p.y)))) != Some((p.x, p.y));
-    let down = NSEvent::pressedMouseButtons() & 1 != 0;
+    let moved = matches!(input, Input::Entered | Input::Moved | Input::Exited)
+        && LAST_CURSOR.with(|c| c.replace(Some((p.x, p.y)))) != Some((p.x, p.y));
     let mut hover = HOVER.get();
-    let changed = hover.step(input, contains, moved, down, hit);
+    let changed = hover.step(input, contains, moved, hit);
     HOVER.set(hover);
     if let Some(inside) = changed {
         if trace_on() {
@@ -270,6 +279,21 @@ fn track_hover(input: Input) {
     if matches!(input, Input::Placed | Input::Up) {
         track_area(frame, size, contains);
     }
+    // The net for an up the monitor never saw goes through the same deferred release as a real one.
+    if input == Input::Placed && hover.latched() && NSEvent::pressedMouseButtons() & 1 == 0 {
+        if let Some(mtm) = MainThreadMarker::new() {
+            release_soon(&HoverOwner::shared(mtm));
+        }
+    }
+}
+
+/// Applies `Up` on the next main run-loop pass, after AppKit has dispatched the event being handled now.
+fn release_soon(owner: &HoverOwner) {
+    let nothing: Option<&AnyObject> = None;
+    // SAFETY: `released` takes no argument; OWNER keeps the owner alive.
+    let _: () = unsafe {
+        msg_send![owner, performSelectorOnMainThread: sel!(released), withObject: nothing, waitUntilDone: false]
+    };
 }
 
 /// Main thread only. Replaces the tracking area with one over the hit rect of `size` in a panel of `frame`, assumed
@@ -306,11 +330,7 @@ fn monitor_presses(mtm: MainThreadMarker) {
         if unsafe { event.as_ref() }.r#type() == NSEventType::LeftMouseDown {
             track_hover(Input::Down);
         } else {
-            let nothing: Option<&AnyObject> = None;
-            // SAFETY: `released` takes no argument; OWNER keeps the owner alive.
-            let _: () = unsafe {
-                msg_send![&*owner, performSelectorOnMainThread: sel!(released), withObject: nothing, waitUntilDone: false]
-            };
+            release_soon(&owner);
         }
         event.as_ptr()
     });
