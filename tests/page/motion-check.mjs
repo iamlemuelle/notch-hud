@@ -1,6 +1,9 @@
 // Loads dist/index.html in headless Chromium with a fake Tauri bridge and checks CONTRACT.md section 8 (panel motion,
-// banners, the grow-then-shrink window) and the hover rules of section 3. Real time, no retries: phase timers are
-// compared with a tolerance of about 40 ms, and every number comes from the contract text, not from the page.
+// banners, the grow-then-shrink window) and the hover rules of section 3. Real time, no retries. Every number comes
+// from the contract text, not from the page. A phase-timer check is never early by more than 10 ms, and may be late by
+// the event-loop lag measured in the page while the step ran (a probe chain of the same delays, started in the same
+// task as the event) plus 25 ms. A step after a window grow is timed from the frame after the grow's `surface` call
+// resolved, because that is when the contract starts its timer.
 //
 // The fake bridge answers `layout`, `media`, `sessions`, `act` and `surface`. `surface` is recorded with the page's
 // clock and then resizes the viewport to the contract's `window_size` of the requested mode, standing in for Rust.
@@ -65,6 +68,11 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: ok ? 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const near = (v, target, tol) => typeof v === 'number' && Math.abs(v - target) <= tol;
 const J = (v) => JSON.stringify(v);
+// A step's delay v after its event: never earlier than the contract time minus 10 ms, late by at most `lag` (the probe
+// lateness, so a loaded machine passes) plus 25 ms. A shortened timer or an early step still fails.
+// A transition's `transitionrun` comes with the next frame after the timer that started it: up to one 60 Hz frame.
+const FRAME = 17;
+const lateOk = (v, target, lag) => typeof v === 'number' && v >= target - 10 && v <= target + Math.max(0, lag) + 25;
 const norm = (s) => String(s ?? '').replace(/\s+/g, '');
 const pageErrors = [];
 const seenProps = new Set();
@@ -74,9 +82,22 @@ function installBridge({ layout, windows, holdLayout, initial }) {
   const rec = (window.__rec = { events: [], surfaces: [], phases: [], trans: [], resizes: [], invokes: [] });
   const handlers = {};
   const now = () => performance.now();
-  window.__fire = (name, payload) => {
+  // `chain` is a list of delays: probe timers with the same chained delays start at this moment, so the lateness of
+  // each hop (cumulative, like the page's own timer chain) says how slow the event loop was while the step ran.
+  window.__probes = {};
+  window.__fire = (name, payload, chain) => {
     const t = now();
     rec.events.push({ name, t });
+    if (chain) {
+      const out = (window.__probes[t] = { chain, lags: [], frame: null });
+      let sum = 0;
+      const hop = (i) => {
+        if (i === chain.length) { const at = now(); requestAnimationFrame(() => { out.frame = now() - at; }); return; }
+        sum += chain[i];
+        setTimeout(() => { out.lags.push(Math.round((now() - t - sum) * 10) / 10); hop(i + 1); }, chain[i]);
+      };
+      hop(0);
+    }
     (handlers[name] || []).forEach((h) => h({ payload }));
     return t;
   };
@@ -109,8 +130,10 @@ function installBridge({ layout, windows, holdLayout, initial }) {
           }
           const w = args && windows[args.window];
           return new Promise((resolve) => setTimeout(async () => {
+            entry.grew = !!w && (innerWidth !== w.w || innerHeight !== w.h);
             if (w) await window.__setWindow(w.w, w.h);
             entry.resolved = now();
+            requestAnimationFrame(() => { entry.frame = now(); });
             resolve(null);
           }, window.__surfaceDelay));
         }
@@ -207,7 +230,13 @@ async function openPage(opts = {}) {
   return page;
 }
 
-const fire = (page, name, payload) => page.evaluate(([n, p]) => window.__fire(n, p), [name, payload]);
+const fire = (page, name, payload, chain = null) => page.evaluate(([n, p, c]) => window.__fire(n, p, c), [name, payload, chain]);
+// The probe lateness recorded for the event fired at `t` with a chain: { lags: [ms late after each hop], frame }.
+const probeOf = async (page, t) => {
+  const p = await page.evaluate((k) => window.__probes[k] || null, t);
+  if (!p || p.lags.length !== p.chain.length || p.frame == null) throw new Error(`probe for the event at ${t} did not finish: ${J(p)}`);
+  return { lags: p.lags, frameLate: Math.max(0, Math.round(p.frame - 17)) };
+};
 const rec = async (page) => {
   const r = await page.evaluate(() => JSON.parse(JSON.stringify(window.__rec)));
   r.trans.forEach((x) => seenProps.add(x.prop));
@@ -232,6 +261,9 @@ const phaseAt = (r, name, from, to = Infinity) => r.phases.find((p) => p.phase =
 const surfaceCalls = (r, from = -Infinity, to = Infinity) => r.surfaces.filter((s) => s.t >= from - 2 && s.t <= to);
 const notPill = (s) => !(s.args && s.args.window === 'pill' && s.args.hit === 'pill');
 const surfaceIs = (s, win, hit) => s && J(Object.keys(s.args || {}).sort()) === J(['hit', 'window']) && s.args.window === win && s.args.hit === hit;
+// When a phase's animations and its timer start: the frame after the grow's `surface` call resolved, or the phase's own
+// moment when the window did not grow (CONTRACT.md section 8, "Window").
+const startOf = (r, ph) => { const s = ph && r.surfaces.find((x) => x.grew && x.t >= ph.t - 2 && x.t <= ph.t + 5); return s && s.frame != null ? s.frame : ph && ph.t; };
 const trans = (r, sel, prop, from, to = Infinity) => r.trans.filter((x) => x.sel === sel && x.prop === prop && x.run >= from - 2 && x.run <= to);
 const timingIs = (x, duration, delay, easing) => !!x && !!x.timing && x.timing.duration === duration && x.timing.delay === delay && norm(x.timing.easing) === norm(easing);
 
@@ -325,26 +357,29 @@ async function scenarioHover() {
     J({ phases: ra.phases.filter((p) => p.t >= tIn), surfaces: surfaceCalls(ra, tIn) }));
 
   // B: hover held, then settled.
-  const t0 = await fire(page, 'hover', true);
+  const t0 = await fire(page, 'hover', true, [80, 120]);
   await sleep(950);
   const open = await snap(page);
   const rb = await rec(page);
-  const peek = phaseAt(rb, 'peek', t0, t0 + 200);
-  check('H3 peek at about 80 ms', !!peek && near(peek.t - t0, 80, 40), J({ peek: peek && peek.t - t0, phases: rb.phases.filter((p) => p.t >= t0).map((p) => [p.phase, Math.round(p.t - t0)]) }));
-  const peekClip = trans(rb, '#panel', 'clip-path', t0, t0 + 200)[0];
-  check('H4 peek: #panel clip-path transition 120 ms cubic-bezier(0.2, 0, 0, 1), to the peek shape', timingIs(peekClip, 120, 0, EASE_PEEK) && !clipIs(peekClip.to, 'peek') && peek && near(peekClip.run - peek.t, 0, 40),
-    J({ peekClip, clip: peekClip && clipIs(peekClip.to, 'peek') }));
+  const pb = await probeOf(page, t0);
+  const peek = phaseAt(rb, 'peek', t0, t0 + 200 + 80);
+  check('H3 peek at about 80 ms', !!peek && lateOk(peek.t - t0, 80, pb.lags[0]), J({ lag: pb, peek: peek && peek.t - t0, phases: rb.phases.filter((p) => p.t >= t0).map((p) => [p.phase, Math.round(p.t - t0)]) }));
+  const peekStart = startOf(rb, peek);
+  const peekClip = trans(rb, '#panel', 'clip-path', t0, t0 + 200 + 400)[0];
+  check('H4 peek: #panel clip-path transition 120 ms cubic-bezier(0.2, 0, 0, 1), to the peek shape', timingIs(peekClip, 120, 0, EASE_PEEK) && !clipIs(peekClip.to, 'peek') && peek && lateOk(peekClip.run - peekStart, 0, pb.frameLate),
+    J({ lag: pb, peekStart: peekStart && peekStart - t0, peekClip, clip: peekClip && clipIs(peekClip.to, 'peek') }));
   const sPeek = surfaceCalls(rb, t0).find((s) => surfaceIs(s, 'open', 'peek'));
   check('H5 surface {window: "open", hit: "peek"} is sent when peek begins', !!sPeek && !!peek && near(sPeek.t, peek.t, 40), J({ sPeek, peek, all: surfaceCalls(rb, t0) }));
-  const exp = phaseAt(rb, 'expanded', t0, t0 + 400);
-  check('H6 expanded at about 200 ms', !!exp && near(exp.t - t0, 200, 40), J({ exp: exp && exp.t - t0 }));
-  const expClip = trans(rb, '#panel', 'clip-path', t0 + 150, t0 + 300)[0];
+  const exp = phaseAt(rb, 'expanded', t0, t0 + 400 + 400);
+  check('H6 expanded at about 200 ms: 120 ms after the peek started, never before 190 ms', !!exp && exp.t - t0 >= 190 && lateOk(exp.t - peekStart, 120, pb.lags[1]), J({ lag: pb, exp: exp && exp.t - t0, sincePeekStart: exp && Math.round(exp.t - peekStart) }));
+  const expClip = trans(rb, '#panel', 'clip-path', exp ? exp.t - 20 : t0 + 150, exp ? exp.t + 400 : t0 + 300)[0];
   check('H7 expand: #panel clip-path transition 366 ms, linear() of the 40-point spring, to the open shape', !!expClip && !isSpring(expClip) && !clipIs(expClip.to, 'open'), J({ spring: expClip && isSpring(expClip), clip: expClip && clipIs(expClip.to, 'open'), timing: expClip && expClip.timing }));
   check('H8 surface {window: "open", hit: "open"} is sent on expanding', surfaceCalls(rb, t0).some((s) => surfaceIs(s, 'open', 'open') && exp && near(s.t, exp.t, 40)), J(surfaceCalls(rb, t0)));
-  const cOp = trans(rb, '#content', 'opacity', t0 + 150, t0 + 300)[0], cTf = trans(rb, '#content', 'transform', t0 + 150, t0 + 300)[0];
+  const fromExp = exp ? exp.t - 20 : t0 + 150, toExp = exp ? exp.t + 400 : t0 + 300;
+  const cOp = trans(rb, '#content', 'opacity', fromExp, toExp)[0], cTf = trans(rb, '#content', 'transform', fromExp, toExp)[0];
   check('H9 #content opacity and transform: 140 ms ease-out, delay 80 ms, from 0 and 4 px down', timingIs(cOp, 140, 80, 'ease-out') && timingIs(cTf, 140, 80, 'ease-out') && Number(cOp.from) === 0 && Number(cOp.to) === 1 && /translateY\(4px\)|matrix\(1, 0, 0, 1, 0, 4\)/.test(cTf.from || ''),
     J({ cOp, cTf }));
-  const aTf = trans(rb, '#art', 'transform', t0 + 150, t0 + 300)[0];
+  const aTf = trans(rb, '#art', 'transform', fromExp, toExp)[0];
   check('H10 #art transform: 366 ms, the same linear() spring', !!aTf && !isSpring(aTf), J({ spring: aTf && isSpring(aTf), aTf }));
   check('H11 window grows: the viewport is the open window 452x270', open.vw === 452 && open.vh === 270, J({ vw: open.vw, vh: open.vh }));
   check('H12 expanded geometry: stage keeps its place, clip is the open shape, ears at 1', open.phase === 'expanded' && stageStays(open) && !clipIs(open.el['#panel'] && open.el['#panel'].clip, 'open') && near(open.el['#lear'] && open.el['#lear'].opacity, 1, 0.01),
@@ -354,21 +389,22 @@ async function scenarioHover() {
   await collectProps(page);
 
   // C: hover out while expanded.
-  const t1 = await fire(page, 'hover', false);
+  const t1 = await fire(page, 'hover', false, [250, 80, 200]);
   await sleep(1100);
   const rc = await rec(page);
+  const pc = await probeOf(page, t1);
   const early = rc.phases.filter((p) => p.t > t1 + 2 && p.t < t1 + 210);
   check('H15 hover out: still expanded at about 200 ms', early.length === 0, J(early));
-  const col = phaseAt(rc, 'collapsing', t1, t1 + 400);
-  check('H16 collapsing at about 250 ms', !!col && near(col.t - t1, 250, 40), J({ col: col && col.t - t1 }));
-  const fade = trans(rc, '#content', 'opacity', t1 + 150, t1 + 400)[0];
-  check('H17 #content opacity fades out in 80 ms linear when collapsing begins', timingIs(fade, 80, 0, 'linear') && Number(fade.to) === 0 && col && near(fade.run - col.t, 0, 40), J({ fade }));
-  const closeClip = trans(rc, '#panel', 'clip-path', t1 + 200, t1 + 500)[0];
-  check('H18 close: clip-path 200 ms cubic-bezier(0.4, 0, 1, 1) at about 330 ms, to the pill shape', timingIs(closeClip, 200, 0, EASE_CLOSE) && !clipIs(closeClip.to, 'pill') && near(closeClip.run - t1, 330, 40), J({ closeClip, at: closeClip && closeClip.run - t1, clip: closeClip && clipIs(closeClip.to, 'pill') }));
-  const closeArt = trans(rc, '#art', 'transform', t1 + 200, t1 + 500)[0];
+  const col = phaseAt(rc, 'collapsing', t1, t1 + 400 + 300);
+  check('H16 collapsing at about 250 ms', !!col && lateOk(col.t - t1, 250, pc.lags[0]), J({ lag: pc, col: col && col.t - t1 }));
+  const fade = trans(rc, '#content', 'opacity', t1 + 150, t1 + 400 + 300)[0];
+  check('H17 #content opacity fades out in 80 ms linear when collapsing begins', timingIs(fade, 80, 0, 'linear') && Number(fade.to) === 0 && col && lateOk(fade.run - col.t, 0, pc.frameLate + FRAME), J({ lag: pc, fade }));
+  const closeClip = trans(rc, '#panel', 'clip-path', t1 + 200, t1 + 500 + 300)[0];
+  check('H18 close: clip-path 200 ms cubic-bezier(0.4, 0, 1, 1) at about 330 ms, to the pill shape', timingIs(closeClip, 200, 0, EASE_CLOSE) && !clipIs(closeClip.to, 'pill') && lateOk(closeClip.run - t1, 330, pc.lags[1] + pc.frameLate + FRAME), J({ lag: pc, closeClip, at: closeClip && closeClip.run - t1, clip: closeClip && clipIs(closeClip.to, 'pill') }));
+  const closeArt = trans(rc, '#art', 'transform', t1 + 200, t1 + 500 + 300)[0];
   check('H19 close: #art transform 200 ms cubic-bezier(0.4, 0, 1, 1) back to the ear', timingIs(closeArt, 200, 0, EASE_CLOSE), J({ closeArt }));
-  const done = phaseAt(rc, 'collapsed', t1 + 300, t1 + 800);
-  check('H20 collapsed at about 530 ms', !!done && near(done.t - t1, 530, 40), J({ done: done && done.t - t1 }));
+  const done = phaseAt(rc, 'collapsed', t1 + 300, t1 + 800 + 300);
+  check('H20 collapsed at about 530 ms', !!done && lateOk(done.t - t1, 530, pc.lags[2]), J({ lag: pc, done: done && done.t - t1 }));
   const pillCalls = surfaceCalls(rc, t1).filter((s) => s.args && s.args.window === 'pill');
   const endOfClip = closeClip && closeClip.end;
   check('H21 surface {window: "pill", hit: "pill"} only after the clip transition ended', pillCalls.length >= 1 && surfaceIs(pillCalls[0], 'pill', 'pill') && endOfClip != null && pillCalls[0].t >= endOfClip - 2 && pillCalls[0].t <= endOfClip + 80,
@@ -383,15 +419,16 @@ async function scenarioHover() {
   await sleep(950);
   const u1 = await fire(page, 'hover', false);
   await sleep(400);
-  const u2 = await fire(page, 'hover', true);
+  const u2 = await fire(page, 'hover', true, [80, 120]);
   await sleep(950);
   const rd = await rec(page);
+  const pd = await probeOf(page, u2);
   const endState = await snap(page);
   const colAgain = phaseAt(rd, 'collapsing', u1, u2);
   const intent2 = phaseAt(rd, 'intent', u2, u2 + 30);
-  const peek2 = phaseAt(rd, 'peek', u2, u2 + 200);
-  const exp2 = phaseAt(rd, 'expanded', u2, u2 + 500);
-  check('H24 hover in during collapsing: intent, then peek at 80 ms, then expanded at 200 ms', !!colAgain && !!intent2 && !!peek2 && !!exp2 && near(peek2.t - u2, 80, 40) && near(exp2.t - u2, 200, 40), J({ colAgain: !!colAgain, phases: rd.phases.filter((p) => p.t >= u1).map((p) => [p.phase, Math.round(p.t - u2)]) }));
+  const peek2 = phaseAt(rd, 'peek', u2, u2 + 200 + 80);
+  const exp2 = phaseAt(rd, 'expanded', u2, u2 + 500 + 400);
+  check('H24 hover in during collapsing: intent, then peek at 80 ms, then expanded at 200 ms', !!colAgain && !!intent2 && !!peek2 && !!exp2 && lateOk(peek2.t - u2, 80, pd.lags[0]) && exp2.t - u2 >= 190 && lateOk(exp2.t - startOf(rd, peek2), 120, pd.lags[1]), J({ lag: pd, colAgain: !!colAgain, phases: rd.phases.filter((p) => p.t >= u1).map((p) => [p.phase, Math.round(p.t - u2)]) }));
   check('H25 hover in during collapsing: no pill window is sent, the window stays open', surfaceCalls(rd, u1).every((s) => !(s.args && s.args.window === 'pill')) && endState.vw === 452 && endState.vh === 270 && !rd.resizes.some((x) => x.t > u1 && x.w === 305), J({ surfaces: surfaceCalls(rd, u1), vw: endState.vw, vh: endState.vh }));
   check('H26 hover in during collapsing: expanded again, clip is the open shape', endState.phase === 'expanded' && !clipIs(endState.el['#panel'] && endState.el['#panel'].clip, 'open'), J({ phase: endState.phase }));
   await fire(page, 'hover', false);
@@ -414,7 +451,7 @@ async function scenarioSongBanner() {
   const r1 = await rec(page);
   check('B2 the same track, only paused, shows no banner', !r1.phases.some((p) => p.phase === 'banner'), J(r1.phases));
 
-  const tB = await fire(page, 'media', media(track(sq, { title: 'Second Song', playing: true })));
+  const tB = await fire(page, 'media', media(track(sq, { title: 'Second Song', playing: true })), [2600, 80, 200]);
   await sleep(120);
   const early = await rec(page);
   const banner = phaseAt(early, 'banner', tB, tB + 150);
@@ -434,7 +471,9 @@ async function scenarioSongBanner() {
   const rEnd = await rec(page);
   const collapsedAt = phaseAt(rEnd, 'collapsed', tB + 1000);
   const colAt = phaseAt(rEnd, 'collapsing', tB + 1000);
-  check('B10 banner closes after 2600 ms (collapsing), collapsed after 200 + 80 ms more', closed && !!colAt && near(colAt.t - banner.t, 2600, 60) && !!collapsedAt && near(collapsedAt.t - banner.t, 2880, 80), J({ closed, collapsing: colAt && colAt.t - (banner && banner.t), collapsed: collapsedAt && collapsedAt.t - (banner && banner.t) }));
+  const pBan = await probeOf(page, tB);
+  const bannerStart = startOf(rEnd, banner);
+  check('B10 banner closes 2600 ms after it started (collapsing), collapsed after 80 + 200 ms more', closed && !!colAt && lateOk(colAt.t - bannerStart, 2600, pBan.lags[0]) && !!collapsedAt && lateOk(collapsedAt.t - bannerStart, 2880, pBan.lags[2]), J({ lag: pBan, started: bannerStart && bannerStart - banner.t, closed, collapsing: colAt && colAt.t - (banner && banner.t), collapsed: collapsedAt && collapsedAt.t - (banner && banner.t) }));
   await sleep(150);
   const rWin = await rec(page);
   const clipClose = trans(rWin, '#panel', 'clip-path', tB + 2000).pop();
@@ -446,11 +485,12 @@ async function scenarioSongBanner() {
   // Hover in during a banner: expanded after 80 ms with the window open.
   const tC = await fire(page, 'media', media(track(sq, { title: 'Third Song' })));
   await sleep(300);
-  const tH = await fire(page, 'hover', true);
+  const tH = await fire(page, 'hover', true, [80]);
   await sleep(900);
   const rh = await rec(page);
+  const pH = await probeOf(page, tH);
   const expanded = phaseAt(rh, 'expanded', tH, tH + 400);
-  check('B13 hover in during a banner: expanded after about 80 ms', !!expanded && near(expanded.t - tH, 80, 40) && !!phaseAt(rh, 'banner', tC, tH), J(rh.phases.filter((p) => p.t >= tC).map((p) => [p.phase, Math.round(p.t - tH)])));
+  check('B13 hover in during a banner: expanded after about 80 ms', !!expanded && lateOk(expanded.t - tH, 80, pH.lags[0]) && !!phaseAt(rh, 'banner', tC, tH), J({ lag: pH, phases: rh.phases.filter((p) => p.t >= tC).map((p) => [p.phase, Math.round(p.t - tH)]) }));
   const openCall = surfaceCalls(rh, tH).find((x) => surfaceIs(x, 'open', 'open'));
   const hs = await snap(page);
   check('B14 hover in during a banner: surface open/open, window 452x270, clip is the open shape', !!openCall && hs.vw === 452 && hs.vh === 270 && !clipIs(hs.el['#panel'] && hs.el['#panel'].clip, 'open'), J({ openCall, vw: hs.vw, vh: hs.vh }));
@@ -655,12 +695,13 @@ async function scenarioReduced() {
   const op = trans(r, '#content', 'opacity', t0)[0];
   check('R2 reduced motion: #content opacity transition is 120 ms linear, no delay', timingIs(op, 120, 0, 'linear'), J({ op }));
   check('R3 reduced motion: #content has no transform transition and no offset', trans(r, '#content', 'transform', t0).length === 0 && (!s.el['#content'] || s.el['#content'].transform === 'none' || s.el['#content'].transform === 'matrix(1, 0, 0, 1, 0, 0)'), J({ tf: trans(r, '#content', 'transform', t0), now: s.el['#content'] && s.el['#content'].transform }));
-  const t1 = await fire(page, 'hover', false);
+  const t1 = await fire(page, 'hover', false, [250, 120, 120]);
   await sleep(1000);
   const r2 = await rec(page);
+  const p2 = await probeOf(page, t1);
   const col = phaseAt(r2, 'collapsed', t1 + 200);
   const pillCall = surfaceCalls(r2, t1).find((x) => x.args && x.args.window === 'pill');
-  check('R4 reduced motion: collapse waits 250 + 120 + 120 ms, then the window shrinks (no transition to wait for)', !!col && near(col.t - t1, 490, 60) && !!pillCall && pillCall.t >= col.t - 40 && trans(r2, '#panel', 'clip-path', t1).length === 0, J({ col: col && col.t - t1, pill: pillCall && pillCall.t - t1, clips: trans(r2, '#panel', 'clip-path', t1) }));
+  check('R4 reduced motion: collapse waits 250 + 120 + 120 ms, then the window shrinks (no transition to wait for)', !!col && lateOk(col.t - t1, 490, p2.lags[2]) && !!pillCall && pillCall.t >= col.t - 40 && trans(r2, '#panel', 'clip-path', t1).length === 0, J({ lag: p2, col: col && col.t - t1, pill: pillCall && pillCall.t - t1, clips: trans(r2, '#panel', 'clip-path', t1) }));
   await page.close();
 }
 
@@ -694,7 +735,7 @@ async function scenarioGrowWait() {
   check('G4 back to the pill window after the delayed shrink', back.vw === 305 && back.vh === 32, J(back));
 
   // Banner: the 2600 ms close counts from the start, not from the call.
-  const tB = await fire(page, 'media', media(track(sq, { title: 'Second Song' })));
+  const tB = await fire(page, 'media', media(track(sq, { title: 'Second Song' })), [2600]);
   await sleep(800);
   const rb = await rec(page);
   const bcall = surfaceCalls(rb, tB).find((x) => surfaceIs(x, 'banner', 'banner'));
@@ -705,18 +746,20 @@ async function scenarioGrowWait() {
   await waitPhase(page, 'collapsing', 3600);
   const rc = await rec(page);
   const col = phaseAt(rc, 'collapsing', tB + 1000);
-  check('G7 banner: the 2600 ms close counts from the start (after the surface resolved)', !!bcall && !!col && near(col.t - bcall.resolved, 2600, 90), J({ col: col && gap(col.t, tB), resolved: bcall && gap(bcall.resolved, tB) }));
+  const pG = await probeOf(page, tB);
+  check('G7 banner: the 2600 ms close counts from the start (the frame after the surface resolved)', !!bcall && !!col && bcall.frame != null && lateOk(col.t - bcall.frame, 2600, pG.lags[0]), J({ lag: pG, col: col && gap(col.t, tB), resolved: bcall && gap(bcall.resolved, tB) }));
   await waitPhase(page, 'collapsed', 2500);
   await sleep(700);
 
   // Hover in during a delayed banner's wait: expand ~80 ms after the hover, not the 2600 ms close.
   const tC = await fire(page, 'media', media(track(sq, { title: 'Third Song' })));
   await sleep(30);
-  const tH = await fire(page, 'hover', true);
+  const tH = await fire(page, 'hover', true, [80]);
   await sleep(1500);
   const rh = await rec(page);
+  const pH = await probeOf(page, tH);
   const ex = phaseAt(rh, 'expanded', tH, tH + 1400);
-  check('G8 hover in during a banner\'s wait: expanded about 80 ms after the hover, no collapsing before', !!ex && near(ex.t - tH, 80, 45) && !rh.phases.some((x) => x.t > tC && x.t < ex.t && x.phase === 'collapsing'), J({ phases: rh.phases.filter((x) => x.t >= tC).map((x) => [x.phase, gap(x.t, tH)]) }));
+  check('G8 hover in during a banner\'s wait: expanded about 80 ms after the hover, no collapsing before', !!ex && lateOk(ex.t - tH, 80, pH.lags[0]) && !rh.phases.some((x) => x.t > tC && x.t < ex.t && x.phase === 'collapsing'), J({ phases: rh.phases.filter((x) => x.t >= tC).map((x) => [x.phase, gap(x.t, tH)]) }));
   await fire(page, 'hover', false);
   await waitPhase(page, 'collapsed', 2500);
   await sleep(300);
