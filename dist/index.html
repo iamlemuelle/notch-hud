@@ -2,6 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
+<script src="vendor/avatar-core.js"></script>
 <style>
   :root { --tint: 245, 245, 245; }
   html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
@@ -14,9 +15,15 @@
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #8b8b8b; flex: none; }
   .dot.att { background: #f5a623; box-shadow: 0 0 6px #f5a623; }
   .dot.work { background: #34d058; box-shadow: 0 0 6px #34d058; }
-  .lear { position: absolute; left: calc(var(--pill-l) + 14px); top: 0; height: var(--pill-h); display: flex;
-    align-items: center; gap: 6px; z-index: 1; opacity: 0.82; }
-  #total { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  /* Left ear: the avatar and the session count, placed by transform (CONTRACT.md section 10). The dot stands in for
+     the avatar only when it cannot be drawn. */
+  .lear { position: absolute; left: 0; top: 0; z-index: 1; opacity: 0.82; }
+  .lear > * { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  #avatar { width: 24px; height: 24px; overflow: visible; }
+  .lear #dot, .lear.plain #avatar { display: none; }
+  .lear.plain #dot { display: block; }
+  #total { font-size: 12px; font-weight: 600; line-height: 16px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #total.att { color: #f5a623; }
 
   .bars { position: absolute; display: flex; align-items: flex-end; gap: 2px; height: 14px; }
   .bars span { width: 3px; height: 14px; border-radius: 1.5px; background: rgb(var(--tint)); transform-origin: 50% 100%;
@@ -150,7 +157,7 @@
         <div id="bText"><div id="bTitle"></div><div id="bSub"></div></div>
         <div class="bars" id="bannerBars"><span></span><span></span><span></span><span></span></div>
       </div>
-      <div class="lear" id="lear"><span class="dot" id="dot"></span><span id="total">0</span></div>
+      <div class="lear" id="lear"><svg id="avatar" viewBox="-150 -150 300 300" aria-hidden="true"></svg><span class="dot" id="dot"></span><span id="total">0</span></div>
       <div class="bars" id="earBars"><span></span><span></span><span></span><span></span></div>
       <svg id="earPause" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><rect x="2.5" y="1.5" width="2.4" height="9" rx=".9" fill="currentColor"/><rect x="7.1" y="1.5" width="2.4" height="9" rx=".9" fill="currentColor"/></svg>
       <div id="art"><div class="ph"></div><div class="layer"></div><div class="layer"></div></div>
@@ -265,6 +272,7 @@
     clearTimeout(artTimer);
     artTimer = null;
     if (!L) return;
+    placeEar(where === 'card' ? 'card' : 'ear', dur, ease);
     if (reduced && dur) {
       artEl.style.transition = 'opacity 60ms linear';
       artEl.style.opacity = 0;
@@ -309,6 +317,127 @@
       artEl.style.transition = `opacity ${reduced ? 120 : 160}ms linear`;
     }
     artEl.style.opacity = v;
+  }
+
+  // ---- avatar (CONTRACT.md section 10) ----
+  // Rust picks the pose and validates the definition; avatar-core (dist/vendor/avatar-core.js) computes each frame.
+  // Frames are painted only while the picture moves (a transition, a blink, ambient motion), at most one per
+  // AVATAR_FRAME_MS; during a hold one timer waits for the next change, and a still pose sets none.
+  const AVATAR_FRAME_MS = 50;
+  const AVATAR_SLOTS = 18; // avatar-core's MAX_BODY_NODES + 2 body paths per side, as @bible-strong/avatar-web paints
+  const AVATAR_ENV = { random: Math.random };
+  const avatarEl = $('avatar');
+  let avatarDef = null; // the validated definition from the `avatar` command
+  let pose = null; // the latest Pose from Rust
+  let play = null; // avatar-core playback state of what is on screen
+  let avatarTimer = null;
+  let avatarPaths = null;
+
+  function placeEar(where, dur = 0, ease = 'linear') {
+    const pillL = (L.stage.width - L.pill.width) / 2, contentL = (L.stage.width - L.open.width) / 2;
+    const p = where === 'card'
+      ? { x: contentL + 16, y: 4, s: 1.5, tx: contentL + 58, cy: 22 }
+      : { x: pillL + 12, y: (L.pill.height - 24) / 2, s: 1, tx: pillL + 41, cy: L.pill.height / 2 };
+    const tr = dur && !reduced ? `transform ${dur}ms ${ease}` : 'none';
+    const moves = [[avatarEl, `translate(${p.x}px, ${p.y}px) scale(${p.s})`],
+      [$('dot'), `translate(${p.x + 12 * p.s - 4}px, ${p.cy - 4}px)`], [$('total'), `translate(${p.tx}px, ${p.cy - 8}px)`]];
+    for (const [el, tf] of moves) { el.style.transition = tr; el.style.transform = tf; }
+  }
+  const svgEl = (name) => document.createElementNS('http://www.w3.org/2000/svg', name);
+  function buildAvatar() {
+    const clipHead = svgEl('path'), clip = svgEl('clipPath'), defs = svgEl('defs');
+    clip.id = 'avatarClip';
+    clip.append(clipHead);
+    defs.append(clip);
+    const back = Array.from({ length: AVATAR_SLOTS }, () => svgEl('path'));
+    const front = Array.from({ length: AVATAR_SLOTS }, () => svgEl('path'));
+    const head = svgEl('path'), left = svgEl('path'), right = svgEl('path'), eyes = svgEl('g');
+    eyes.setAttribute('clip-path', 'url(#avatarClip)');
+    eyes.append(left, right);
+    avatarEl.replaceChildren(defs, ...back, head, eyes, ...front);
+    avatarPaths = { clipHead, back, head, left, right, front };
+  }
+  // Writes only what changed, so a frame that looks the same mutates nothing.
+  const setAttr = (el, name, value) => { if (el.getAttribute(name) !== value) el.setAttribute(name, value); };
+  function paintScene(scene) {
+    const g = scene.geometry, body = scene.colors.body, P = avatarPaths;
+    setAttr(P.clipHead, 'd', g.headPath);
+    setAttr(P.head, 'd', g.headPath);
+    setAttr(P.head, 'fill', body);
+    for (const [el, d, on] of [[P.left, g.leftPath, g.leftVisible], [P.right, g.rightPath, g.rightVisible]]) {
+      setAttr(el, 'd', d);
+      setAttr(el, 'fill', scene.colors.eyes);
+      setAttr(el, 'opacity', on ? '1' : '0');
+    }
+    for (const [els, ds] of [[P.back, g.backPaths], [P.front, g.frontPaths]]) {
+      els.forEach((el, i) => { setAttr(el, 'd', ds[i] ?? ''); setAttr(el, 'fill', body); });
+    }
+  }
+  function avatarFail(why) {
+    clearTimeout(avatarTimer);
+    avatarTimer = null;
+    avatarDef = null;
+    play = null;
+    $('lear').classList.add('plain');
+    console.warn('avatar: ' + why + '; showing the dot');
+  }
+  // A stopped playback state holding one expression, so the next pose eases out of it.
+  const stillState = (key) => ({ activeExpression: key, status: 'stopped', stepIndex: 0, direction: 1, phase: 'hold', phaseStartedAt: 0, transitionFrom: key });
+  const ambient = (key) => { const m = avatarDef.expressions[key] && avatarDef.expressions[key].motion; return !!m && (m.eyes !== 'none' || m.body !== 'none'); };
+  // Milliseconds until the picture next changes, or null when it never does by itself.
+  function avatarWait(now) {
+    if (play.status !== 'playing' || !play.activeAnimation) return null;
+    const anim = avatarDef.animations[play.activeAnimation], blink = anim.blink;
+    const blinking = blink.enabled && play.blinkStartedAt !== undefined && now < play.blinkStartedAt + blink.durationMs;
+    if (play.phase === 'transition' || blinking || ambient(play.activeExpression)) return AVATAR_FRAME_MS;
+    const holdEnd = play.phaseStartedAt + anim.steps[play.stepIndex].holdMs;
+    const next = blink.enabled && play.blinkDueAt !== undefined ? Math.min(holdEnd, play.blinkDueAt) : holdEnd;
+    return Math.max(0, next - now);
+  }
+  function avatarFrame() {
+    avatarTimer = null;
+    const now = performance.now();
+    try {
+      play = AvatarCore.advanceAvatarPlayback(avatarDef, play, now, AVATAR_ENV);
+      paintScene(AvatarCore.renderAvatarFrame(avatarDef, play, now, AVATAR_ENV));
+    } catch (e) {
+      return avatarFail(String(e && e.message));
+    }
+    const wait = avatarWait(now);
+    if (wait !== null) avatarTimer = setTimeout(avatarFrame, wait);
+  }
+  // Plays the pose's first animation the avatar has; a still pose, reduced motion or no such animation holds the
+  // first step's expression.
+  function showPose() {
+    if (!avatarDef) return;
+    clearTimeout(avatarTimer);
+    avatarTimer = null;
+    const p = pose || { animations: [], still: true };
+    const name = p.animations.find((n) => Object.hasOwn(avatarDef.animations, n));
+    try {
+      if (p.still || reduced || !name) {
+        const key = name ? avatarDef.animations[name].steps[0].expression : 'neutral';
+        paintScene(AvatarCore.renderAvatarDefinition(avatarDef, key));
+        play = stillState(key);
+        return;
+      }
+      const now = performance.now();
+      if (play) play = AvatarCore.advanceAvatarPlayback(avatarDef, play, now, AVATAR_ENV);
+      const from = play ? AvatarCore.sampleAvatarFrame(avatarDef, play, now, AVATAR_ENV) : undefined;
+      const started = AvatarCore.playAvatarAnimation(avatarDef, name, now, from);
+      if (!started.ok) throw new Error(started.error.message);
+      play = started.value;
+    } catch (e) {
+      return avatarFail(String(e && e.message));
+    }
+    avatarFrame();
+  }
+  function onAvatar(a) {
+    if (!window.AvatarCore) return avatarFail('the renderer did not load');
+    if (!a || !a.definition) return avatarFail('no avatar');
+    avatarDef = a.definition;
+    buildAvatar();
+    showPose();
   }
 
   // ---- tint (CONTRACT.md section 7) ----
@@ -638,6 +767,7 @@
   }
   function render(s) {
     $('dot').className = 'dot' + (s.attention > 0 ? ' att' : s.working > 0 ? ' work' : '');
+    $('total').className = s.attention > 0 ? 'att' : '';
     $('total').textContent = s.total;
     const head = $('sessHead');
     head.className = s.attention > 0 ? 'att' : '';
@@ -747,7 +877,7 @@
   });
   bar.addEventListener('pointercancel', () => { endDrag(); tick(); });
 
-  reducedQuery.addEventListener('change', (e) => { reduced = e.matches; if (L) syncInstant(); renderMedia(); });
+  reducedQuery.addEventListener('change', (e) => { reduced = e.matches; if (L) syncInstant(); renderMedia(); showPose(); });
   render({ rows: [], total: 0, attention: 0, working: 0 });
   renderMedia();
   const tauri = window.__TAURI__;
@@ -760,7 +890,11 @@
     }
   });
   // A startup reply older than an event of its kind is ignored.
-  let mediaEvent = false, sessionsEvent = false;
+  let mediaEvent = false, sessionsEvent = false, moodEvent = false;
+  if (!window.AvatarCore) avatarFail('the renderer did not load');
+  tauri.event.listen('mood', (e) => { moodEvent = true; pose = e.payload; showPose(); });
+  tauri.core.invoke('avatar').then(onAvatar, () => avatarFail('the avatar command failed'));
+  tauri.core.invoke('mood').then((p) => { if (p && !moodEvent) { pose = p; showPose(); } });
   tauri.event.listen('sessions', (e) => { sessionsEvent = true; onSessions(e.payload); });
   tauri.event.listen('media', (e) => { mediaEvent = true; onMedia(e.payload); });
   tauri.core.invoke('layout').then((l) => { if (l && !L) applyLayout(l); });
