@@ -60,12 +60,43 @@ fn exited_while_in_emits_false_whatever_contains_says() {
 }
 
 #[test]
-fn entered_and_moved_count_as_over_even_when_contains_is_false() {
+fn entered_counts_as_over_even_when_contains_is_false() {
     let mut h = Hover::new();
     assert_eq!(h.step(Input::Entered, false, true, Shape::Pill), Some(true));
-    assert_eq!(h.step(Input::Moved, false, true, Shape::Pill), None);
+}
+
+#[test]
+fn a_moved_not_containing_the_cursor_does_not_set_in() {
     let mut h = Hover::new();
-    assert_eq!(h.step(Input::Moved, false, true, Shape::Pill), Some(true));
+    assert_eq!(h.step(Input::Moved, false, true, Shape::Pill), None);
+}
+
+#[test]
+fn a_moved_not_containing_the_cursor_while_in_sets_out() {
+    let mut h = inside(Shape::Pill);
+    assert_eq!(h.step(Input::Moved, false, true, Shape::Pill), Some(false));
+}
+
+#[test]
+fn a_moved_containing_the_cursor_sets_in_only_with_a_move() {
+    let mut h = Hover::new();
+    assert_eq!(h.step(Input::Moved, true, true, Shape::Pill), Some(true));
+    let mut h = Hover::new();
+    assert_eq!(h.step(Input::Moved, true, false, Shape::Pill), None);
+}
+
+#[test]
+fn a_replaced_area_event_is_judged_by_the_rect_in_to_out() {
+    let mut h = inside(Shape::Open);
+    assert_eq!(h.step(Input::Placed, false, false, Shape::Pill), Some(false));
+    assert_eq!(h.step(Input::Moved, false, true, Shape::Pill), None);
+}
+
+#[test]
+fn a_replaced_area_event_is_judged_by_the_rect_out_to_in() {
+    let mut h = Hover::new();
+    assert_eq!(h.step(Input::Placed, true, false, Shape::Open), None);
+    assert_eq!(h.step(Input::Moved, true, true, Shape::Open), Some(true));
 }
 
 #[test]
