@@ -14,6 +14,8 @@ fn rec(id: &str, cwd: &str, event: &str, ts: u64) -> Record {
         notification_type: None,
         tool_name: None,
         ts,
+        inbox: None,
+        host: None,
     }
 }
 
@@ -431,6 +433,8 @@ fn read_dir_parses_skips_and_ties_by_name() {
         notification_type: None,
         tool_name: None,
         ts: 100,
+        inbox: None,
+        host: None,
     };
     assert_eq!(got, vec![want("a"), want("b")]);
     let _ = fs::remove_dir_all(&d);
@@ -484,6 +488,31 @@ fn read_dir_optional_fields_default_and_present() {
     assert_eq!(x.notification_type, None);
     assert_eq!(y.notification_type.as_deref(), Some("idle_prompt"));
     assert_eq!(y.tool_name, None);
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn read_dir_parses_inbox_and_host_with_and_without_them() {
+    let d = tmp("inbox-host");
+    fs::write(
+        d.join("a.json"),
+        r#"{"session_id":"a","agent_id":null,"cwd":"/c","event":"Stop","notification_type":null,"tool_name":null,"ts":5,"inbox":"/tmp/cc-socks/41.sock","host":"com.anthropic.claudefordesktop"}"#,
+    )
+    .unwrap();
+    fs::write(
+        d.join("b.json"),
+        r#"{"session_id":"b","agent_id":null,"cwd":"/c","event":"Stop","notification_type":null,"tool_name":null,"ts":5,"inbox":null,"host":null}"#,
+    )
+    .unwrap();
+    fs::write(d.join("c.json"), r#"{"session_id":"c","cwd":"/c","event":"Stop","ts":5}"#).unwrap();
+    let mut got = read_dir(&d);
+    got.sort_by(|x, y| x.session_id.cmp(&y.session_id));
+    let a = Record {
+        inbox: Some("/tmp/cc-socks/41.sock".into()),
+        host: Some("com.anthropic.claudefordesktop".into()),
+        ..rec("a", "/c", "Stop", 5)
+    };
+    assert_eq!(got, vec![a, rec("b", "/c", "Stop", 5), rec("c", "/c", "Stop", 5)]);
     let _ = fs::remove_dir_all(&d);
 }
 
