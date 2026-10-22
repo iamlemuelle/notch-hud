@@ -14,6 +14,22 @@ Directory: `$NOTCH_DIR` if set, else `~/.claude/notch/sessions`. One file per se
 
 - `event` is the hook's `hook_event_name`. `agent_id`, `notification_type` and `tool_name` are copied from the hook
   input, or `null`. `ts` is integer unix seconds at the time the hook ran.
+- `inbox` and `host` come from the hook's environment, not its input, and follow `ts`. Each is a string, or `null`
+  when its variable is unset or empty. Both go to `jq` through `--arg`, so no value is interpreted by the shell.
+  Records written before these fields existed lack both keys; readers treat a missing key as `null`.
+  - `inbox` is `$CLAUDE_CODE_MESSAGING_SOCKET`, the path of the session's inbox socket. Documented as exported to
+    hooks; measured in a CLI session's hook environment and in a Desktop session's own environment. A `--restricted`
+    session binds no inbox (measured), nor does a `--bare` one (docs), so their records have `inbox: null`. Socket
+    names are `<pid>.sock` (measured, undocumented) and a socket file can outlive its session, so a path alone
+    doesn't prove the session is live.
+  - `host` is `$__CFBundleIdentifier`, the bundle id of the app the session runs in. Measured
+    `com.anthropic.claudefordesktop` in a Desktop session's Bash environment. Present in hook environments and in
+    terminal sessions (the terminal's bundle id) [unverified].
+  - `CLAUDE_CODE_MESSAGING_TOKEN` is never recorded.
+
+```json
+{"session_id":"abc123","agent_id":null,"cwd":"/Users/lem/bianki","event":"Stop","notification_type":null,"tool_name":null,"ts":1792560000,"inbox":"/tmp/cc-socks/41234.sock","host":"com.anthropic.claudefordesktop"}
+```
 
 The hook reads one JSON object on stdin and:
 

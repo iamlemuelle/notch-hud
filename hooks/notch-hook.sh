@@ -5,8 +5,11 @@ dir="${NOTCH_DIR:-$HOME/.claude/notch/sessions}"
 input=$(cat) || exit 0
 # One jq call: prints "<action>\t<session_id>\t<agent_id>\t<record json>", or nothing when the event is skipped.
 # \A...\z anchor the whole string: "$" would accept a trailing newline.
-out=$(printf '%s' "$input" | /usr/bin/jq -r --argjson ts "$(date +%s)" '
+# inbox and host come from the environment through --arg, never through the shell.
+out=$(printf '%s' "$input" | /usr/bin/jq -r --argjson ts "$(date +%s)" \
+  --arg inbox "${CLAUDE_CODE_MESSAGING_SOCKET:-}" --arg host "${__CFBundleIdentifier:-}" '
   def ok: type == "string" and test("\\A[A-Za-z0-9_-]+\\z");
+  def nonempty: if . == "" then null else . end;
   (.session_id // "") as $id
   | (.agent_id // null) as $ag
   | (.hook_event_name // "") as $ev
@@ -16,7 +19,7 @@ out=$(printf '%s' "$input" | /usr/bin/jq -r --argjson ts "$(date +%s)" '
     elif $ev == "SubagentStop" then (if $ag == null then empty else "delete\t\($id)\t\($ag)\t" end)
     elif $ev == "Notification" and ($nt as $t | ["permission_prompt","idle_prompt","elicitation_dialog","agent_needs_input"] | index($t) | not) then empty
     else "write\t\($id)\t\($ag // "")\t" + ({session_id: $id, agent_id: $ag, cwd: (.cwd // ""), event: $ev, notification_type: $nt,
-         tool_name: (.tool_name // null), ts: $ts} | tojson)
+         tool_name: (.tool_name // null), ts: $ts, inbox: ($inbox | nonempty), host: ($host | nonempty)} | tojson)
     end') || exit 0
 [ -n "$out" ] || exit 0
 tab=$(printf '\t')
