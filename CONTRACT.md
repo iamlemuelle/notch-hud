@@ -457,8 +457,9 @@ pub fn next_hover(was_in: bool, over: bool, moved: bool) -> bool;
 - Command `layout` returns the current `Layout`. The app emits `layout` with it whenever it changes (row count, the
   media extra height, or the notched screen's geometry).
 - Command `surface` takes `{ window: WindowMode, hit: Shape }` (lowercase strings; an unknown value is rejected with
-  `Err`). It records both with `Surface::set`, places the panel on the main thread, and resolves only after that
-  placement ran, so the page can wait for the bigger window. The page is its only caller.
+  `Err`). It is a synchronous command, so Tauri runs it on the main thread in the order the calls arrive: it records
+  both with `Surface::set` and places the panel before it returns, so the page can wait for the bigger window. The
+  page is its only caller.
 - Window frame: `Surface::window_size(layout)`, set only when it differs from the panel's frame.
 - Trace (`$NOTCH_TRACE`): `window: <pill|banner|open> <width>x<height>` each time the frame's size changes, and
   `hover: in` / `hover: out` each time `hover` is emitted.
@@ -509,7 +510,7 @@ pub fn next_hover(was_in: bool, over: bool, moved: bool) -> bool;
 | collapsed, collapsing | hover in | intent | cancel the collapse; after 80 ms, peek |
 | intent | hover out | collapsed | cancel; when the shape is not at the pill (it was collapsing), collapse it as from expanded |
 | intent | 80 ms | peek | window `open`; ears brighten; clip to `peek` in 120 ms `cubic-bezier(0.2, 0, 0, 1)`; after 120 ms, expand |
-| peek | hover out | peek | after 250 ms: collapsed, ears dim, clip to `pill` in 120 ms `cubic-bezier(0.2, 0, 0, 1)` |
+| peek | hover out | peek | after 250 ms: collapsed, ears dim, clip to `pill` and art to the ear in 120 ms `cubic-bezier(0.2, 0, 0, 1)`, content and banner layers reset |
 | peek | hover in while that 250 ms runs, or the 120 ms ends | expanded | expand |
 | expanded | hover out | expanded | after 250 ms, collapse; hover in cancels it |
 | banner | hover in | banner | after 80 ms, expand (window `open`) |
@@ -538,7 +539,10 @@ pub fn next_hover(was_in: bool, over: bool, moved: bool) -> bool;
   the phase's own timer) start one animation frame after the `surface` call resolves, not before. A phase change
   before then drops that start. A hover change while waiting sets its timer as usual (the 250 ms leave, or the 80 ms
   expand from a banner), and the start then keeps that timer instead of its own (peek's 120 ms, the banner's
-  2600 ms). When the mode is already right, they start at once.
+  2600 ms). When the mode is already right, they start at once. A mode counts as right only once a `surface` call
+  for it has resolved: a start that follows a grow still in flight waits for that call too.
+- A rejected `surface` call still lets the waiting start run (the phase never stalls); it cannot happen with the
+  page's fixed strings.
 - When a `surface` call rejects, the page sends the same (window, hit) pair again on its next phase change instead
   of treating it as sent.
 - Shrink only after the shape is back: when the phase becomes `collapsed`, window `pill` is sent once no `clip-path`
