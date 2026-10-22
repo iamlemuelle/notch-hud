@@ -1,5 +1,6 @@
 #!/bin/bash
-# Page checks for CONTRACT.md section 8 (panel motion, banners, the grow-then-shrink window): dist/index.html runs in
+# Page checks for CONTRACT.md section 8 (panel motion, banners, the grow-then-shrink window) and section 10 "Page" (the
+# avatar): dist/index.html runs in
 # headless Chromium against a fake Tauri bridge. It moves no cursor and needs no display.
 #
 # Exit 0 when every check passes, 1 when one fails, 2 when playwright-core or the headless shell is missing.
@@ -15,5 +16,13 @@ command -v node >/dev/null || { echo "SKIP node is not installed"; exit 2; }
 [ -x "$CHROMIUM" ] || { echo "SKIP headless chromium not found at $CHROMIUM (set CHROMIUM)"; exit 2; }
 [ -f "${NOTCH_PAGE:-$root/dist/index.html}" ] || { echo "FAIL no page at ${NOTCH_PAGE:-$root/dist/index.html}"; exit 1; }
 
+status=0
 node "$root/tests/page/motion-check.mjs"
-exit $?
+rc=$?
+[ "$rc" -eq 1 ] && status=1
+[ "$rc" -eq 2 ] && [ "$status" -eq 0 ] && status=2
+node "$root/tests/page/avatar-check.mjs"
+rc=$?
+[ "$rc" -eq 1 ] && status=1
+[ "$rc" -eq 2 ] && [ "$status" -eq 0 ] && status=2
+exit "$status"
