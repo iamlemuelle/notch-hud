@@ -329,7 +329,8 @@
   const avatarEl = $('avatar');
   let avatarDef = null; // the validated definition from the `avatar` command
   let pose = null; // the latest Pose from Rust
-  let play = null; // avatar-core playback state of what is on screen
+  let play = null; // avatar-core playback state
+  let painted = null; // { state, at }: the playback state and time of the frame on screen, which a new pose eases out of
   let avatarTimer = null;
   let avatarPaths = null;
 
@@ -378,6 +379,7 @@
     avatarTimer = null;
     avatarDef = null;
     play = null;
+    painted = null;
     $('lear').classList.add('plain');
     console.warn('avatar: ' + why + '; showing the dot');
   }
@@ -400,6 +402,7 @@
     try {
       play = AvatarCore.advanceAvatarPlayback(avatarDef, play, now, AVATAR_ENV);
       paintScene(AvatarCore.renderAvatarFrame(avatarDef, play, now, AVATAR_ENV));
+      painted = { state: play, at: now };
     } catch (e) {
       return avatarFail(String(e && e.message));
     }
@@ -419,11 +422,11 @@
         const key = name ? avatarDef.animations[name].steps[0].expression : 'neutral';
         paintScene(AvatarCore.renderAvatarDefinition(avatarDef, key));
         play = stillState(key);
+        painted = { state: play, at: performance.now() };
         return;
       }
       const now = performance.now();
-      if (play) play = AvatarCore.advanceAvatarPlayback(avatarDef, play, now, AVATAR_ENV);
-      const from = play ? AvatarCore.sampleAvatarFrame(avatarDef, play, now, AVATAR_ENV) : undefined;
+      const from = painted ? AvatarCore.sampleAvatarFrame(avatarDef, painted.state, painted.at, AVATAR_ENV) : undefined;
       const started = AvatarCore.playAvatarAnimation(avatarDef, name, now, from);
       if (!started.ok) throw new Error(started.error.message);
       play = started.value;
