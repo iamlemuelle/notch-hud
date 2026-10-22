@@ -605,7 +605,7 @@ fn main() {
         check_avatar(args.next());
     }
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![sessions, session_detail, media, act, layout, surface, avatar, mood])
+        .invoke_handler(tauri::generate_handler![sessions, session_detail, media, act, layout, surface, panel::focus, avatar, mood])
         .setup(|app| {
             let mtm = MainThreadMarker::new().expect("main thread");
             if notched_screen(mtm).is_none() {

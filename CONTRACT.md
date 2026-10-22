@@ -276,6 +276,31 @@ pub fn detail(records: &[Record], id: &str, now: u64) -> Option<Detail>;
 - The refresh stores its records and `now` before it emits anything. When the records differ from the last refresh's,
   it emits `records` (no payload) after `sessions`: the card shows the newest event and the subagents, which can change
   while the summary does not (a session that stays `Working` from one tool to the next).
+- Key focus (amendment, 2026-10-23): the panel is `NotchHudPanel` (`src-tauri/src/panel.rs`), an `NSPanel` subclass
+  still created `Borderless | NonactivatingPanel` as in "Clicks". Its `canBecomeKeyWindow` returns a main-thread flag,
+  `KEY_WANTED`, which is `false` at startup and stays `false` until `focus(true)`. While it is `false` the panel never
+  becomes key and clicks behave exactly as "Clicks" says.
+  Command `focus(on: bool)`, synchronous like `surface`, so it runs on the main thread in arrival order:
+  - `on`: set the flag, `makeKeyWindow`, then `makeFirstResponder` with the webview (the one subview of the content
+    view wry builds). When the panel is still not key afterwards, the flag is cleared again. Under `$NOTCH_TRACE`, log
+    `key: on` to stderr when the panel was not key before the call and is key after it.
+  - off: clear the flag, then `NSApp.deactivate()`. Nothing calls `resignKeyWindow`.
+  - The panel observes its own `NSWindowDidResignKeyNotification`. On every resign (`focus(false)`, a click in another
+    app) it clears the flag, emits `key` with `false` and, under `$NOTCH_TRACE`, logs `key: off` to stderr.
+  - No code reads `NSApp.isActive`: it reads `true` while the panel is key, though the frontmost app has not changed.
+  - Nothing in the page calls `focus` yet; the prompt box (`docs/PLAN-video-sessions.md` Phase 3) is the first caller.
+  Measured in the planning spike (`docs/PLAN-video-sessions.md` section 3.2; macOS 27, an accessory `LSUIElement`
+  bundle opened with `open -g`, a WKWebView with an `<input>` in a `Borderless | NonactivatingPanel` subclass):
+  - flag off, `orderFrontRegardless`: the panel is not key, the app is not active, the frontmost app is unchanged;
+  - flag on, `makeKey`, `makeFirstResponder(webview)`: the panel is key and the frontmost app is unchanged, while
+    `NSApp.isActive` reads `true`;
+  - key events dispatched in-process (`NSApp.sendEvent`) reached the `<input>`;
+  - giving key back with `NSApp.deactivate()`, or with `orderOut` + `orderFrontRegardless`, left the panel not key and
+    the app inactive at once and 3 s later, frontmost unchanged;
+  - `resignKey()` reported not key at once, but the panel was key again 3 s later (Apple says never to call it);
+  - a plain borderless `NSPanel` stays not key after `makeKey`.
+  Not measured yet: real keystrokes from the keyboard, whether the previous app's window gets keyboard focus back after
+  the give-back, and ⌘V/⌘A in the field. The Phase 3 check covers them.
 
 ## 4. UI (`dist/index.html`)
 

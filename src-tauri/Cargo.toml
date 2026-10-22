@@ -13,5 +13,5 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 notify = "8"
 objc2 = "0.6"
 block2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSArray"] }
-objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSScreen", "NSWindow", "NSResponder", "NSGraphics", "NSView", "NSTrackingArea", "block2"] }
+objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSArray", "NSNotification", "NSString"] }
+objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSScreen", "NSWindow", "NSResponder", "NSGraphics", "NSView", "NSTrackingArea", "NSApplication", "block2"] }

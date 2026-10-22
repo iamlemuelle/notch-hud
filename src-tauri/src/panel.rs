@@ -1,10 +1,15 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use objc2::rc::Retained;
-use objc2::MainThreadOnly;
-use objc2_app_kit::{NSBackingStoreType, NSColor, NSPanel, NSWindowCollectionBehavior, NSWindowStyleMask};
-use objc2_foundation::MainThreadMarker;
-use tauri::WebviewWindow;
+use objc2::{define_class, msg_send, sel, MainThreadOnly};
+use objc2_app_kit::{
+    NSApplication, NSBackingStoreType, NSColor, NSPanel, NSResponder, NSWindow, NSWindowCollectionBehavior,
+    NSWindowDidResignKeyNotification, NSWindowStyleMask,
+};
+use objc2_foundation::{MainThreadMarker, NSNotification, NSNotificationCenter, NSObject, NSRect};
+use tauri::{Emitter, WebviewWindow};
+
+use crate::{trace_on, APP};
 
 // kCGMainMenuWindowLevel is 24; +3 matches what notch apps use to clear the menu bar and its status items.
 const ABOVE_MENU_BAR: isize = 24 + 3;
@@ -12,7 +17,51 @@ const ABOVE_MENU_BAR: isize = 24 + 3;
 thread_local! {
     /// The visible window: a native non-activating panel that hosts the Tauri window's webview. Created once on
     /// the main thread at startup and kept for the app's lifetime; only the main thread can reach it.
-    pub(crate) static PANEL: RefCell<Option<Retained<NSPanel>>> = const { RefCell::new(None) };
+    pub(crate) static PANEL: RefCell<Option<Retained<NotchHudPanel>>> = const { RefCell::new(None) };
+    /// Whether the panel may become key. Only `focus(true)` sets it; `focus(false)` and every resign clear it.
+    static KEY_WANTED: Cell<bool> = const { Cell::new(false) };
+}
+
+define_class!(
+    // SAFETY: NSPanel has no subclassing requirements beyond its designated initializer, and NotchHudPanel has no Drop.
+    #[unsafe(super(NSPanel, NSWindow, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "NotchHudPanel"]
+    pub(crate) struct NotchHudPanel;
+
+    impl NotchHudPanel {
+        #[unsafe(method(canBecomeKeyWindow))]
+        fn can_become_key_window(&self) -> bool {
+            KEY_WANTED.get()
+        }
+
+        #[unsafe(method(didResignKey:))]
+        fn did_resign_key(&self, _notification: &NSNotification) {
+            KEY_WANTED.set(false);
+            if trace_on() {
+                eprintln!("key: off");
+            }
+            if let Some(app) = APP.get() {
+                let _ = app.emit("key", false);
+            }
+        }
+    }
+);
+
+impl NotchHudPanel {
+    fn new(mtm: MainThreadMarker, frame: NSRect) -> Retained<NotchHudPanel> {
+        let this = NotchHudPanel::alloc(mtm).set_ivars(());
+        // SAFETY: NSPanel's designated initializer.
+        unsafe {
+            msg_send![
+                super(this),
+                initWithContentRect: frame,
+                styleMask: PANEL_STYLE,
+                backing: NSBackingStoreType::Buffered,
+                defer: false
+            ]
+        }
+    }
 }
 
 const PANEL_STYLE: NSWindowStyleMask =
@@ -25,13 +74,7 @@ pub(crate) fn adopt_panel(mtm: MainThreadMarker, window: &WebviewWindow) {
     let ptr = window.ns_window().expect("ns_window") as *const objc2_app_kit::NSWindow;
     // SAFETY: Tauri owns this window for the app's lifetime; we only read it here, on the main thread.
     let tao = unsafe { &*ptr };
-    let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
-        NSPanel::alloc(mtm),
-        tao.frame(),
-        PANEL_STYLE,
-        NSBackingStoreType::Buffered,
-        false,
-    );
+    let panel = NotchHudPanel::new(mtm, tao.frame());
     panel.setLevel(ABOVE_MENU_BAR);
     panel.setCollectionBehavior(
         NSWindowCollectionBehavior::CanJoinAllSpaces
@@ -46,6 +89,41 @@ pub(crate) fn adopt_panel(mtm: MainThreadMarker, window: &WebviewWindow) {
     unsafe { panel.setReleasedWhenClosed(false) };
     let content = tao.contentView().expect("content view");
     panel.setContentView(Some(&content));
+    // SAFETY: the panel implements `didResignKey:` and outlives the registration (PANEL).
+    unsafe {
+        NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
+            &panel,
+            sel!(didResignKey:),
+            Some(NSWindowDidResignKeyNotification),
+            Some(&panel),
+        );
+    }
     panel.orderFrontRegardless();
     PANEL.with(|p| *p.borrow_mut() = Some(panel));
+}
+
+/// Gives the panel key focus so typing reaches the page, or gives it back (CONTRACT.md section 3, "Key focus").
+/// Synchronous like `surface`, so it runs on the main thread in arrival order. Never calls `resignKeyWindow`: the
+/// panel was key again 3 s after it in the spike.
+#[tauri::command]
+pub(crate) fn focus(on: bool) {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let Some(panel) = PANEL.with(|p| p.borrow().clone()) else { return };
+    if !on {
+        KEY_WANTED.set(false);
+        NSApplication::sharedApplication(mtm).deactivate();
+        return;
+    }
+    KEY_WANTED.set(true);
+    let was_key = panel.isKeyWindow();
+    panel.makeKeyWindow();
+    // wry's parent view holds one subview, the WKWebView.
+    if let Some(webview) = panel.contentView().and_then(|view| view.subviews().firstObject()) {
+        panel.makeFirstResponder(Some(&webview));
+    }
+    if !panel.isKeyWindow() {
+        KEY_WANTED.set(false);
+    } else if !was_key && trace_on() {
+        eprintln!("key: on");
+    }
 }
