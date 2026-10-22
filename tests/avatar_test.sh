@@ -25,6 +25,8 @@ pass() { echo "PASS $1"; }
 flunk() { echo "FAIL $1"; fail=1; }
 
 tmp="$(mktemp -d)"
+# Every hook call and app below uses this directory; nothing here may touch ~/.claude/notch/sessions.
+export NOTCH_DIR="$tmp/sessions"
 app=""
 cleanup() {
   [ -n "$app" ] && { kill "$app" 2>/dev/null; wait "$app" 2>/dev/null; }
@@ -74,7 +76,10 @@ done
 # --- the app --------------------------------------------------------------------------------------------------------
 now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
 lines() { wc -l <"$1" | tr -d ' '; }
-hook() { printf '%s' "$1" | "$root/hooks/notch-hook.sh"; }
+hook() {
+  [ "${NOTCH_DIR:-}" = "$tmp/sessions" ] || { echo "FAIL hook() would write outside the test directory"; exit 1; }
+  printf '%s' "$1" | "$root/hooks/notch-hook.sh"
+}
 ev() { hook "{\"session_id\":\"$1\",\"cwd\":\"/x/$1\",\"hook_event_name\":\"$2\"${3:-}}"; }
 stamp() { perl -MTime::HiRes=time -ne 'BEGIN { $| = 1 } printf "%.3f %s", time, $_'; }
 stop_app() { [ -n "$app" ] && kill "$app" 2>/dev/null; wait "$app" 2>/dev/null; app=""; }

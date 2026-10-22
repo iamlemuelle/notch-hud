@@ -250,6 +250,10 @@ const dir = mkdtempSync(join(tmpdir(), 'avatar-schema-'));
 mkdirSync(dir, { recursive: true });
 let accepted = 0, rejected = 0;
 const bad = [];
+// CONTRACT.md section 10: the one deliberate difference. A string holding an unpaired UTF-16 surrogate escape is
+// rejected by notch-hud and accepted by avatar-core.
+const EXPECTED = new Set(['raw lone high surrogate escape', 'raw lone low surrogate escape']);
+let expected = 0;
 cases.forEach((c, i) => {
   const file = join(dir, `case-${i}.json`);
   const bytes = Buffer.isBuffer(c.text) ? c.text : Buffer.from(c.text, 'utf8');
@@ -263,12 +267,16 @@ cases.forEach((c, i) => {
   const run = spawnSync(bin, ['--check-avatar', file], { encoding: 'utf8', timeout: 5000, env: { ...process.env, NOTCH_DIR: join(dir, 'sessions') } });
   const ours = run.status === 0 ? 'accept' : run.status === 1 ? 'reject' : `exit ${run.status} signal ${run.signal}`;
   official.ok ? accepted++ : rejected++;
-  if ((official.ok && ours !== 'accept') || (!official.ok && ours !== 'reject')) {
+  if (EXPECTED.has(c.name) && official.ok && ours === 'reject') {
+    expected++;
+    console.log(`EXPECTED ${c.name}: avatar-core accepts; notch-hud rejects (contract section 10)`);
+  } else if ((official.ok && ours !== 'accept') || (!official.ok && ours !== 'reject')) {
     bad.push(c.name);
     console.log(`DISAGREE ${c.name}: avatar-core ${official.ok ? 'accepts' : 'rejects (' + official.why + ')'}; notch-hud ${ours}${run.stderr ? ' [' + run.stderr.trim().slice(0, 160) + ']' : ''}`);
   }
 });
-console.log(`${cases.length} files: avatar-core accepts ${accepted}, rejects ${rejected}; ${bad.length} disagreement(s)`);
+console.log(`${cases.length} files: avatar-core accepts ${accepted}, rejects ${rejected}; ${bad.length} disagreement(s), ${expected} expected`);
+if (expected !== EXPECTED.size) { console.log(`FAIL want exactly ${EXPECTED.size} expected disagreements, saw ${expected}`); process.exit(1); }
 if (accepted < 20 || rejected < 200) { console.log(`FAIL the corpus is lopsided (accept ${accepted}, reject ${rejected}); a mutation helper is broken`); process.exit(1); }
 const fixtureBad = cases.slice(0, 9).filter((c) => !core.parseAvatarDefinition(c.text).ok).map((c) => c.name);
 if (fixtureBad.length) { console.log(`FAIL the official parser rejects our own fixtures: ${fixtureBad.join(', ')}`); process.exit(1); }
