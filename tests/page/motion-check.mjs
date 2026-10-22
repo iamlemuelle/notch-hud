@@ -44,9 +44,11 @@ const LAYOUT = {
   peek: { width: 309, height: 36 },
   banner: { width: 380, height: 78 },
   open: { width: 420, height: 254 },
+  detail: { width: 420, height: 380 }, // section 8, Detail: (420, DETAIL_HEIGHT 380) whatever the rows
   ear: 60,
 };
-const WINDOW = { pill: { w: 305, h: 32 }, banner: { w: 412, h: 94 }, open: { w: 452, h: 270 } };
+// The open window is max(open, detail) + 16 = 396 high (section 8, Detail), 452 wide.
+const WINDOW = { pill: { w: 305, h: 32 }, banner: { w: 412, h: 94 }, open: { w: 452, h: 396 } };
 const SHAPE = { pill: [305, 32, 14], peek: [309, 36, 14], banner: [380, 78, 20], open: [420, 254, 22] };
 const STAGE = { w: 452, h: 982 };
 const EASE_PEEK = 'cubic-bezier(0.2,0,0,1)';
@@ -389,7 +391,7 @@ async function scenarioHover() {
     J({ cOp, cTf }));
   const aTf = trans(rb, '#art', 'transform', fromExp, toExp)[0];
   check('H10 #art transform: 366 ms, the same linear() spring', !!aTf && !isSpring(aTf), J({ spring: aTf && isSpring(aTf), aTf }));
-  check('H11 window grows: the viewport is the open window 452x270', open.vw === 452 && open.vh === 270, J({ vw: open.vw, vh: open.vh }));
+  check('H11 window grows: the viewport is the open window 452x396', open.vw === 452 && open.vh === 396, J({ vw: open.vw, vh: open.vh }));
   check('H12 expanded geometry: stage keeps its place, clip is the open shape, ears at 1', open.phase === 'expanded' && stageStays(open) && !clipIs(open.el['#panel'] && open.el['#panel'].clip, 'open') && near(open.el['#lear'] && open.el['#lear'].opacity, 1, 0.01),
     J({ phase: open.phase, stage: open.stage, vw: open.vw, clip: open.el['#panel'] && clipIs(open.el['#panel'].clip, 'open'), lear: explain(open.el['#lear']) }));
   check('H13 expanded #art is a square 64x64 at stage (32, 44)', boxIs(open.el['#art'], 32, 44, 64, 64), explain(open.el['#art']));
@@ -437,7 +439,7 @@ async function scenarioHover() {
   const peek2 = phaseAt(rd, 'peek', u2, u2 + 200 + 80);
   const exp2 = phaseAt(rd, 'expanded', u2, u2 + 500 + 400);
   check('H24 hover in during collapsing: intent, then peek at 80 ms, then expanded at 200 ms', !!colAgain && !!intent2 && !!peek2 && !!exp2 && lateOk(peek2.t - u2, 80, pd.lags[0]) && exp2.t - u2 >= 190 && lateOk(exp2.t - startOf(rd, peek2), 120, pd.lags[1]), J({ lag: pd, colAgain: !!colAgain, phases: rd.phases.filter((p) => p.t >= u1).map((p) => [p.phase, Math.round(p.t - u2)]) }));
-  check('H25 hover in during collapsing: no pill window is sent, the window stays open', surfaceCalls(rd, u1).every((s) => !(s.args && s.args.window === 'pill')) && endState.vw === 452 && endState.vh === 270 && !rd.resizes.some((x) => x.t > u1 && x.w === 305), J({ surfaces: surfaceCalls(rd, u1), vw: endState.vw, vh: endState.vh }));
+  check('H25 hover in during collapsing: no pill window is sent, the window stays open', surfaceCalls(rd, u1).every((s) => !(s.args && s.args.window === 'pill')) && endState.vw === 452 && endState.vh === 396 && !rd.resizes.some((x) => x.t > u1 && x.w === 305), J({ surfaces: surfaceCalls(rd, u1), vw: endState.vw, vh: endState.vh }));
   check('H26 hover in during collapsing: expanded again, clip is the open shape', endState.phase === 'expanded' && !clipIs(endState.el['#panel'] && endState.el['#panel'].clip, 'open'), J({ phase: endState.phase }));
   await fire(page, 'hover', false);
   await sleep(300);
@@ -501,7 +503,7 @@ async function scenarioSongBanner() {
   check('B13 hover in during a banner: expanded after about 80 ms', !!expanded && lateOk(expanded.t - tH, 80, pH.lags[0]) && !!phaseAt(rh, 'banner', tC, tH), J({ lag: pH, phases: rh.phases.filter((p) => p.t >= tC).map((p) => [p.phase, Math.round(p.t - tH)]) }));
   const openCall = surfaceCalls(rh, tH).find((x) => surfaceIs(x, 'open', 'open'));
   const hs = await snap(page);
-  check('B14 hover in during a banner: surface open/open, window 452x270, clip is the open shape', !!openCall && hs.vw === 452 && hs.vh === 270 && !clipIs(hs.el['#panel'] && hs.el['#panel'].clip, 'open'), J({ openCall, vw: hs.vw, vh: hs.vh }));
+  check('B14 hover in during a banner: surface open/open, window 452x396, clip is the open shape', !!openCall && hs.vw === 452 && hs.vh === 396 && !clipIs(hs.el['#panel'] && hs.el['#panel'].clip, 'open'), J({ openCall, vw: hs.vw, vh: hs.vh }));
   const bOut = trans(rh, '#banner', 'opacity', tH).find((x) => x.timing && x.timing.duration === 80);
   check('B15 the banner layer fades out in 80 ms when expanding from a banner', !!bOut && Number(bOut.to) === 0, J(trans(rh, '#banner', 'opacity', tH)));
 
@@ -733,7 +735,7 @@ async function scenarioGrowWait() {
   const clip = clipFrom(r, t0);
   check('G1 peek: no clip-path transition starts before the open/peek surface call resolved, and one starts within ~2 frames after',
     !!call && call.resolved != null && !!clip && clip.run >= call.resolved && clip.run - call.resolved <= 50, J({ resolved: call && gap(call.resolved, t0), clipRun: clip && gap(clip.run, t0) }));
-  check('G2 peek: the viewport is already the grown size 452x270 when the clip starts', !!clip && clip.vw === 452 && clip.vh === 270 && !clipIs(clip.to, 'peek'), J({ vw: clip && clip.vw, vh: clip && clip.vh, to: clip && clip.to }));
+  check('G2 peek: the viewport is already the grown size 452x396 when the clip starts', !!clip && clip.vw === 452 && clip.vh === 396 && !clipIs(clip.to, 'peek'), J({ vw: clip && clip.vw, vh: clip && clip.vh, to: clip && clip.to }));
   const exp = phaseAt(r, 'expanded', t0, t0 + 900);
   check('G3 peek: the page still expands (hover held) and the window ends open', !!exp && (await snap(page, [])).vw === 452, J({ exp: exp && gap(exp.t, t0) }));
   await fire(page, 'hover', false);

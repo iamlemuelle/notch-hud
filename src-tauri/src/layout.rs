@@ -14,6 +14,7 @@ pub struct Layout {
     pub peek: Size,
     pub banner: Size,
     pub open: Size,
+    pub detail: Size,
     pub ear: f64,
 }
 
@@ -25,6 +26,7 @@ pub enum Shape {
     Peek,
     Banner,
     Open,
+    Detail,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
@@ -40,6 +42,9 @@ pub const EXPANDED_WIDTH: f64 = 420.0;
 pub const BANNER_WIDTH: f64 = 380.0;
 /// Room around the banner and open shapes for the spring's overshoot.
 pub const MARGIN: f64 = 16.0;
+/// The music block (196), then the session card: header 18, 4, four 22 pt rows, 10, the prompt box 34, 6, a hint
+/// line 14, 10.
+pub const DETAIL_HEIGHT: f64 = 196.0 + 184.0;
 
 /// The music block (196), the session header (18), a 4 pt gap, one 22 pt row per shown session row and 14 below.
 /// Shown rows: the summary's session rows, plus a "N more" row when the total exceeds them; one "No Claude Code
@@ -57,6 +62,7 @@ pub fn layout(notch_width: f64, notch_height: f64, screen_height: f64, rows: usi
         peek: Size { width: pill.width + 4.0, height: pill.height + 4.0 },
         banner: Size { width: BANNER_WIDTH, height: notch_height + 46.0 },
         open: Size { width: EXPANDED_WIDTH, height: expanded_height(rows, total) },
+        detail: Size { width: EXPANDED_WIDTH, height: DETAIL_HEIGHT },
         ear: EAR,
     }
 }
@@ -67,6 +73,7 @@ pub fn shape_size(layout: &Layout, shape: Shape) -> Size {
         Shape::Peek => layout.peek,
         Shape::Banner => layout.banner,
         Shape::Open => layout.open,
+        Shape::Detail => layout.detail,
     }
 }
 
@@ -77,7 +84,11 @@ pub fn window_size(layout: &Layout, mode: WindowMode) -> Size {
             width: layout.banner.width + 2.0 * MARGIN,
             height: layout.banner.height + MARGIN,
         },
-        WindowMode::Open => Size { width: layout.stage.width, height: layout.open.height + MARGIN },
+        // As tall as the list or the card, whichever is taller, so switching between them never resizes the window.
+        WindowMode::Open => Size {
+            width: layout.stage.width,
+            height: layout.open.height.max(layout.detail.height) + MARGIN,
+        },
     }
 }
 

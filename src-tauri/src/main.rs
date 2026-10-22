@@ -26,7 +26,7 @@ use hover::{Hover, Input};
 use layout::{Layout, Shape, Size, Surface, WindowMode};
 use media::Media;
 use notify::{RecursiveMode, Watcher};
-use session::{next_wake, prune, read_dir, sessions_dir, summarize, Summary};
+use session::{next_wake, prune, read_dir, sessions_dir, summarize, Detail, Record, Summary};
 
 /// The sessions safety net: a missed file event, a recreated directory, a display change (CONTRACT.md section 3).
 const RESCAN: Duration = Duration::from_secs(5);
@@ -78,6 +78,8 @@ impl Notch {
 /// For `emit` from AppKit callbacks, which carry no handle. Set once at startup.
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static LATEST: Mutex<Option<Summary>> = Mutex::new(None);
+/// The records and `now` of the last sessions refresh, so a detail card agrees with the list it was opened from.
+static RECORDS: Mutex<(Vec<Record>, u64)> = Mutex::new((Vec::new(), 0));
 static MEDIA: Mutex<Option<Media>> = Mutex::new(None);
 static SURFACE: Mutex<Surface> = Mutex::new(Surface::new());
 /// The layout the page was last sent, refreshed on every placement.
@@ -360,6 +362,14 @@ fn refresh_sessions(app: &AppHandle, dir: &Path) -> Option<u64> {
     prune(dir, now);
     let records = read_dir(dir);
     let summary = summarize(&records, now);
+    let wake = next_wake(&records, now);
+    // Stored before any emit, so a page that asks for a detail on the event reads these records.
+    let records_changed = {
+        let mut last = RECORDS.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = last.0 != records;
+        *last = (records, now);
+        changed
+    };
     {
         let mut latest = LATEST.lock().unwrap_or_else(|e| e.into_inner());
         if latest.as_ref() != Some(&summary) {
@@ -372,8 +382,12 @@ fn refresh_sessions(app: &AppHandle, dir: &Path) -> Option<u64> {
             nudge_mood(finished);
         }
     }
+    // A detail card shows more than the summary (the newest event, subagents), so it also follows the records.
+    if records_changed {
+        let _ = app.emit("records", ());
+    }
     place_soon(app);
-    next_wake(&records, now)
+    wake
 }
 
 /// How long to sleep before the next refresh, and the trace cause if no file event comes first: `deadline` (unix
@@ -433,6 +447,25 @@ fn watch_sessions(app: &AppHandle) {
 #[tauri::command]
 fn sessions() -> Option<Summary> {
     LATEST.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// One session for the detail card, from the last refresh's records (CONTRACT.md section 3, "Session detail").
+#[tauri::command]
+fn session_detail(id: String) -> Option<Detail> {
+    if !session::valid_id(&id) {
+        if trace_on() {
+            eprintln!("page: detail rejected");
+        }
+        return None;
+    }
+    let detail = {
+        let records = RECORDS.lock().unwrap_or_else(|e| e.into_inner());
+        session::detail(&records.0, &id, records.1)
+    };
+    if trace_on() {
+        eprintln!("page: detail {id} {}", if detail.is_some() { "found" } else { "none" });
+    }
+    detail
 }
 
 fn trace_on() -> bool {
@@ -614,7 +647,7 @@ fn main() {
         check_avatar(args.next());
     }
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![sessions, media, act, layout, surface, avatar, mood])
+        .invoke_handler(tauri::generate_handler![sessions, session_detail, media, act, layout, surface, avatar, mood])
         .setup(|app| {
             let mtm = MainThreadMarker::new().expect("main thread");
             if notched_screen(mtm).is_none() {

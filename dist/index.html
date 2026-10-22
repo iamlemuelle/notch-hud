@@ -114,6 +114,28 @@
   .srow .st { flex: none; max-width: 170px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #8b8b8b; }
   .srow .st.att { color: #f5a623; }
   .srow.more { color: #8b8b8b; }
+  button.srow { width: calc(100% + 12px); margin: 0 -6px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent;
+    color: inherit; font-family: inherit; text-align: left; cursor: default; }
+  button.srow:active { background: rgba(245, 245, 245, 0.07); }
+  /* The list and the session card share the place below the music block, and crossfade. */
+  .sess { transition: opacity 120ms linear; }
+  .sess.off { opacity: 0; pointer-events: none; }
+  @media (prefers-reduced-motion: reduce) { .sess { transition: none; } }
+  .back { display: flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px 0 2px; margin-left: -2px; border: 0;
+    border-radius: 5px; background: transparent; font: 600 11px/18px -apple-system, system-ui, sans-serif; color: #8b8b8b; cursor: default; }
+  .back:active { color: #f5f5f5; background: rgba(245, 245, 245, 0.07); }
+  #dLabel { min-width: 0; color: #f5f5f5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #dRows { margin: 4px 0 0; }
+  .kv { display: grid; grid-template-columns: 78px minmax(0, 1fr); align-items: center; height: 22px; font-weight: 500;
+    font-size: 12px; line-height: 22px; }
+  .kv dt { color: #8b8b8b; font-size: 11.5px; }
+  .kv dd { margin: 0; min-width: 0; display: flex; align-items: center; gap: 7px; white-space: nowrap; overflow: hidden; }
+  .kv dd span:not(.dot) { overflow: hidden; text-overflow: ellipsis; }
+  .kv dd .att { color: #f5a623; }
+  .kv dd .age { flex: none; color: #8b8b8b; font-variant-numeric: tabular-nums; }
+  #dEnded { height: 88px; margin-top: 4px; display: grid; align-content: center; font-weight: 500; font-size: 12px; line-height: 17px;
+    color: #8b8b8b; }
+  #dEnded[hidden] { display: none; }
 
   /* A short look at what changed, shown under the notch while the panel is closed. */
   #banner { position: absolute; inset: 0; opacity: 0; transform: translateY(4px); pointer-events: none; }
@@ -151,6 +173,11 @@
           <div class="sess-h"><span>Claude Code</span><span id="sessHead"></span></div>
           <div id="rows"></div>
         </div>
+        <div class="sess off" id="detail" aria-live="polite">
+          <div class="sess-h"><button type="button" class="back" id="back" aria-label="Back to all sessions"><svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M6.4 1.6 3 5l3.4 3.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Claude Code</button><span id="dLabel"></span></div>
+          <dl id="dRows"></dl>
+          <div id="dEnded" hidden>Session ended</div>
+        </div>
       </div>
       <div id="banner">
         <div id="bIcon"><span class="dot"></span></div>
@@ -186,7 +213,7 @@
     return { ms: Math.round(D * 1000), css: `linear(${pts.join(', ')})` };
   })();
   const EASE = { peek: 'cubic-bezier(0.2, 0, 0, 1)', collapse: 'cubic-bezier(0.4, 0, 1, 1)' };
-  const RADIUS = { pill: 14, peek: 14, banner: 20, open: 22 };
+  const RADIUS = { pill: 14, peek: 14, banner: 20, open: 22, detail: 22 };
   const reducedQuery = matchMedia('(prefers-reduced-motion: reduce)');
   let reduced = reducedQuery.matches;
   let L = null; // the Layout from Rust
@@ -528,10 +555,10 @@
   // modeCall: the call that last changed the mode, which is the one that grows the window.
   let winMode = 'pill', placedMode = 'pill', sentMode = 'pill', sentSurface = '';
   let surfaceCall = Promise.resolve(), modeCall = surfaceCall;
-  const HIT = { peek: 'peek', expanded: 'open', banner: 'banner' };
+  const HIT = { peek: 'peek', banner: 'banner' };
   // A rejected call is sent again on the next change.
   function sendSurface() {
-    const hit = HIT[phase] || 'pill', key = winMode + ' ' + hit;
+    const hit = phase === 'expanded' ? openShape() : HIT[phase] || 'pill', key = winMode + ' ' + hit;
     if (key === sentSurface) return;
     sentSurface = key;
     const mode = winMode;
@@ -563,8 +590,10 @@
     phase = p;
     epoch++;
     document.body.dataset.phase = p;
+    if (p === 'collapsed') closeCard(true);
     settleWindow();
     syncClock();
+    syncAge();
   }
   // Enters phase p with window `mode`. Until Rust has placed that mode (this call, or one still in flight), `start`
   // waits for the placement and one frame, and is dropped if the phase changes meanwhile.
@@ -615,7 +644,7 @@
     bannerSong = null;
     enter('expanded', 'open', () => {
       earsBright(true);
-      clip('open', SPRING.ms, SPRING.css);
+      clip(openShape(), SPRING.ms, SPRING.css);
       moveArt('card', SPRING.ms, SPRING.css);
       layerIn(content);
     });
@@ -666,7 +695,7 @@
     clearTimeout(artTimer);
     artTimer = null;
     const open = phase === 'expanded';
-    clip(open ? 'open' : phase === 'banner' ? 'banner' : phase === 'peek' ? 'peek' : 'pill');
+    clip(open ? openShape() : phase === 'banner' ? 'banner' : phase === 'peek' ? 'peek' : 'pill');
     if (open) { content.style.transition = 'none'; content.style.opacity = 1; content.style.transform = 'none'; content.style.pointerEvents = 'auto'; }
     else layerRest(content);
     if (phase !== 'banner') layerRest(banner);
@@ -680,7 +709,7 @@
     const moved = prev.stage.width !== next.stage.width || prev.stage.height !== next.stage.height
       || prev.pill.width !== next.pill.width || prev.pill.height !== next.pill.height;
     if (moved) { clip(shapeAt); if (!artTimer) moveArt(artWhere); }
-    else if (phase === 'expanded' && prev.open.height !== next.open.height) clip('open', SPRING.ms, SPRING.css);
+    else if (phase === 'expanded' && !detailId && prev.open.height !== next.open.height) clip('open', SPRING.ms, SPRING.css);
   }
 
   // ---- media and sessions ----
@@ -749,8 +778,10 @@
   const ATTENTION = new Set(['needs_permission', 'needs_input', 'error']);
   const dotClass = (status) => ATTENTION.has(status) ? ' att' : status === 'working' ? ' work' : '';
   function sessionRow(row) {
-    const line = document.createElement('div');
+    const line = document.createElement('button');
+    line.type = 'button';
     line.className = 'srow';
+    line.dataset.id = row.id;
     const dot = document.createElement('span');
     dot.className = 'dot' + dotClass(row.status);
     const label = document.createElement('span');
@@ -785,12 +816,127 @@
   let lastRows = null; // label -> status from the previous payload; null before the first
   function onSessions(s) {
     render(s);
+    refreshDetail();
     const prev = lastRows;
     lastRows = new Map(s.rows.map((r) => [r.label, r.status]));
     if (!prev) return;
     const changed = s.rows.find((r) => BANNER_STATUS.has(r.status) && prev.has(r.label) && prev.get(r.label) !== r.status);
     if (changed) showBanner('session', changed);
   }
+
+  // ---- session card (CONTRACT.md section 4, "Detail card") ----
+  let detailId = null; // the session the card shows, or null while the list shows
+  let detailSeq = 0; // bumped by every request, back and reset: only the reply to the latest request is drawn
+  let detailShown = null; // the Detail drawn, or null once the session ended
+  let openingId = null; // the row clicked whose first reply has not come yet
+  let ageTimer = null;
+  const openShape = () => detailId ? 'detail' : 'open';
+  const EVENT_TEXT = {
+    SessionStart: () => 'Started',
+    UserPromptSubmit: () => 'Got a prompt',
+    PreToolUse: (t) => 'Running ' + t,
+    PostToolUse: (t) => t + ' finished',
+    PostToolUseFailure: (t) => t + ' failed',
+    PermissionRequest: (t) => 'Asked to use ' + t,
+    PermissionDenied: () => 'Permission denied',
+    Notification: () => 'Waiting for your answer',
+    Stop: () => 'Finished its turn',
+    StopFailure: () => 'Stopped with an error',
+  };
+  const eventText = (d) => Object.hasOwn(EVENT_TEXT, d.event) ? EVENT_TEXT[d.event](d.tool_name || 'a tool') : d.event;
+  function ago(ts) {
+    const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+    return s < 60 ? s + ' s ago' : s < 3600 ? Math.floor(s / 60) + ' min ago' : Math.floor(s / 3600) + ' h ago';
+  }
+  const homeTilde = (cwd) => cwd.replace(/^\/Users\/(?!Shared(?:\/|$))[^/]+(?=\/|$)/, '~');
+  function span(text, cls) {
+    const el = document.createElement('span');
+    if (cls) el.className = cls;
+    el.textContent = text;
+    return el;
+  }
+  function kv(name, ...values) {
+    const row = document.createElement('div'), dt = document.createElement('dt'), dd = document.createElement('dd');
+    row.className = 'kv';
+    dt.textContent = name;
+    dd.append(...values);
+    row.append(dt, dd);
+    return row;
+  }
+  function drawDetail(d) {
+    detailShown = d;
+    $('dRows').hidden = !d;
+    $('dEnded').hidden = !!d;
+    if (d) {
+      $('dLabel').textContent = d.label;
+      const folder = span(homeTilde(d.cwd));
+      folder.title = d.cwd;
+      $('dRows').replaceChildren(
+        kv('Status', span('', 'dot' + dotClass(d.status)), span(STATUS_TEXT[d.status](null), ATTENTION.has(d.status) ? 'att' : '')),
+        kv('Folder', folder),
+        kv('Last event', span(eventText(d)), span(ago(d.event_ts), 'age')),
+        kv('Subagents', span(d.agents ? d.agents + ' running' : 'None')));
+    }
+    syncAge();
+  }
+  function drawAge() {
+    const age = $('dRows').querySelector('.age');
+    if (age && detailShown) age.textContent = ago(detailShown.event_ts);
+  }
+  function syncAge() {
+    const want = phase === 'expanded' && detailId !== null && detailShown !== null;
+    if (want && ageTimer === null) ageTimer = setInterval(drawAge, 1000);
+    if (!want && ageTimer !== null) { clearInterval(ageTimer); ageTimer = null; }
+  }
+  // Swaps the list and the card; while expanded the shape springs to the other one and the hit rect follows.
+  function showCard(on, instant) {
+    const sess = $('sess'), card = $('detail');
+    if (instant) { sess.style.transition = card.style.transition = 'none'; }
+    sess.classList.toggle('off', on);
+    card.classList.toggle('off', !on);
+    if (instant) { flush(card); sess.style.transition = card.style.transition = ''; }
+    if (phase === 'expanded' && L) { clip(openShape(), SPRING.ms, SPRING.css); sendSurface(); }
+    syncAge();
+  }
+  function detailRequest(id) {
+    const seq = ++detailSeq;
+    return window.__TAURI__.core.invoke('session_detail', { id })
+      .then((d) => seq === detailSeq ? { d: d || null } : null, () => null);
+  }
+  function openDetail(id) {
+    openingId = id;
+    detailRequest(id).then((r) => {
+      if (!r) return;
+      openingId = null;
+      if (!r.d) return;
+      detailId = id;
+      drawDetail(r.d);
+      showCard(true);
+    });
+  }
+  // An event while a card is opening asks again, so the card never opens on records older than the event.
+  function refreshDetail() {
+    if (detailId === null) {
+      if (openingId !== null) openDetail(openingId);
+      return;
+    }
+    const id = detailId;
+    detailRequest(id).then((r) => { if (r && detailId === id) drawDetail(r.d); });
+  }
+  function closeCard(instant) {
+    detailSeq++;
+    openingId = null;
+    if (detailId === null) return;
+    detailId = null;
+    detailShown = null;
+    showCard(false, instant);
+  }
+  $('rows').addEventListener('click', (e) => {
+    const row = e.target.closest('button.srow');
+    if (row) openDetail(row.dataset.id);
+  });
+  $('back').addEventListener('click', () => closeCard(false));
+
   // Ends the pending change, if any, and shows the latest media the app sent.
   function settle() {
     clearTimeout(pendingTimer);
@@ -899,6 +1045,7 @@
   tauri.core.invoke('avatar').then(onAvatar, () => avatarFail('the avatar command failed'));
   tauri.core.invoke('mood').then((p) => { if (p && !moodEvent) { pose = p; showPose(); } });
   tauri.event.listen('sessions', (e) => { sessionsEvent = true; onSessions(e.payload); });
+  tauri.event.listen('records', () => refreshDetail());
   tauri.event.listen('media', (e) => { mediaEvent = true; onMedia(e.payload); });
   tauri.core.invoke('layout').then((l) => { if (l && !L) applyLayout(l); });
   tauri.core.invoke('media').then((m) => { if (m && !mediaEvent) onMedia(m); });

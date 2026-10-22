@@ -8,7 +8,7 @@
 //   drive front                     prints "<pid> <bundle id>" of the frontmost app
 //   drive watch                     prints "watching", then one "activated <pid> <bundle id>" line per app activation
 //   drive hover <pid> [open height] moves onto the app's pill and waits until its window is the open window, 452 wide
-//                                   and <open height> + 16 tall (default 254); prints "x0=<n>", the panel's left edge
+//                                   and <open height> + 16 tall (default 380, the detail height); prints "x0=<n>", the panel's left edge
 //                                   (the window's left edge + 16), once the panel has expanded
 //   drive bounds <pid>              prints "<x> <y> <w> <h>" of the app's panel window, exit 1 when it has none
 //   drive notch                     prints "<width> <height>" of the notch on the notched screen
@@ -126,7 +126,7 @@ case "screen":
 
 case "hover":
     let pid = pidArg()
-    let wantHeight = (a.count > 3 ? num(3) : 254) + 16
+    let wantHeight = (a.count > 3 ? num(3) : 380) + 16
     var seen: CGRect? = nil
     for _ in 0..<50 { if let r = panel(of: pid) { seen = r; break }; pump(0.1) }
     guard let collapsed = seen else { die(2, "no panel window found for pid \(pid)") }

@@ -941,7 +941,7 @@ fn source_and_avatar_serialize_as_the_avatar_command_reply() {
 // --- signals and finished ----------------------------------------------------------------------------------------
 
 fn row(label: &str, status: Status) -> Row {
-    Row { label: label.to_string(), status, detail: None }
+    Row { id: label.to_string(), label: label.to_string(), status, detail: None }
 }
 
 fn summary(rows: Vec<Row>, working: usize) -> Summary {
