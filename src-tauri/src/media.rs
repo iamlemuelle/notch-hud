@@ -1,6 +1,7 @@
 //! Now Playing: what the panel shows is playing. See CONTRACT.md section 7.
 
 use std::any::Any;
+use std::ffi::OsStr;
 use std::io::{BufRead, BufReader};
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
@@ -185,14 +186,26 @@ set t to current track
 return "spotify" & tab & s & tab & (name of t) & tab & (artist of t) & tab & (album of t) & tab & ((duration of t) as text) & tab & ((round ((player position) * 1000)) as text) & tab & (artwork url of t)
 end tell"#;
 
-/// `$NOTCH_MEDIA_ADAPTER` when set and non-empty, else `target/adapter` next to `target/<profile>/notch-hud`.
 pub fn adapter_dir() -> PathBuf {
-    match std::env::var_os("NOTCH_MEDIA_ADAPTER") {
-        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => std::env::current_exe()
-            .ok()
-            .and_then(|exe| Some(exe.parent()?.parent()?.join("adapter")))
-            .unwrap_or_else(|| PathBuf::from("adapter")),
+    let exe = std::env::current_exe().ok();
+    adapter_dir_for(std::env::var_os("NOTCH_MEDIA_ADAPTER").as_deref(), exe.as_deref())
+}
+
+/// `env` (`$NOTCH_MEDIA_ADAPTER`) when non-empty; else `Contents/Resources/adapter` for a binary in
+/// `Contents/MacOS/`; else `target/adapter` next to `target/<profile>/notch-hud`. By path shape only, so a bundle
+/// missing its adapter falls back to AppleScript instead of reaching for a dev build's.
+pub fn adapter_dir_for(env: Option<&OsStr>, exe: Option<&Path>) -> PathBuf {
+    if let Some(dir) = env.filter(|d| !d.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    let Some((bin, up)) = exe.and_then(Path::parent).and_then(|bin| Some((bin, bin.parent()?))) else {
+        return PathBuf::from("adapter");
+    };
+    let named = |p: &Path, name: &str| p.file_name() == Some(OsStr::new(name));
+    if named(bin, "MacOS") && named(up, "Contents") {
+        up.join("Resources").join("adapter")
+    } else {
+        up.join("adapter")
     }
 }
 

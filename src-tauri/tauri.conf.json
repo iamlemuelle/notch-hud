@@ -9,5 +9,13 @@
     "windows": [],
     "security": { "csp": null }
   },
-  "bundle": { "active": false }
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "icon": ["icons/icon.png"],
+    "macOS": {
+      "files": { "Resources/adapter": "target/adapter" },
+      "hardenedRuntime": false
+    }
+  }
 }
