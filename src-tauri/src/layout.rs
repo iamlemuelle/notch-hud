@@ -73,6 +73,49 @@ pub fn window_size(layout: &Layout, mode: WindowMode) -> Size {
     }
 }
 
+/// What the page last asked for with `surface`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Surface {
+    pub window: WindowMode,
+    pub hit: Shape,
+    /// The tallest open window returned since the mode became open.
+    open_floor: f64,
+}
+
+impl Surface {
+    pub const fn new() -> Surface {
+        Surface { window: WindowMode::Pill, hit: Shape::Pill, open_floor: 0.0 }
+    }
+
+    pub fn set(&mut self, window: WindowMode, hit: Shape) {
+        if window != self.window {
+            self.open_floor = 0.0;
+        }
+        self.window = window;
+        self.hit = hit;
+    }
+
+    /// While open, never shorter than before, so a row disappearing mid-spring never cuts the shape.
+    pub fn window_size(&mut self, layout: &Layout) -> Size {
+        let mut size = window_size(layout, self.window);
+        if self.window == WindowMode::Open {
+            self.open_floor = self.open_floor.max(size.height);
+            size.height = self.open_floor;
+        }
+        size
+    }
+}
+
+/// AppKit coordinates (y up): inside the rect of `size` centered on `center_x` with its top edge at `top`.
+pub fn hit_contains(size: Size, center_x: f64, top: f64, x: f64, y: f64) -> bool {
+    (x - center_x).abs() <= size.width / 2.0 && y <= top && y >= top - size.height
+}
+
+/// Entering needs the cursor to move, so a shape growing under a still cursor is not a hover; leaving does not.
+pub fn next_hover(was_in: bool, over: bool, moved: bool) -> bool {
+    over && (was_in || moved)
+}
+
 #[cfg(test)]
 #[path = "layout_tests.rs"]
 mod tests;

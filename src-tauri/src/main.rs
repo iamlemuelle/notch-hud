@@ -2,7 +2,7 @@ mod layout;
 mod media;
 mod session;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -16,7 +16,7 @@ use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
-use layout::{Layout, Shape, Size, WindowMode};
+use layout::{Layout, Shape, Size, Surface, WindowMode};
 use media::{Health, Media};
 use session::{prune, read_dir, sessions_dir, summarize, Summary};
 
@@ -61,22 +61,15 @@ impl Notch {
     }
 }
 
-/// What the page last asked for with `surface`. `open_height` is the tallest open window since the mode became open.
-struct Surface {
-    window: WindowMode,
-    hit: Shape,
-    open_height: f64,
-}
-
-/// Whether the cursor was last reported inside the hit rect.
-static INSIDE: AtomicBool = AtomicBool::new(false);
+/// Whether the cursor is in the hit rect (`next_hover`), and whether `hover` was last emitted true.
+static HOVER_IN: AtomicBool = AtomicBool::new(false);
+static EMITTED: AtomicBool = AtomicBool::new(false);
 /// Left button state at the previous hover poll, and whether a press that started inside a grown shape is held.
 static PREV_DOWN: AtomicBool = AtomicBool::new(false);
 static PRESS_LATCHED: AtomicBool = AtomicBool::new(false);
 static LATEST: Mutex<Option<Summary>> = Mutex::new(None);
 static MEDIA: Mutex<Option<Media>> = Mutex::new(None);
-static SURFACE: Mutex<Surface> =
-    Mutex::new(Surface { window: WindowMode::Pill, hit: Shape::Pill, open_height: 0.0 });
+static SURFACE: Mutex<Surface> = Mutex::new(Surface::new());
 /// The layout the page was last sent, refreshed on every placement.
 static LAYOUT: Mutex<Option<Layout>> = Mutex::new(None);
 
@@ -84,6 +77,8 @@ thread_local! {
     /// The visible window: a native non-activating panel that hosts the Tauri window's webview. Created once on
     /// the main thread at startup and kept for the app's lifetime; only the main thread can reach it.
     static PANEL: RefCell<Option<Retained<NSPanel>>> = const { RefCell::new(None) };
+    /// The cursor at the previous hover poll.
+    static LAST_CURSOR: Cell<Option<(f64, f64)>> = const { Cell::new(None) };
 }
 
 const PANEL_STYLE: NSWindowStyleMask =
@@ -159,11 +154,7 @@ fn place(app: &AppHandle) {
     let layout = notch.layout();
     let (mode, size) = {
         let mut s = SURFACE.lock().unwrap_or_else(|e| e.into_inner());
-        let mut size = layout::window_size(&layout, s.window);
-        if s.window == WindowMode::Open {
-            s.open_height = s.open_height.max(size.height);
-            size.height = s.open_height;
-        }
+        let size = s.window_size(&layout);
         (s.window, size)
     };
     let target = notch.rect(size);
@@ -201,23 +192,25 @@ fn track_hover(app: &AppHandle) {
     let Some(layout) = *LAYOUT.lock().unwrap_or_else(|e| e.into_inner()) else { return };
     let hit = SURFACE.lock().unwrap_or_else(|e| e.into_inner()).hit;
     // Every rect shares the window's horizontal center and top edge, so the hit rect follows from the frame.
-    let size = layout::shape_size(&layout, hit);
     let center = frame.origin.x + frame.size.width / 2.0;
     let top = frame.origin.y + frame.size.height;
     let p = NSEvent::mouseLocation();
-    let over = (p.x - center).abs() <= size.width / 2.0 && p.y <= top && p.y >= top - size.height;
-    // A press that starts inside a grown shape keeps hover on until release, so a seek drag that overshoots the
+    let over = layout::hit_contains(layout::shape_size(&layout, hit), center, top, p.x, p.y);
+    let moved = LAST_CURSOR.with(|c| c.replace(Some((p.x, p.y)))) != Some((p.x, p.y));
+    let hover_in = layout::next_hover(HOVER_IN.load(Ordering::Relaxed), over, moved);
+    HOVER_IN.store(hover_in, Ordering::Relaxed);
+    // A press that starts in a grown shape keeps hover on until release, so a seek drag that overshoots the
     // bar does not collapse the panel. A press that starts elsewhere is never latched.
     let down = NSEvent::pressedMouseButtons() & 1 != 0;
     let pressed = down && !PREV_DOWN.swap(down, Ordering::Relaxed);
     if !down {
         PREV_DOWN.store(false, Ordering::Relaxed);
         PRESS_LATCHED.store(false, Ordering::Relaxed);
-    } else if pressed && over && hit != Shape::Pill {
+    } else if pressed && hover_in && hit != Shape::Pill {
         PRESS_LATCHED.store(true, Ordering::Relaxed);
     }
-    let inside = over || PRESS_LATCHED.load(Ordering::Relaxed);
-    if inside != INSIDE.swap(inside, Ordering::Relaxed) {
+    let inside = hover_in || PRESS_LATCHED.load(Ordering::Relaxed);
+    if inside != EMITTED.swap(inside, Ordering::Relaxed) {
         if trace_on() {
             eprintln!("hover: {}", if inside { "in" } else { "out" });
         }
@@ -318,17 +311,17 @@ fn layout() -> Option<Layout> {
 }
 
 /// The page's window mode and hit shape (CONTRACT.md section 8). Serde rejects unknown values before this runs.
+/// Resolves once the panel has been placed, so the page can wait for a bigger window before animating into it.
 #[tauri::command]
-fn surface(app: AppHandle, window: WindowMode, hit: Shape) {
-    {
-        let mut s = SURFACE.lock().unwrap_or_else(|e| e.into_inner());
-        if s.window != window {
-            s.open_height = 0.0;
-        }
-        s.window = window;
-        s.hit = hit;
-    }
-    place_soon(&app);
+async fn surface(app: AppHandle, window: WindowMode, hit: Shape) {
+    SURFACE.lock().unwrap_or_else(|e| e.into_inner()).set(window, hit);
+    let (done, placed) = std::sync::mpsc::channel();
+    let target = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        place(&target);
+        let _ = done.send(());
+    });
+    let _ = tauri::async_runtime::spawn_blocking(move || placed.recv_timeout(Duration::from_secs(1))).await;
 }
 
 fn main() {
