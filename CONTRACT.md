@@ -269,9 +269,13 @@ pub fn detail(records: &[Record], id: &str, now: u64) -> Option<Detail>;
   shape of section 8's `Layout`.
 - Session detail (amendment, 2026-10-22): every sessions refresh also keeps the `records` it read and its `now`.
   Command `session_detail(id: String) -> Option<Detail>`: when `valid_id(&id)` is false it returns `None` and, when
-  `$NOTCH_TRACE` is set and non-empty, logs `page: detail rejected` to stderr. Otherwise it logs `page: detail <id>`
-  under `$NOTCH_TRACE` and returns `detail(&records, &id, now)` with the records and `now` of the last refresh (`None`
-  before the first), so the card agrees with the list it was opened from.
+  `$NOTCH_TRACE` is set and non-empty, logs `page: detail rejected` to stderr. Otherwise it returns
+  `detail(&records, &id, now)` with the records and `now` of the last refresh (`None` before the first), so the card
+  agrees with the list it was opened from, and logs `page: detail <id> found` (or `none` when it returns `None`) under
+  `$NOTCH_TRACE`.
+- The refresh stores its records and `now` before it emits anything. When the records differ from the last refresh's,
+  it emits `records` (no payload) after `sessions`: the card shows the newest event and the subagents, which can change
+  while the summary does not (a session that stays `Working` from one tool to the next).
 
 ## 4. UI (`dist/index.html`)
 
@@ -314,7 +318,7 @@ has no prompt box: its slot stays empty.
     | Name | Value |
     |---|---|
     | `Status` | an 8 pt dot as the list row's, then the status text above, without a tool (`needs permission`); amber for `needs_permission`, `needs_input`, `error` |
-    | `Folder` | `cwd`, with a leading `/Users/<name>` shown as `~` |
+    | `Folder` | `cwd`, with a leading `/Users/<name>` shown as `~` (not `/Users/Shared`) |
     | `Last event` | the event in words (below), then its age, muted tabular figures |
     | `Subagents` | `<agents> running`, or `None` when 0 |
 
@@ -326,8 +330,8 @@ has no prompt box: its slot stays empty.
   - Age from `event_ts` and the page's clock: `<s> s ago` under 60 s, `<m> min ago` under an hour, else `<h> h ago`
     (whole numbers, rounded down; a future `event_ts` is `0 s ago`). It is redrawn every second while the card is
     shown and the phase is `expanded`.
-- While the card is shown, every `sessions` event calls `session_detail` again with its id and redraws the card from
-  the reply. A null reply replaces the four rows with one muted 88 pt block reading `Session ended` (500 12 px); the
+- While the card is shown, every `sessions` and every `records` event calls `session_detail` again with its id and
+  redraws the card from the reply. A null reply replaces the four rows with one muted 88 pt block reading `Session ended` (500 12 px); the
   header keeps the back control and the last label. A later reply that is not null shows the rows again.
 - The back control shows the list. When the phase becomes `collapsed`, the list shows again, so the next expand
   starts on the list.

@@ -847,7 +847,7 @@
     const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
     return s < 60 ? s + ' s ago' : s < 3600 ? Math.floor(s / 60) + ' min ago' : Math.floor(s / 3600) + ' h ago';
   }
-  const homeTilde = (cwd) => cwd.replace(/^\/Users\/[^/]+(?=\/|$)/, '~');
+  const homeTilde = (cwd) => cwd.replace(/^\/Users\/(?!Shared(?:\/|$))[^/]+(?=\/|$)/, '~');
   function span(text, cls) {
     const el = document.createElement('span');
     if (cls) el.className = cls;
@@ -1036,6 +1036,7 @@
   tauri.core.invoke('avatar').then(onAvatar, () => avatarFail('the avatar command failed'));
   tauri.core.invoke('mood').then((p) => { if (p && !moodEvent) { pose = p; showPose(); } });
   tauri.event.listen('sessions', (e) => { sessionsEvent = true; onSessions(e.payload); });
+  tauri.event.listen('records', () => refreshDetail());
   tauri.event.listen('media', (e) => { mediaEvent = true; onMedia(e.payload); });
   tauri.core.invoke('layout').then((l) => { if (l && !L) applyLayout(l); });
   tauri.core.invoke('media').then((m) => { if (m && !mediaEvent) onMedia(m); });

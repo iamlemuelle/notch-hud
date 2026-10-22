@@ -362,6 +362,14 @@ fn refresh_sessions(app: &AppHandle, dir: &Path) -> Option<u64> {
     prune(dir, now);
     let records = read_dir(dir);
     let summary = summarize(&records, now);
+    let wake = next_wake(&records, now);
+    // Stored before any emit, so a page that asks for a detail on the event reads these records.
+    let records_changed = {
+        let mut last = RECORDS.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = last.0 != records;
+        *last = (records, now);
+        changed
+    };
     {
         let mut latest = LATEST.lock().unwrap_or_else(|e| e.into_inner());
         if latest.as_ref() != Some(&summary) {
@@ -374,9 +382,11 @@ fn refresh_sessions(app: &AppHandle, dir: &Path) -> Option<u64> {
             nudge_mood(finished);
         }
     }
+    // A detail card shows more than the summary (the newest event, subagents), so it also follows the records.
+    if records_changed {
+        let _ = app.emit("records", ());
+    }
     place_soon(app);
-    let wake = next_wake(&records, now);
-    *RECORDS.lock().unwrap_or_else(|e| e.into_inner()) = (records, now);
     wake
 }
 
@@ -448,11 +458,14 @@ fn session_detail(id: String) -> Option<Detail> {
         }
         return None;
     }
+    let detail = {
+        let records = RECORDS.lock().unwrap_or_else(|e| e.into_inner());
+        session::detail(&records.0, &id, records.1)
+    };
     if trace_on() {
-        eprintln!("page: detail {id}");
+        eprintln!("page: detail {id} {}", if detail.is_some() { "found" } else { "none" });
     }
-    let records = RECORDS.lock().unwrap_or_else(|e| e.into_inner());
-    session::detail(&records.0, &id, records.1)
+    detail
 }
 
 fn trace_on() -> bool {

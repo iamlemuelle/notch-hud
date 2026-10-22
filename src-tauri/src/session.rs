@@ -108,9 +108,8 @@ struct Session {
     status: Status,
     detail: Option<String>,
     ts: u64,
-    /// The newest record left in the group: its event, ts and tool.
+    /// The newest record left in the group (its `ts` is `ts`): its event and tool.
     event: String,
-    event_ts: u64,
     tool_name: Option<String>,
     agents: usize,
 }
@@ -168,7 +167,6 @@ fn collapse(group: &[(&Record, Status)], now: u64) -> Session {
         detail,
         ts,
         event: newest.event.clone(),
-        event_ts: newest.ts,
         tool_name: newest.tool_name.clone(),
         agents: group.iter().filter(|(r, _)| r.agent_id.is_some()).count(),
     }
@@ -256,7 +254,7 @@ pub fn detail(records: &[Record], id: &str, now: u64) -> Option<Detail> {
         cwd: s.cwd,
         status: s.status,
         event: s.event,
-        event_ts: s.event_ts,
+        event_ts: s.ts,
         tool_name: s.tool_name,
         agents: s.agents,
     })
