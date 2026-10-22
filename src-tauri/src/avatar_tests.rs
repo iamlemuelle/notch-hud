@@ -4,7 +4,6 @@ use crate::session::{Row, Status, Summary};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 // Every expected value below is written from CONTRACT.md section 10, not read from avatar.rs.
 
@@ -767,64 +766,96 @@ fn load_bytes_that_are_not_utf8_are_an_error_that_is_not_no_file() {
 }
 
 #[test]
-fn load_an_empty_file_and_a_directory_are_errors() {
+fn load_an_empty_file_is_an_error() {
     let d = tmp("odd");
     let p = d.join("empty.json");
     fs::write(&p, "").unwrap();
     assert!(load(&p).is_err());
     assert_ne!(load(&p), Err("no file".to_string()));
+    assert_ne!(load(&p), Err("not a file".to_string()));
+}
+
+#[test]
+fn load_a_directory_is_not_a_file() {
+    let d = tmp("dir");
     let sub = d.join("dir.json");
     fs::create_dir_all(&sub).unwrap();
-    assert!(load(&sub).is_err());
+    assert_eq!(load(&sub), Err("not a file".to_string()));
+    assert_eq!(load(&d), Err("not a file".to_string()));
+}
+
+#[test]
+fn load_a_fifo_is_not_a_file_and_returns_promptly() {
+    let d = tmp("fifo");
+    let p = d.join("pipe.json");
+    let made = std::process::Command::new("mkfifo").arg(&p).status().expect("mkfifo");
+    assert!(made.success());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let q = p.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(load(&q));
+    });
+    let got = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("load blocked on a FIFO");
+    assert_eq!(got, Err("not a file".to_string()));
+}
+
+#[test]
+fn load_follows_a_symlink_to_a_valid_file() {
+    let d = tmp("symlink");
+    let target = d.join("real.json");
+    fs::write(&target, text(&base())).unwrap();
+    let link = d.join("link.json");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    assert_eq!(load(&link), Ok(base()));
 }
 
 // --- avatar_path --------------------------------------------------------------------------------------------------
 
-static ENV: Mutex<()> = Mutex::new(());
-
-fn with_avatar_env<R>(value: Option<&str>, f: impl FnOnce() -> R) -> R {
-    let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
-    let saved = std::env::var_os("NOTCH_AVATAR");
-    match value {
-        Some(v) => std::env::set_var("NOTCH_AVATAR", v),
-        None => std::env::remove_var("NOTCH_AVATAR"),
-    }
-    let out = f();
-    match saved {
-        Some(v) => std::env::set_var("NOTCH_AVATAR", v),
-        None => std::env::remove_var("NOTCH_AVATAR"),
-    }
-    out
+fn os(s: &str) -> std::ffi::OsString {
+    std::ffi::OsString::from(s)
 }
 
 #[test]
-fn avatar_path_is_notch_avatar_when_set() {
-    let p = with_avatar_env(Some("/tmp/somewhere/mine.avatar.json"), avatar_path);
+fn avatar_path_from_is_notch_avatar_when_present() {
+    let p = avatar_path_from(Some(os("/tmp/somewhere/mine.avatar.json").as_os_str()), Some(os("/Users/someone").as_os_str()));
     assert_eq!(p, PathBuf::from("/tmp/somewhere/mine.avatar.json"));
 }
 
 #[test]
-fn avatar_path_ignores_an_empty_notch_avatar() {
-    let p = with_avatar_env(Some(""), avatar_path);
-    assert_ne!(p, PathBuf::from(""));
-    assert!(p.ends_with("Library/Application Support/notch-hud/avatar.json"), "got {p:?}");
+fn avatar_path_from_ignores_an_empty_notch_avatar() {
+    let p = avatar_path_from(Some(os("").as_os_str()), Some(os("/Users/someone").as_os_str()));
+    assert_eq!(p, PathBuf::from("/Users/someone/Library/Application Support/notch-hud/avatar.json"));
 }
 
 #[test]
-fn avatar_path_unset_is_under_home_application_support() {
-    // HOME is process wide and another test sets it for a moment, so retry until it did not change under the call.
-    for _ in 0..50 {
-        let (before, p, after) = with_avatar_env(None, || {
-            let before = std::env::var("HOME").unwrap();
-            let p = avatar_path();
-            (before, p, std::env::var("HOME").unwrap())
-        });
-        if before == after {
-            assert_eq!(p, PathBuf::from(format!("{before}/Library/Application Support/notch-hud/avatar.json")));
-            return;
-        }
-    }
-    panic!("HOME kept changing");
+fn avatar_path_from_an_absent_notch_avatar_is_under_home() {
+    let p = avatar_path_from(None, Some(os("/Users/someone").as_os_str()));
+    assert_eq!(p, PathBuf::from("/Users/someone/Library/Application Support/notch-hud/avatar.json"));
+}
+
+#[test]
+fn avatar_path_from_notch_avatar_wins_without_a_home() {
+    let p = avatar_path_from(Some(os("/tmp/mine.json").as_os_str()), None);
+    assert_eq!(p, PathBuf::from("/tmp/mine.json"));
+}
+
+#[test]
+fn avatar_path_from_does_not_panic_without_notch_avatar_or_home() {
+    let _ = avatar_path_from(None, None);
+    let _ = avatar_path_from(Some(os("").as_os_str()), None);
+}
+
+#[test]
+fn avatar_path_from_keeps_a_non_utf8_notch_avatar() {
+    use std::os::unix::ffi::OsStrExt;
+    let raw = std::ffi::OsStr::from_bytes(b"/tmp/caf\xe9.json");
+    assert_eq!(avatar_path_from(Some(raw), Some(os("/Users/someone").as_os_str())), PathBuf::from(raw));
+}
+
+#[test]
+fn avatar_path_reads_the_environment_without_panicking() {
+    // Smoke only: the environment is process wide and other tests change it, so nothing about its value is asserted.
+    let _ = avatar_path();
 }
 
 // --- DEFAULT and the pose table ----------------------------------------------------------------------------------
