@@ -734,3 +734,150 @@ fn supersede_is_per_session() {
     );
     assert_eq!((s.total, s.attention, s.working), (2, 1, 1));
 }
+
+// next_wake (CONTRACT.md section 2). TTL_SECS = 10800, QUIET_SECS = 600; every expectation is a literal sum.
+
+#[test]
+fn next_wake_none_without_records() {
+    assert_eq!(next_wake(&[], NOW), None);
+}
+
+#[test]
+fn next_wake_none_for_ignored_events_only() {
+    let recs = [rec("a", "/a", "SessionEnd", NOW - 10), rec("b", "/b", "SubagentStop", NOW - 20), rec("c", "/c", "Bogus", NOW)];
+    assert_eq!(next_wake(&recs, NOW), None);
+}
+
+#[test]
+fn next_wake_none_when_every_record_is_past_ttl() {
+    let recs = [rec("a", "/a", "Stop", NOW - 10801), rec("b", "/b", "PreToolUse", NOW - 20000)];
+    assert_eq!(next_wake(&recs, NOW), None);
+}
+
+#[test]
+fn next_wake_working_session_wakes_at_decay_before_ttl() {
+    assert_eq!(next_wake(&[rec("a", "/a", "PreToolUse", NOW - 100)], NOW), Some(NOW - 100 + 600 + 1));
+}
+
+#[test]
+fn next_wake_decayed_working_session_wakes_at_ttl_expiry() {
+    assert_eq!(next_wake(&[rec("a", "/a", "PreToolUse", NOW - 700)], NOW), Some(NOW - 700 + 10800 + 1));
+}
+
+#[test]
+fn next_wake_non_working_sessions_wake_at_ttl_expiry_only() {
+    let cases: [(Record, u64); 4] = [
+        (rec("a", "/a", "Stop", NOW - 100), NOW - 100 + 10800 + 1),
+        (rec("a", "/a", "SessionStart", NOW - 100), NOW - 100 + 10800 + 1),
+        (rec("a", "/a", "PermissionRequest", NOW - 100), NOW - 100 + 10800 + 1),
+        (rec("a", "/a", "StopFailure", NOW - 100), NOW - 100 + 10800 + 1),
+    ];
+    for (r, want) in cases {
+        let event = r.event.clone();
+        assert_eq!(next_wake(&[r], NOW), Some(want), "event {event}");
+    }
+    assert_eq!(next_wake(&[notif("elicitation_dialog")], NOW), Some(NOW + 10800 + 1));
+}
+
+#[test]
+fn next_wake_age_exactly_quiet_secs_is_not_yet_decayed() {
+    assert_eq!(next_wake(&[rec("a", "/a", "PreToolUse", NOW - 600)], NOW), Some(NOW + 1));
+}
+
+#[test]
+fn next_wake_age_exactly_ttl_secs_is_still_kept() {
+    assert_eq!(next_wake(&[rec("a", "/a", "Stop", NOW - 10800)], NOW), Some(NOW + 1));
+}
+
+#[test]
+fn next_wake_decay_uses_the_groups_largest_ts() {
+    // Working (priority) at NOW-500, a later Waiting record at NOW-20: the session ts is NOW-20.
+    let recs = [rec("s", "/a", "PreToolUse", NOW - 500), rec("s", "/a", "SessionStart", NOW - 20)];
+    assert_eq!(next_wake(&recs, NOW), Some(NOW - 20 + 600 + 1));
+}
+
+#[test]
+fn next_wake_superseded_agent_has_no_decay_but_still_counts_for_ttl() {
+    // The agent's Working record (age 550) is older than the main Stop and is dropped by superseding, so there is no
+    // decay candidate; step 1 still keeps it, so its TTL expiry is the earliest candidate.
+    let recs = [sub("s", "ag", "/a", "PreToolUse", NOW - 550), rec("s", "/a", "Stop", NOW - 10)];
+    assert_eq!(next_wake(&recs, NOW), Some(NOW - 550 + 10800 + 1));
+}
+
+#[test]
+fn next_wake_agent_newer_than_boundary_keeps_its_decay() {
+    let recs = [sub("s", "ag", "/a", "PreToolUse", NOW - 10), rec("s", "/a", "Stop", NOW - 550)];
+    assert_eq!(next_wake(&recs, NOW), Some(NOW - 10 + 600 + 1));
+}
+
+#[test]
+fn next_wake_takes_the_minimum_across_sessions() {
+    let recs = [
+        rec("a", "/a", "Stop", NOW - 100),
+        rec("b", "/b", "PreToolUse", NOW - 300),
+        rec("c", "/c", "Stop", NOW - 10000),
+    ];
+    assert_eq!(next_wake(&recs, NOW), Some(NOW - 300 + 600 + 1));
+    assert_eq!(next_wake(&recs[..1], NOW), Some(NOW - 100 + 10800 + 1));
+    assert_eq!(next_wake(&[recs[0].clone(), recs[2].clone()], NOW), Some(NOW - 10000 + 10800 + 1));
+}
+
+#[test]
+fn next_wake_future_ts_keeps_candidates_after_now() {
+    assert_eq!(next_wake(&[rec("a", "/a", "PreToolUse", NOW + 50)], NOW), Some(NOW + 50 + 600 + 1));
+    assert_eq!(next_wake(&[rec("a", "/a", "Stop", NOW + 50)], NOW), Some(NOW + 50 + 10800 + 1));
+}
+
+#[test]
+fn next_wake_is_always_after_now() {
+    let sets: Vec<Vec<Record>> = vec![
+        vec![rec("a", "/a", "PreToolUse", NOW)],
+        vec![rec("a", "/a", "PreToolUse", NOW - 600)],
+        vec![rec("a", "/a", "PreToolUse", NOW - 601)],
+        vec![rec("a", "/a", "Stop", NOW - 10800)],
+        vec![rec("a", "/a", "Stop", NOW + 1000)],
+        vec![rec("a", "/a", "Stop", NOW - 5), rec("b", "/b", "PreToolUse", NOW - 599)],
+        vec![sub("s", "ag", "/a", "PreToolUse", NOW - 550), rec("s", "/a", "Stop", NOW - 10)],
+    ];
+    for recs in &sets {
+        for now in [NOW - 3, NOW, NOW + 1, NOW + 599, NOW + 601, NOW + 5000] {
+            if let Some(w) = next_wake(recs, now) {
+                assert!(w > now, "wake {w} must be after now {now} for {recs:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn next_wake_summary_is_stable_until_the_wake_second() {
+    let sets: Vec<Vec<Record>> = vec![
+        vec![rec("a", "/a", "Stop", NOW - 100)],
+        vec![rec("a", "/a", "Stop", NOW - 10790), rec("b", "/b", "PreToolUse", NOW - 50)],
+        vec![sub("s", "ag", "/a", "PreToolUse", NOW - 550), rec("s", "/a", "Stop", NOW - 10)],
+        vec![rec("s", "/a", "PreToolUse", NOW - 500), rec("s", "/a", "SessionStart", NOW - 20)],
+    ];
+    for recs in &sets {
+        let wake = next_wake(recs, NOW).expect("a kept record gives a wake");
+        assert_eq!(summarize(recs, wake - 1), summarize(recs, NOW), "unchanged just before the wake for {recs:?}");
+    }
+}
+
+#[test]
+fn next_wake_decay_second_flips_working_to_waiting() {
+    let recs = [rec("a", "/a", "PreToolUse", NOW - 100)];
+    let wake = next_wake(&recs, NOW).unwrap();
+    assert_eq!(wake, NOW + 501);
+    let before = summarize(&recs, wake - 1);
+    let at = summarize(&recs, wake);
+    assert_eq!(before.rows[0].status, Status::Working);
+    assert_eq!(at.rows[0].status, Status::Waiting);
+    assert_ne!(before, at);
+}
+
+#[test]
+fn next_wake_ttl_second_drops_the_session() {
+    let recs = [rec("a", "/a", "Stop", NOW - 100)];
+    let wake = next_wake(&recs, NOW).unwrap();
+    assert_eq!(summarize(&recs, wake - 1).total, 1);
+    assert_eq!(summarize(&recs, wake).total, 0);
+}
