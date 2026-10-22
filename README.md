@@ -74,14 +74,21 @@ cd src-tauri && cargo test && cd ..   # status rules: grouping, priority, decay,
 ./tests/hook_test.sh                  # the hook against real payloads in a temp directory
 ./tests/install_test.sh               # the installer against temp copies of settings.json
 ./tests/login_test.sh                 # the login item scripts against a fake launchctl
+./tests/page_test.sh                  # the panel page in headless Chromium: motion timings, art move, banners, window calls
 ./tests/media_test.sh                 # Now Playing end to end: a fixture player through the real adapter, then the fallback
 ./tests/controls_test.sh              # real clicks on the controls drive the fixture player; the front app must not change
+./tests/motion_test.sh                # the window grows on hover and for banners, and shrinks back to the pill
 ./check.sh                            # end to end on the real screen, needs Screen Recording permission
 ```
 
-CI (`.github/workflows/ci.yml`) runs the first four on macOS 15 for every pull request and every push to `main`.
-`media_test.sh`, `controls_test.sh` and `check.sh` run only locally, because all three launch the app, which exits
-without a notched display. `check.sh` also needs Screen Recording permission.
+CI (`.github/workflows/ci.yml`) runs the first five on macOS 15 for every pull request and every push to `main`.
+`page_test.sh` needs `playwright-core` and its headless Chromium shell; locally it uses the npx cache, or the paths in
+`PLAYWRIGHT_CORE` and `CHROMIUM`, and exits 2 (skipped) without them. `media_test.sh`, `controls_test.sh`,
+`motion_test.sh` and `check.sh` run only locally, because they launch the app, which exits without a notched display.
+`check.sh` also needs Screen Recording permission.
+
+`motion_test.sh` moves the real cursor (no clicks) onto the pill and away, and restores it at the end, so leave the
+mouse alone for the ~30 s it runs.
 
 `controls_test.sh` posts mouse events, so the terminal running it needs Accessibility, and you must leave the mouse
 alone for the ~20 s it runs: real input moves the pointer out from under it. It exits 2 (skipped) when it can't post
