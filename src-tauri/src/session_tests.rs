@@ -852,7 +852,7 @@ fn next_wake_is_always_after_now() {
 fn next_wake_summary_is_stable_until_the_wake_second() {
     let sets: Vec<Vec<Record>> = vec![
         vec![rec("a", "/a", "Stop", NOW - 100)],
-        vec![rec("a", "/a", "Stop", NOW - 10800), rec("b", "/b", "PreToolUse", NOW - 50)],
+        vec![rec("a", "/a", "Stop", NOW - 10790), rec("b", "/b", "PreToolUse", NOW - 50)],
         vec![sub("s", "ag", "/a", "PreToolUse", NOW - 550), rec("s", "/a", "Stop", NOW - 10)],
         vec![rec("s", "/a", "PreToolUse", NOW - 500), rec("s", "/a", "SessionStart", NOW - 20)],
     ];
