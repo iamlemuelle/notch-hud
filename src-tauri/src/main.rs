@@ -1,3 +1,4 @@
+mod hover;
 mod layout;
 mod media;
 mod session;
