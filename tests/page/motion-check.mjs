@@ -32,17 +32,17 @@ try {
 setTimeout(() => { console.log('FAIL watchdog: the run took longer than 240 s'); process.exit(1); }, 240000).unref();
 
 // ---------------------------------------------------------------------------------------------------------------
-// Contract numbers (section 8). A 185 x 32 notch, a 982 pt screen, one row, a track showing (media extra 146).
+// Contract numbers (section 8). A 185 x 32 notch, a 982 pt screen, one row; the open height is 196 + 18 + 4 + 22 * shown_rows + 14 = 254.
 const LAYOUT = {
   stage: { width: 452, height: 982 },
   pill: { width: 305, height: 32 },
   peek: { width: 309, height: 36 },
   banner: { width: 380, height: 78 },
-  open: { width: 420, height: 226 },
+  open: { width: 420, height: 254 },
   ear: 60,
 };
-const WINDOW = { pill: { w: 305, h: 32 }, banner: { w: 412, h: 94 }, open: { w: 452, h: 242 } };
-const SHAPE = { pill: [305, 32, 14], peek: [309, 36, 14], banner: [380, 78, 20], open: [420, 226, 22] };
+const WINDOW = { pill: { w: 305, h: 32 }, banner: { w: 412, h: 94 }, open: { w: 452, h: 270 } };
+const SHAPE = { pill: [305, 32, 14], peek: [309, 36, 14], banner: [380, 78, 20], open: [420, 254, 22] };
 const STAGE = { w: 452, h: 982 };
 const EASE_PEEK = 'cubic-bezier(0.2,0,0,1)';
 const EASE_CLOSE = 'cubic-bezier(0.4,0,1,1)';
@@ -192,7 +192,7 @@ function installBridge({ layout, windows, holdLayout, initial }) {
   };
 }
 
-const ELEMENTS = ['#stage', '#panel', '#earL', '#warn', '#earBars', '#earPause', '#art', '#content', '#banner', '#bTitle', '#bSub', '#bIcon', '#bannerBars'];
+const ELEMENTS = ['#stage', '#panel', '#lear', '#earBars', '#earPause', '#art', '#content', '#banner', '#bTitle', '#bSub', '#bIcon', '#bannerBars'];
 
 async function openPage(opts = {}) {
   const page = await browser.newPage({ viewport: { width: WINDOW.pill.w, height: WINDOW.pill.h } });
@@ -223,7 +223,7 @@ const media = (t) => ({ via: 'adapter', health: 'ok', track: t });
 const row = (label, status, detail = null) => ({ label, status, detail });
 const summary = (rows) => ({
   rows, total: rows.length,
-  attention: rows.filter((r) => r.status === 'needs_permission' || r.status === 'needs_input').length,
+  attention: rows.filter((r) => r.status === 'needs_permission' || r.status === 'needs_input' || r.status === 'error').length,
   working: rows.filter((r) => r.status === 'working').length,
 });
 
@@ -307,8 +307,9 @@ async function scenarioHover() {
   await fire(page, 'media', media(track(sq)));
   await sleep(700);
   const rest = await snap(page);
-  check('H0 collapsed at rest: phase, stage, clip, ear art, ears at 0.82, window pill', rest.phase === 'collapsed' && stageStays(rest) && rest.vw === 305 && rest.vh === 32 && boxIs(rest.el['#panel'], 0, 0, STAGE.w, STAGE.h) && !clipIs(rest.el['#panel'] && rest.el['#panel'].clip, 'pill') && near(rest.el['#earL'] && rest.el['#earL'].opacity, 0.82, 0.01) && near(rest.el['#warn'] && rest.el['#warn'].opacity, 0.82, 0.01),
-    J({ phase: rest.phase, vw: rest.vw, vh: rest.vh, stage: rest.stage, panel: explain(rest.el['#panel']), clip: rest.el['#panel'] && clipIs(rest.el['#panel'].clip, 'pill'), earL: explain(rest.el['#earL']), warn: explain(rest.el['#warn']) }));
+  check('H0 collapsed at rest: phase, stage, clip, ear art, ears at 0.82, window pill', rest.phase === 'collapsed' && stageStays(rest) && rest.vw === 305 && rest.vh === 32 && boxIs(rest.el['#panel'], 0, 0, STAGE.w, STAGE.h) && !clipIs(rest.el['#panel'] && rest.el['#panel'].clip, 'pill') && near(rest.el['#lear'] && rest.el['#lear'].opacity, 0.82, 0.01),
+    J({ phase: rest.phase, vw: rest.vw, vh: rest.vh, stage: rest.stage, panel: explain(rest.el['#panel']), clip: rest.el['#panel'] && clipIs(rest.el['#panel'].clip, 'pill'), lear: explain(rest.el['#lear']) }));
+  check('H0c the left ear #lear is at stage x 87.5 (pillL + 14), as tall as the pill, and there is no #warn', !!rest.el['#lear'] && near(rest.el['#lear'].x, 87.5, 1) && near(rest.el['#lear'].y, 0, 1) && near(rest.el['#lear'].h, 32, 1) && (await page.evaluate(() => !document.querySelector('#warn, #earL'))), explain(rest.el['#lear']));
   check('H0a collapsed #art is a square 18x18 at stage (326.5, 7)', boxIs(rest.el['#art'], 326.5, 7, 18, 18), explain(rest.el['#art']));
   check('H0b nothing but the resting pill is sent to surface before any hover', (await rec(page)).surfaces.every((s) => !notPill(s)), J((await rec(page)).surfaces));
   await collectProps(page);
@@ -345,10 +346,10 @@ async function scenarioHover() {
     J({ cOp, cTf }));
   const aTf = trans(rb, '#art', 'transform', t0 + 150, t0 + 300)[0];
   check('H10 #art transform: 366 ms, the same linear() spring', !!aTf && !isSpring(aTf), J({ spring: aTf && isSpring(aTf), aTf }));
-  check('H11 window grows: the viewport is the open window 452x242', open.vw === 452 && open.vh === 242, J({ vw: open.vw, vh: open.vh }));
-  check('H12 expanded geometry: stage keeps its place, clip is the open shape, ears at 1', open.phase === 'expanded' && stageStays(open) && !clipIs(open.el['#panel'] && open.el['#panel'].clip, 'open') && near(open.el['#earL'] && open.el['#earL'].opacity, 1, 0.01) && near(open.el['#warn'] && open.el['#warn'].opacity, 1, 0.01),
-    J({ phase: open.phase, stage: open.stage, vw: open.vw, clip: open.el['#panel'] && clipIs(open.el['#panel'].clip, 'open'), earL: explain(open.el['#earL']) }));
-  check('H13 expanded #art is a square 64x64 at stage (34, 44)', boxIs(open.el['#art'], 34, 44, 64, 64), explain(open.el['#art']));
+  check('H11 window grows: the viewport is the open window 452x270', open.vw === 452 && open.vh === 270, J({ vw: open.vw, vh: open.vh }));
+  check('H12 expanded geometry: stage keeps its place, clip is the open shape, ears at 1', open.phase === 'expanded' && stageStays(open) && !clipIs(open.el['#panel'] && open.el['#panel'].clip, 'open') && near(open.el['#lear'] && open.el['#lear'].opacity, 1, 0.01),
+    J({ phase: open.phase, stage: open.stage, vw: open.vw, clip: open.el['#panel'] && clipIs(open.el['#panel'].clip, 'open'), lear: explain(open.el['#lear']) }));
+  check('H13 expanded #art is a square 64x64 at stage (32, 44)', boxIs(open.el['#art'], 32, 44, 64, 64), explain(open.el['#art']));
   check('H14 expanded: #content shown, ear art gone from the ear', visible(open.el['#content']) && near(open.el['#content'].opacity, 1, 0.01), explain(open.el['#content']));
   await collectProps(page);
 
@@ -373,8 +374,8 @@ async function scenarioHover() {
   check('H21 surface {window: "pill", hit: "pill"} only after the clip transition ended', pillCalls.length >= 1 && surfaceIs(pillCalls[0], 'pill', 'pill') && endOfClip != null && pillCalls[0].t >= endOfClip - 2 && pillCalls[0].t <= endOfClip + 80,
     J({ pillCalls: pillCalls.map((s) => [s.args, Math.round(s.t - t1)]), clipEnd: endOfClip && Math.round(endOfClip - t1), clipCancel: closeClip && closeClip.cancel }));
   const after = await snap(page);
-  check('H22 back to the pill window 305x32, stage in place, clip is the pill, ears dimmed', after.vw === 305 && after.vh === 32 && after.phase === 'collapsed' && stageStays(after) && !clipIs(after.el['#panel'] && after.el['#panel'].clip, 'pill') && near(after.el['#earL'] && after.el['#earL'].opacity, 0.82, 0.01),
-    J({ vw: after.vw, vh: after.vh, phase: after.phase, clip: after.el['#panel'] && clipIs(after.el['#panel'].clip, 'pill'), earL: explain(after.el['#earL']) }));
+  check('H22 back to the pill window 305x32, stage in place, clip is the pill, ears dimmed', after.vw === 305 && after.vh === 32 && after.phase === 'collapsed' && stageStays(after) && !clipIs(after.el['#panel'] && after.el['#panel'].clip, 'pill') && near(after.el['#lear'] && after.el['#lear'].opacity, 0.82, 0.01),
+    J({ vw: after.vw, vh: after.vh, phase: after.phase, clip: after.el['#panel'] && clipIs(after.el['#panel'].clip, 'pill'), lear: explain(after.el['#lear']) }));
   check('H23 collapsed again: #art is back in the ear at (326.5, 7) 18x18', boxIs(after.el['#art'], 326.5, 7, 18, 18), explain(after.el['#art']));
 
   // D: hover in again during collapsing cancels the shrink.
@@ -391,7 +392,7 @@ async function scenarioHover() {
   const peek2 = phaseAt(rd, 'peek', u2, u2 + 200);
   const exp2 = phaseAt(rd, 'expanded', u2, u2 + 500);
   check('H24 hover in during collapsing: intent, then peek at 80 ms, then expanded at 200 ms', !!colAgain && !!intent2 && !!peek2 && !!exp2 && near(peek2.t - u2, 80, 40) && near(exp2.t - u2, 200, 40), J({ colAgain: !!colAgain, phases: rd.phases.filter((p) => p.t >= u1).map((p) => [p.phase, Math.round(p.t - u2)]) }));
-  check('H25 hover in during collapsing: no pill window is sent, the window stays open', surfaceCalls(rd, u1).every((s) => !(s.args && s.args.window === 'pill')) && endState.vw === 452 && endState.vh === 242 && !rd.resizes.some((x) => x.t > u1 && x.w === 305), J({ surfaces: surfaceCalls(rd, u1), vw: endState.vw, vh: endState.vh }));
+  check('H25 hover in during collapsing: no pill window is sent, the window stays open', surfaceCalls(rd, u1).every((s) => !(s.args && s.args.window === 'pill')) && endState.vw === 452 && endState.vh === 270 && !rd.resizes.some((x) => x.t > u1 && x.w === 305), J({ surfaces: surfaceCalls(rd, u1), vw: endState.vw, vh: endState.vh }));
   check('H26 hover in during collapsing: expanded again, clip is the open shape', endState.phase === 'expanded' && !clipIs(endState.el['#panel'] && endState.el['#panel'].clip, 'open'), J({ phase: endState.phase }));
   await fire(page, 'hover', false);
   await sleep(300);
@@ -452,7 +453,7 @@ async function scenarioSongBanner() {
   check('B13 hover in during a banner: expanded after about 80 ms', !!expanded && near(expanded.t - tH, 80, 40) && !!phaseAt(rh, 'banner', tC, tH), J(rh.phases.filter((p) => p.t >= tC).map((p) => [p.phase, Math.round(p.t - tH)])));
   const openCall = surfaceCalls(rh, tH).find((x) => surfaceIs(x, 'open', 'open'));
   const hs = await snap(page);
-  check('B14 hover in during a banner: surface open/open, window 452x242, clip is the open shape', !!openCall && hs.vw === 452 && hs.vh === 242 && !clipIs(hs.el['#panel'] && hs.el['#panel'].clip, 'open'), J({ openCall, vw: hs.vw, vh: hs.vh }));
+  check('B14 hover in during a banner: surface open/open, window 452x270, clip is the open shape', !!openCall && hs.vw === 452 && hs.vh === 270 && !clipIs(hs.el['#panel'] && hs.el['#panel'].clip, 'open'), J({ openCall, vw: hs.vw, vh: hs.vh }));
   const bOut = trans(rh, '#banner', 'opacity', tH).find((x) => x.timing && x.timing.duration === 80);
   check('B15 the banner layer fades out in 80 ms when expanding from a banner', !!bOut && Number(bOut.to) === 0, J(trans(rh, '#banner', 'opacity', tH)));
 
@@ -493,7 +494,7 @@ async function scenarioWideBanner() {
   await fire(page, 'hover', true);
   await sleep(950);
   const o = await snap(page);
-  check('W5 expanded wide #art is 112x63 at stage (34, 44)', boxIs(o.el['#art'], 34, 44, 112, 63), explain(o.el['#art']));
+  check('W5 expanded wide #art is 112x63 at stage (32, 44)', boxIs(o.el['#art'], 32, 44, 112, 63), explain(o.el['#art']));
   await fire(page, 'hover', false);
   await sleep(300);
   await page.close();
@@ -565,11 +566,11 @@ async function scenarioEar() {
   await fire(page, 'media', media(track(sq, { playing: false })));
   await sleep(600);
   const pa = await snap(page);
-  check('E2 paused: ear art at opacity 0.6, pause glyph shown at x 354, bars hidden', near(pa.el['#art'] && pa.el['#art'].opacity, 0.6, 0.01) && visible(pa.el['#earPause']) && near(pa.el['#earPause'].x, 354, 1.5) && hidden(pa.el['#earBars']) && pa.phase === 'collapsed', J({ phase: pa.phase, art: explain(pa.el['#art']), pause: explain(pa.el['#earPause']), bars: explain(pa.el['#earBars']) }));
+  check('E2 paused: ear art at opacity 0.6, pause glyph shown at x 353.5, bars hidden', near(pa.el['#art'] && pa.el['#art'].opacity, 0.6, 0.01) && visible(pa.el['#earPause']) && near(pa.el['#earPause'].x, 353.5, 1.5) && hidden(pa.el['#earBars']) && pa.phase === 'collapsed', J({ phase: pa.phase, art: explain(pa.el['#art']), pause: explain(pa.el['#earPause']), bars: explain(pa.el['#earBars']) }));
   await fire(page, 'media', media(track(wide, { playing: false })));
   await sleep(700);
   const wp = await snap(page);
-  check('E3 wide art, paused: 26x15 at (324.5, 8.5), pause glyph at x 358', boxIs(wp.el['#art'], 324.5, 8.5, 26, 15, 0.9) && near(wp.el['#earPause'] && wp.el['#earPause'].x, 358, 1.5), J({ art: explain(wp.el['#art']), pause: explain(wp.el['#earPause']) }));
+  check('E3 wide art, paused: 26x15 at (324.5, 8.5), pause glyph at x 357.5', boxIs(wp.el['#art'], 324.5, 8.5, 26, 15, 0.9) && near(wp.el['#earPause'] && wp.el['#earPause'].x, 357.5, 1.5), J({ art: explain(wp.el['#art']), pause: explain(wp.el['#earPause']) }));
   await fire(page, 'media', media(track(wide, { playing: true })));
   await sleep(600);
   const wl = await snap(page);
@@ -578,22 +579,41 @@ async function scenarioEar() {
   check('E5 media updates of the same track show no banner', !r.phases.some((p) => p.phase === 'banner'), J(r.phases));
   await page.close();
 
+  // No track: the ear art is hidden collapsed; expanded, the card keeps its place with the placeholder at opacity 1.
+  const p0 = await openPage({ tag: 'no-track' });
+  await fire(p0, 'sessions', summary([row('paxiv', 'working')]));
+  await fire(p0, 'media', { via: 'adapter', health: 'ok', track: null });
+  await sleep(600);
+  const nt = await snap(p0);
+  check('E6 no track, collapsed: #art, bars and pause glyph are hidden', hidden(nt.el['#art']) && hidden(nt.el['#earBars']) && hidden(nt.el['#earPause']), J({ art: explain(nt.el['#art']), bars: explain(nt.el['#earBars']), pause: explain(nt.el['#earPause']) }));
+  await fire(p0, 'hover', true);
+  await sleep(900);
+  const nx = await snap(p0);
+  check('E7 no track, expanded: #art is the placeholder, 64x64 at stage (32, 44), opacity 1', boxIs(nx.el['#art'], 32, 44, 64, 64) && near(nx.el['#art'].opacity, 1, 0.01) && nx.phase === 'expanded', explain(nx.el['#art']));
+  await fire(p0, 'hover', false);
+  await sleep(1100);
+  await p0.close();
+
   const p2 = await openPage({ tag: 'attention' });
   const sq2 = await art(p2, 'square');
   await fire(p2, 'sessions', summary([row('paxiv', 'needs_input'), row('rails', 'needs_permission', 'Bash')]));
   await fire(p2, 'media', media(track(sq2)));
   await sleep(800);
   const at = await snap(p2);
-  check('A1 attention > 0: #warn reads "⚠ 2", ear art and glyphs hidden', visible(at.el['#warn']) && at.el['#warn'].text === '⚠ 2' && hidden(at.el['#art']) && hidden(at.el['#earBars']) && hidden(at.el['#earPause']), J({ warn: explain(at.el['#warn']), text: at.el['#warn'] && at.el['#warn'].text, art: explain(at.el['#art']), bars: explain(at.el['#earBars']), pause: explain(at.el['#earPause']) }));
-  check('A2 collapsed: #earL and #warn at opacity 0.82', near(at.el['#earL'] && at.el['#earL'].opacity, 0.82, 0.01) && near(at.el['#warn'] && at.el['#warn'].opacity, 0.82, 0.01), J({ earL: explain(at.el['#earL']), warn: explain(at.el['#warn']) }));
+  check('A1 attention > 0: no #warn, and the ear art, equalizer bars and the dot are all still shown (no "⚠ N")', (await p2.evaluate(() => !document.querySelector('#warn'))) && visible(at.el['#art']) && near(at.el['#art'].opacity, 1, 0.01) && boxIs(at.el['#art'], 326.5, 7, 18, 18) && visible(at.el['#earBars']) && hidden(at.el['#earPause']) && !/⚠/.test(at.el['#lear'] ? at.el['#lear'].text : '') , J({ art: explain(at.el['#art']), bars: explain(at.el['#earBars']), pause: explain(at.el['#earPause']), lear: at.el['#lear'] && at.el['#lear'].text }));
+  check('A2 attention > 0: the left ear reads the total (2) with an amber dot, at opacity 0.82 collapsed', !!at.el['#lear'] && at.el['#lear'].text === '2' && near(at.el['#lear'].opacity, 0.82, 0.01) && (await p2.evaluate(() => getComputedStyle(document.querySelector('#dot')).backgroundColor)) === AMBER, J({ lear: explain(at.el['#lear']), text: at.el['#lear'] && at.el['#lear'].text }));
   await fire(p2, 'hover', true);
   await sleep(900);
   const ex = await snap(p2);
-  check('A3 expanded: #earL and #warn at opacity 1', near(ex.el['#earL'] && ex.el['#earL'].opacity, 1, 0.01) && near(ex.el['#warn'] && ex.el['#warn'].opacity, 1, 0.01), J({ earL: explain(ex.el['#earL']), warn: explain(ex.el['#warn']) }));
+  check('A3 expanded: #lear at opacity 1', near(ex.el['#lear'] && ex.el['#lear'].opacity, 1, 0.01), J({ lear: explain(ex.el['#lear']) }));
   await fire(p2, 'hover', false);
   await sleep(1100);
   const bk = await snap(p2);
-  check('A4 collapsed again: ears back at 0.82, ear art still hidden by attention', near(bk.el['#earL'] && bk.el['#earL'].opacity, 0.82, 0.01) && near(bk.el['#warn'] && bk.el['#warn'].opacity, 0.82, 0.01) && hidden(bk.el['#art']), J({ earL: explain(bk.el['#earL']), art: explain(bk.el['#art']) }));
+  check('A4 collapsed again: #lear back at 0.82, the ear art back in the ear and shown', near(bk.el['#lear'] && bk.el['#lear'].opacity, 0.82, 0.01) && visible(bk.el['#art']) && boxIs(bk.el['#art'], 326.5, 7, 18, 18), J({ lear: explain(bk.el['#lear']), art: explain(bk.el['#art']) }));
+  // An error row counts as attention: the dot is amber.
+  await fire(p2, 'sessions', summary([row('paxiv', 'error')]));
+  await sleep(300);
+  check('A5 an error row makes the left-ear dot amber (error counts as attention)', (await p2.evaluate(() => getComputedStyle(document.querySelector('#dot')).backgroundColor)) === AMBER, 'dot is not amber');
   await p2.close();
 }
 
@@ -606,14 +626,14 @@ async function scenarioRelayout() {
   await sleep(500);
   await fire(page, 'hover', true);
   await sleep(900);
-  const taller = { ...LAYOUT, open: { width: 420, height: 248 } };
-  const t = await page.evaluate(([l]) => { window.__setWindow(452, 264); return window.__fire('layout', l); }, [taller]);
+  const taller = { ...LAYOUT, open: { width: 420, height: 276 } };
+  const t = await page.evaluate(([l]) => { window.__setWindow(452, 292); return window.__fire('layout', l); }, [taller]);
   await sleep(900);
   const r = await rec(page);
   const s = await snap(page);
   const clip = trans(r, '#panel', 'clip-path', t)[0];
   const c = parseClip(s.el['#panel'] && s.el['#panel'].clip);
-  check('N1 layout change while expanded: the clip springs to the new open height', !!clip && !isSpring(clip) && !!c && near(c.w, 420, 0.6) && near(c.h, 248, 0.6) && s.phase === 'expanded', J({ spring: clip && isSpring(clip), clip: s.el['#panel'] && s.el['#panel'].clip, phase: s.phase }));
+  check('N1 layout change while expanded: the clip springs to the new open height', !!clip && !isSpring(clip) && !!c && near(c.w, 420, 0.6) && near(c.h, 276, 0.6) && s.phase === 'expanded', J({ spring: clip && isSpring(clip), clip: s.el['#panel'] && s.el['#panel'].clip, phase: s.phase }));
   await fire(page, 'hover', false);
   await sleep(300);
   await page.close();
@@ -664,7 +684,7 @@ async function scenarioGrowWait() {
   const clip = clipFrom(r, t0);
   check('G1 peek: no clip-path transition starts before the open/peek surface call resolved, and one starts within ~2 frames after',
     !!call && call.resolved != null && !!clip && clip.run >= call.resolved && clip.run - call.resolved <= 50, J({ resolved: call && gap(call.resolved, t0), clipRun: clip && gap(clip.run, t0) }));
-  check('G2 peek: the viewport is already the grown size 452x242 when the clip starts', !!clip && clip.vw === 452 && clip.vh === 242 && !clipIs(clip.to, 'peek'), J({ vw: clip && clip.vw, vh: clip && clip.vh, to: clip && clip.to }));
+  check('G2 peek: the viewport is already the grown size 452x270 when the clip starts', !!clip && clip.vw === 452 && clip.vh === 270 && !clipIs(clip.to, 'peek'), J({ vw: clip && clip.vw, vh: clip && clip.vh, to: clip && clip.to }));
   const exp = phaseAt(r, 'expanded', t0, t0 + 900);
   check('G3 peek: the page still expands (hover held) and the window ends open', !!exp && (await snap(page, [])).vw === 452, J({ exp: exp && gap(exp.t, t0) }));
   await fire(page, 'hover', false);

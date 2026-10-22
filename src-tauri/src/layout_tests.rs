@@ -7,20 +7,20 @@ fn size(width: f64, height: f64) -> Size {
 }
 
 /// The notch used throughout: 185 x 32 on a 982 pt tall screen.
-fn sample(rows: usize, media_extra: f64) -> Layout {
-    layout(185.0, 32.0, 982.0, rows, media_extra)
+fn sample(rows: usize, total: usize) -> Layout {
+    layout(185.0, 32.0, 982.0, rows, total)
 }
 
 #[test]
-fn layout_with_a_track_and_one_row() {
+fn layout_with_one_row() {
     assert_eq!(
-        sample(1, 146.0),
+        sample(1, 1),
         Layout {
             stage: size(452.0, 982.0),
             pill: size(305.0, 32.0),
             peek: size(309.0, 36.0),
             banner: size(380.0, 78.0),
-            open: size(420.0, 226.0),
+            open: size(420.0, 254.0),
             ear: 60.0,
         }
     );
@@ -28,35 +28,34 @@ fn layout_with_a_track_and_one_row() {
 
 #[test]
 fn zero_rows_count_as_one() {
-    assert_eq!(sample(0, 146.0), sample(1, 146.0));
-    assert_eq!(sample(0, 146.0).open, size(420.0, 226.0));
-    assert_eq!(sample(0, 0.0).open, size(420.0, 80.0));
+    assert_eq!(sample(0, 0), sample(1, 1));
+    assert_eq!(sample(0, 0).open, size(420.0, 254.0));
 }
 
 #[test]
-fn open_height_follows_rows_and_media_extra() {
-    assert_eq!(sample(1, 22.0).open, size(420.0, 102.0));
-    assert_eq!(sample(1, 0.0).open, size(420.0, 80.0));
-    assert_eq!(sample(3, 0.0).open, size(420.0, 124.0));
-    assert_eq!(sample(3, 146.0).open, size(420.0, 270.0));
-    assert_eq!(sample(10, 146.0).open, size(420.0, 424.0));
+fn open_height_follows_rows_and_total() {
+    assert_eq!(sample(1, 1).open, size(420.0, 254.0));
+    assert_eq!(sample(3, 3).open, size(420.0, 298.0));
+    assert_eq!(sample(4, 4).open, size(420.0, 320.0));
+    assert_eq!(sample(4, 5).open, size(420.0, 342.0));
+    assert_eq!(sample(4, 50).open, size(420.0, 342.0));
 }
 
 #[test]
-fn only_open_depends_on_rows_and_media_extra() {
-    let a = sample(1, 146.0);
-    let b = sample(7, 22.0);
+fn only_open_depends_on_rows_and_total() {
+    let a = sample(1, 1);
+    let b = sample(4, 9);
     assert_eq!((a.stage, a.pill, a.peek, a.banner, a.ear), (b.stage, b.pill, b.peek, b.banner, b.ear));
 }
 
 #[test]
 fn pill_and_banner_follow_the_notch_and_stage_follows_the_screen() {
-    let l = layout(200.0, 38.0, 1117.0, 1, 146.0);
+    let l = layout(200.0, 38.0, 1117.0, 1, 1);
     assert_eq!(l.pill, size(320.0, 38.0));
     assert_eq!(l.peek, size(324.0, 42.0));
     assert_eq!(l.banner, size(380.0, 84.0));
     assert_eq!(l.stage, size(452.0, 1117.0));
-    assert_eq!(l.open, size(420.0, 226.0));
+    assert_eq!(l.open, size(420.0, 254.0));
     assert_eq!(l.ear, 60.0);
 }
 
@@ -70,34 +69,34 @@ fn constants() {
 
 #[test]
 fn shape_size_returns_the_matching_field() {
-    let l = sample(1, 146.0);
+    let l = sample(1, 1);
     assert_eq!(shape_size(&l, Shape::Pill), size(305.0, 32.0));
     assert_eq!(shape_size(&l, Shape::Peek), size(309.0, 36.0));
     assert_eq!(shape_size(&l, Shape::Banner), size(380.0, 78.0));
-    assert_eq!(shape_size(&l, Shape::Open), size(420.0, 226.0));
+    assert_eq!(shape_size(&l, Shape::Open), size(420.0, 254.0));
 }
 
 #[test]
 fn window_size_per_mode() {
-    let l = sample(1, 146.0);
+    let l = sample(1, 1);
     assert_eq!(window_size(&l, WindowMode::Pill), size(305.0, 32.0));
     assert_eq!(window_size(&l, WindowMode::Banner), size(412.0, 94.0));
-    assert_eq!(window_size(&l, WindowMode::Open), size(452.0, 242.0));
+    assert_eq!(window_size(&l, WindowMode::Open), size(452.0, 270.0));
 }
 
 #[test]
 fn window_size_follows_the_layout() {
-    assert_eq!(window_size(&sample(1, 22.0), WindowMode::Open), size(452.0, 118.0));
-    assert_eq!(window_size(&sample(0, 0.0), WindowMode::Open), size(452.0, 96.0));
-    assert_eq!(window_size(&sample(4, 146.0), WindowMode::Open), size(452.0, 308.0));
-    let tall = layout(200.0, 38.0, 1117.0, 1, 146.0);
+    assert_eq!(window_size(&sample(4, 5), WindowMode::Open), size(452.0, 358.0));
+    assert_eq!(window_size(&sample(0, 0), WindowMode::Open), size(452.0, 270.0));
+    assert_eq!(window_size(&sample(4, 4), WindowMode::Open), size(452.0, 336.0));
+    let tall = layout(200.0, 38.0, 1117.0, 1, 1);
     assert_eq!(window_size(&tall, WindowMode::Pill), size(320.0, 38.0));
     assert_eq!(window_size(&tall, WindowMode::Banner), size(412.0, 100.0));
 }
 
 #[test]
 fn the_open_window_is_never_narrower_than_the_stage() {
-    let l = sample(1, 146.0);
+    let l = sample(1, 1);
     assert_eq!(window_size(&l, WindowMode::Open).width, l.stage.width);
 }
 
@@ -126,7 +125,7 @@ fn shape_and_window_mode_reject_everything_else() {
 
 #[test]
 fn layout_serializes_with_the_contract_field_names() {
-    let value = serde_json::to_value(sample(1, 146.0)).unwrap();
+    let value = serde_json::to_value(sample(1, 1)).unwrap();
     assert_eq!(
         value,
         serde_json::json!({
@@ -134,7 +133,7 @@ fn layout_serializes_with_the_contract_field_names() {
             "pill": { "width": 305.0, "height": 32.0 },
             "peek": { "width": 309.0, "height": 36.0 },
             "banner": { "width": 380.0, "height": 78.0 },
-            "open": { "width": 420.0, "height": 226.0 },
+            "open": { "width": 420.0, "height": 254.0 },
             "ear": 60.0,
         })
     );
@@ -164,54 +163,54 @@ fn set_records_both_values() {
 
 #[test]
 fn a_fresh_surface_is_the_pill_window() {
-    assert_eq!(Surface::new().window_size(&sample(1, 146.0)), size(305.0, 32.0));
+    assert_eq!(Surface::new().window_size(&sample(1, 1)), size(305.0, 32.0));
 }
 
 #[test]
 fn an_open_surface_is_the_plain_open_window_at_first() {
     let mut s = surface(WindowMode::Open, Shape::Open);
-    assert_eq!(s.window_size(&sample(1, 146.0)), size(452.0, 242.0));
+    assert_eq!(s.window_size(&sample(1, 1)), size(452.0, 270.0));
 }
 
 #[test]
 fn the_open_height_never_drops_while_open() {
     let mut s = surface(WindowMode::Open, Shape::Open);
-    assert_eq!(s.window_size(&sample(3, 146.0)), size(452.0, 286.0));
-    // Two rows disappear: the plain open window would be 242, the floor holds it at 286.
-    assert_eq!(s.window_size(&sample(1, 146.0)), size(452.0, 286.0));
-    assert_eq!(s.window_size(&sample(0, 0.0)), size(452.0, 286.0));
+    assert_eq!(s.window_size(&sample(3, 3)), size(452.0, 314.0));
+    // Two rows disappear: the plain open window would be 270, the floor holds it at 314.
+    assert_eq!(s.window_size(&sample(1, 1)), size(452.0, 314.0));
+    assert_eq!(s.window_size(&sample(0, 0)), size(452.0, 314.0));
     // Growing past the floor raises it.
-    assert_eq!(s.window_size(&sample(4, 146.0)), size(452.0, 308.0));
-    assert_eq!(s.window_size(&sample(1, 146.0)), size(452.0, 308.0));
+    assert_eq!(s.window_size(&sample(4, 4)), size(452.0, 336.0));
+    assert_eq!(s.window_size(&sample(1, 1)), size(452.0, 336.0));
 }
 
 #[test]
 fn a_set_with_the_same_mode_keeps_the_floor() {
     let mut s = surface(WindowMode::Open, Shape::Peek);
-    assert_eq!(s.window_size(&sample(3, 146.0)), size(452.0, 286.0));
+    assert_eq!(s.window_size(&sample(3, 3)), size(452.0, 314.0));
     s.set(WindowMode::Open, Shape::Open);
-    assert_eq!(s.window_size(&sample(1, 146.0)), size(452.0, 286.0));
+    assert_eq!(s.window_size(&sample(1, 1)), size(452.0, 314.0));
 }
 
 #[test]
 fn a_set_with_another_mode_resets_the_floor() {
     for other in [WindowMode::Pill, WindowMode::Banner] {
         let mut s = surface(WindowMode::Open, Shape::Open);
-        assert_eq!(s.window_size(&sample(3, 146.0)), size(452.0, 286.0));
+        assert_eq!(s.window_size(&sample(3, 3)), size(452.0, 314.0));
         s.set(other, Shape::Pill);
         s.set(WindowMode::Open, Shape::Peek);
-        assert_eq!(s.window_size(&sample(1, 146.0)), size(452.0, 242.0), "after {other:?}");
+        assert_eq!(s.window_size(&sample(1, 1)), size(452.0, 270.0), "after {other:?}");
     }
 }
 
 #[test]
 fn the_floor_does_not_touch_pill_and_banner_sizes() {
     let mut s = surface(WindowMode::Open, Shape::Open);
-    assert_eq!(s.window_size(&sample(3, 146.0)), size(452.0, 286.0));
+    assert_eq!(s.window_size(&sample(3, 3)), size(452.0, 314.0));
     s.set(WindowMode::Banner, Shape::Banner);
-    assert_eq!(s.window_size(&sample(3, 146.0)), size(412.0, 94.0));
+    assert_eq!(s.window_size(&sample(3, 3)), size(412.0, 94.0));
     s.set(WindowMode::Pill, Shape::Pill);
-    assert_eq!(s.window_size(&sample(3, 146.0)), size(305.0, 32.0));
+    assert_eq!(s.window_size(&sample(3, 3)), size(305.0, 32.0));
 }
 
 // A 305 x 32 pill centered on x = 100 with its top edge at y = 1000: x from -52.5 to 252.5, y from 968 to 1000.
@@ -250,7 +249,7 @@ fn hit_contains_follows_the_given_center_and_top() {
 
 #[test]
 fn a_peek_hit_rect_is_wider_and_taller_than_the_pill() {
-    let l = sample(1, 146.0);
+    let l = sample(1, 1);
     let (pill, peek) = (shape_size(&l, Shape::Pill), shape_size(&l, Shape::Peek));
     // x = 254 is 154 from the center: past the pill's 152.5, inside the peek's 154.5.
     assert!(!hit_contains(pill, 100.0, 1000.0, 254.0, 990.0));
