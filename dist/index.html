@@ -206,8 +206,7 @@
   }
 
   let artWhere = 'ear';
-  const tm = {};
-  const clearT = (...names) => names.forEach((n) => { clearTimeout(tm[n]); tm[n] = null; });
+  let artTimer = null; // the reduced-motion art fade, between its out and in halves
   function artAt(where) {
     const pillL = (L.stage.width - L.pill.width) / 2, r = pillL + L.pill.width - L.ear;
     if (where === 'ear') return wide ? { x: r + 6, y: (L.pill.height - 15) / 2, s: 26 / 112 } : { x: r + 8, y: (L.pill.height - 18) / 2, s: 18 / 64 };
@@ -224,13 +223,14 @@
   }
   function moveArt(where, dur = 0, ease = 'linear') {
     artWhere = where;
-    clearT('art');
+    clearTimeout(artTimer);
+    artTimer = null;
     if (!L) return;
     if (reduced && dur) {
       artEl.style.transition = 'opacity 60ms linear';
       artEl.style.opacity = 0;
-      tm.art = setTimeout(() => {
-        tm.art = null;
+      artTimer = setTimeout(() => {
+        artTimer = null;
         artEl.style.transition = 'none';
         artEl.style.transform = artTf(where);
         flush(artEl);
@@ -263,7 +263,7 @@
   // Fades the art to what its place calls for. While the art is moving, only the value changes: replacing the
   // transition list would cancel the running transform transition and make the art jump.
   function syncArtOpacity() {
-    if (!L || tm.art) return;
+    if (!L || artTimer) return;
     const v = String(artVis(artWhere));
     if (artEl.style.opacity === v) return;
     if (!artEl.getAnimations().some((a) => a.transitionProperty === 'transform' && a.playState === 'running')) {
@@ -278,7 +278,7 @@
     artKey = key;
     const old = artLayers[artIdx], next = artLayers[1 - artIdx];
     artIdx = 1 - artIdx;
-    next.style.backgroundImage = url ? `url("${url}")` : '';
+    next.style.backgroundImage = url ? `url("${url.replace(/["\\\n\r]/g, (c) => '\\' + c.charCodeAt(0).toString(16) + ' ')}")` : '';
     const d = reduced ? 120 : 160;
     old.style.transition = next.style.transition = `opacity ${d}ms linear`;
     next.style.opacity = 1;
@@ -293,96 +293,113 @@
     wide = on;
     stage.classList.toggle('wide', on);
     $('cardText').classList.toggle('wide', on);
-    if (L && !tm.art) artEl.style.transform = artTf(artWhere);
+    if (L && !artTimer) artEl.style.transform = artTf(artWhere);
     if (bannerSong) $('bSub').textContent = songSub(bannerSong);
   }
 
   // ---- window (Rust sizes it; the page says when) ----
-  let winMode = 'pill', sentSurface = '';
+  let winMode = 'pill', sentSurface = '', surfaceCall = Promise.resolve();
   const HIT = { peek: 'peek', expanded: 'open', banner: 'banner' };
+  // Resolves once Rust has placed the window. A rejected call is sent again on the next change.
   function sendSurface() {
     const hit = HIT[phase] || 'pill', key = winMode + ' ' + hit;
-    if (key === sentSurface) return;
+    if (key === sentSurface) return surfaceCall;
     sentSurface = key;
-    window.__TAURI__.core.invoke('surface', { window: winMode, hit }).catch(() => {});
+    surfaceCall = window.__TAURI__.core.invoke('surface', { window: winMode, hit })
+      .catch(() => { if (sentSurface === key) sentSurface = ''; });
+    return surfaceCall;
   }
   const clipRunning = () => panel.getAnimations().some((a) => a.transitionProperty === 'clip-path' && a.playState === 'running');
   // The window shrinks to the pill only once the shape is back, so no transparent window is left over the menu bar.
   function settleWindow() {
     if (phase === 'collapsed' && winMode !== 'pill' && !clipRunning()) winMode = 'pill';
-    sendSurface();
+    return sendSurface();
   }
   panel.addEventListener('transitionend', (e) => { if (e.target === panel && e.propertyName === 'clip-path') settleWindow(); });
 
   // ---- phases ----
-  let phase = 'collapsed';
+  // Each phase has at most one pending step, so one timer holds it and every transition replaces it.
+  let phase = 'collapsed', epoch = 0, phaseTimer = null;
+  function later(ms, fn) {
+    clearTimeout(phaseTimer);
+    phaseTimer = setTimeout(() => { phaseTimer = null; fn(); }, ms);
+  }
+  function cancelTimer() {
+    clearTimeout(phaseTimer);
+    phaseTimer = null;
+  }
   function setPhase(p) {
     phase = p;
+    epoch++;
     document.body.dataset.phase = p;
-    settleWindow();
+    const placed = settleWindow();
     syncClock();
+    return placed;
+  }
+  // Enters phase p with window `mode`. When the window has to grow, `start` waits until Rust has placed it and one
+  // frame has passed, and is dropped if the phase changes meanwhile.
+  function enter(p, mode, start) {
+    const grows = mode !== winMode;
+    winMode = mode;
+    const placed = setPhase(p), at = epoch;
+    if (!grows) return start();
+    placed.then(() => requestAnimationFrame(() => { if (epoch === at) start(); }));
   }
   function onEnter() {
     if (!L) return;
-    clearT('grace');
-    if (phase === 'collapsed' || phase === 'collapsing') { clearT('c1', 'c2'); setPhase('intent'); tm.intent = setTimeout(toPeek, 80); }
-    else if (phase === 'banner') { clearT('banner'); tm.intent = setTimeout(toExpand, 80); }
-    else if (phase === 'peek' && !tm.peek) toExpand();
+    if (phase === 'collapsed' || phase === 'collapsing') { setPhase('intent'); later(80, toPeek); }
+    else if (phase === 'banner') later(80, toExpand);
+    else if (phase === 'peek') toExpand();
+    else if (phase === 'expanded') cancelTimer();
   }
   function onLeave() {
     if (!L) return;
     if (phase === 'intent') {
-      clearT('intent');
+      cancelTimer();
       if (shapeAt === 'pill') { layerRest(content); layerRest(banner); setPhase('collapsed'); } else collapse();
-    } else if (phase === 'banner') { clearT('intent'); tm.banner = setTimeout(closeBanner, 250); }
-    else if (phase === 'peek') { clearT('peek'); tm.grace = setTimeout(unpeek, 250); }
-    else if (phase === 'expanded') tm.grace = setTimeout(collapse, 250);
+    } else if (phase === 'banner') later(250, closeBanner);
+    else if (phase === 'peek') later(250, unpeek);
+    else if (phase === 'expanded') later(250, collapse);
   }
+  // A start that waited for the window keeps any timer a hover set meanwhile (the leave grace, or the expand).
   function toPeek() {
-    tm.intent = null;
-    winMode = 'open';
-    setPhase('peek');
-    earsBright(true);
-    clip('peek', 120, EASE.peek);
-    tm.peek = setTimeout(() => { tm.peek = null; toExpand(); }, 120);
+    enter('peek', 'open', () => {
+      earsBright(true);
+      clip('peek', 120, EASE.peek);
+      if (!phaseTimer) later(120, toExpand);
+    });
   }
   function unpeek() {
-    tm.grace = null;
     earsBright(false);
     clip('pill', 120, EASE.peek);
     setPhase('collapsed');
   }
   function toExpand() {
-    clearT('peek', 'intent', 'banner', 'c1', 'c2');
-    const wasBanner = phase === 'banner';
-    winMode = 'open';
-    setPhase('expanded');
+    cancelTimer();
+    if (phase === 'banner') layerOut(banner); else layerRest(banner);
     bannerSong = null;
-    earsBright(true);
-    if (wasBanner) layerOut(banner);
-    clip('open', SPRING.ms, SPRING.css);
-    moveArt('card', SPRING.ms, SPRING.css);
-    layerIn(content);
+    enter('expanded', 'open', () => {
+      earsBright(true);
+      clip('open', SPRING.ms, SPRING.css);
+      moveArt('card', SPRING.ms, SPRING.css);
+      layerIn(content);
+    });
   }
   function closeTo(after) {
-    const out = reduced ? 120 : 80;
-    tm.c1 = setTimeout(() => {
-      tm.c1 = null;
+    later(reduced ? 120 : 80, () => {
       clip('pill', 200, EASE.collapse);
       moveArt('ear', 200, EASE.collapse);
       earsBright(false);
-    }, out);
-    tm.c2 = setTimeout(() => { tm.c2 = null; after(); setPhase('collapsed'); }, out + (reduced ? 120 : 200));
+      later(reduced ? 120 : 200, () => { after(); setPhase('collapsed'); });
+    });
   }
   function collapse() {
-    tm.grace = null;
     setPhase('collapsing');
     layerOut(content);
     layerOut(banner);
     closeTo(() => { layerRest(content); layerRest(banner); });
   }
   function closeBanner() {
-    tm.banner = null;
     bannerSong = null;
     setPhase('collapsing');
     layerOut(banner);
@@ -395,31 +412,24 @@
   }
   function showBanner(kind, data) {
     if (phase !== 'collapsed' || !L) return;
-    winMode = 'banner';
-    setPhase('banner');
-    const icon = $('bIcon'), bars = $('bannerBars');
-    if (kind === 'song') {
-      bannerSong = data;
-      $('bTitle').textContent = data.title;
-      $('bSub').textContent = songSub(data);
-      icon.style.opacity = 0;
-      bars.style.opacity = 1;
-      moveArt('banner', SPRING.ms, SPRING.css);
-    } else {
-      bannerSong = null;
-      $('bTitle').textContent = data.label;
-      $('bSub').textContent = STATUS_TEXT[data.status](data.detail);
-      icon.querySelector('.dot').className = 'dot' + (data.status === 'done' ? '' : ' amber');
-      icon.style.opacity = 1;
-      bars.style.opacity = 0;
-    }
-    clip('banner', SPRING.ms, SPRING.css);
-    layerIn(banner);
-    tm.banner = setTimeout(closeBanner, 2600);
+    const icon = $('bIcon'), bars = $('bannerBars'), song = kind === 'song';
+    bannerSong = song ? data : null;
+    $('bTitle').textContent = song ? data.title : data.label;
+    $('bSub').textContent = song ? songSub(data) : STATUS_TEXT[data.status](data.detail);
+    if (!song) icon.querySelector('.dot').className = 'dot' + (data.status === 'done' ? '' : ' amber');
+    icon.style.opacity = song ? 0 : 1;
+    bars.style.opacity = song ? 1 : 0;
+    enter('banner', 'banner', () => {
+      if (song) moveArt('banner', SPRING.ms, SPRING.css);
+      clip('banner', SPRING.ms, SPRING.css);
+      layerIn(banner);
+      if (!phaseTimer) later(2600, closeBanner);
+    });
   }
   // Puts everything where the phase says, with no animation.
   function syncInstant() {
-    clearT('art');
+    clearTimeout(artTimer);
+    artTimer = null;
     const open = phase === 'expanded';
     clip(open ? 'open' : phase === 'banner' ? 'banner' : phase === 'peek' ? 'peek' : 'pill');
     if (open) { content.style.transition = 'none'; content.style.opacity = 1; content.style.transform = 'none'; content.style.pointerEvents = 'auto'; }
@@ -434,7 +444,7 @@
     if (!prev) { stage.classList.add('ready'); syncInstant(); return; }
     const moved = prev.stage.width !== next.stage.width || prev.stage.height !== next.stage.height
       || prev.pill.width !== next.pill.width || prev.pill.height !== next.pill.height;
-    if (moved) { clip(shapeAt); if (!tm.art) moveArt(artWhere); }
+    if (moved) { clip(shapeAt); if (!artTimer) moveArt(artWhere); }
     else if (phase === 'expanded' && prev.open.height !== next.open.height) clip('open', SPRING.ms, SPRING.css);
   }
 
@@ -521,7 +531,7 @@
     const prev = lastRows;
     lastRows = new Map(s.rows.map((r) => [r.label, r.status]));
     if (!prev) return;
-    const changed = s.rows.find((r) => BANNER_STATUS.has(r.status) && prev.get(r.label) !== r.status);
+    const changed = s.rows.find((r) => BANNER_STATUS.has(r.status) && prev.has(r.label) && prev.get(r.label) !== r.status);
     if (changed) showBanner('session', changed);
   }
   // Ends the pending change, if any, and shows the latest media the app sent.
@@ -625,11 +635,13 @@
       if (drag !== null) { endDrag(); tick(); }
     }
   });
-  tauri.event.listen('sessions', (e) => onSessions(e.payload));
-  tauri.event.listen('media', (e) => onMedia(e.payload));
+  // A startup reply older than an event of its kind is ignored.
+  let mediaEvent = false, sessionsEvent = false;
+  tauri.event.listen('sessions', (e) => { sessionsEvent = true; onSessions(e.payload); });
+  tauri.event.listen('media', (e) => { mediaEvent = true; onMedia(e.payload); });
   tauri.core.invoke('layout').then((l) => { if (l && !L) applyLayout(l); });
-  tauri.core.invoke('media').then((m) => { if (m) onMedia(m); });
-  tauri.core.invoke('sessions').then((s) => { if (s) onSessions(s); });
+  tauri.core.invoke('media').then((m) => { if (m && !mediaEvent) onMedia(m); });
+  tauri.core.invoke('sessions').then((s) => { if (s && !sessionsEvent) onSessions(s); });
 </script>
 </body>
 </html>
