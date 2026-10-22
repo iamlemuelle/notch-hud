@@ -204,8 +204,8 @@ Every phase ends with `cargo test`, both `tests/*.sh` and `./check.sh` green, pl
 
 ### Phase 3: clickable panel, tokens, motion
 
-- **Outcome:** click routing, the section 4 motion, `tokens.css`, and a spike on a tracking area in place of the
-  50 ms hover poll [unverified].
+- **Outcome:** click routing, the section 4 motion, `tokens.css`, and a tracking area in place of the 50 ms hover
+  poll (spiked and shipped 2026-10-22: `CONTRACT.md` section 3 "Hover", idle wake-ups in section 7).
 - **Exit checks:**
   - `check.swift` 8: a synthesized click on a Done row hides it within 300 ms, and
     `NSWorkspace.frontmostApplication` is unchanged (the app didn't activate).
@@ -256,7 +256,7 @@ launchd, not as the app's child, so it is not counted (attributing it is unsolve
 | Idle CPU (collapsed, pet asleep) | ≤ 0.5% of one core, 60 s average | `top -l 61 -s 1 -stats pid,cpu` |
 | CPU while expanding | ≤ 15% of one core, over 5 cycles | the same, while `check.swift` hovers |
 | Memory | ≤ 150 MB combined footprint | `footprint` per pid [unverified flags] |
-| Idle wake-ups | ≤ 5/s, target ≤ 1/s. Measured 2026-10-22, idle, side by side: 2.1/s on #8, 2.3/s once sessions are event-driven (runs vary 2.1-3.5/s, so within noise). The 50 ms hover poll is most of it: the same build without it measured 0.25/s. The session thread itself goes from 1 to 0.2 wake-ups/s (`refresh:` trace) | `scripts/perf.sh` (`top -stats idlew`, app pid only, WebContent not counted) |
+| Idle wake-ups | ≤ 5/s, target ≤ 1/s. Measured 2026-10-22 (collapsed, a paused track, empty sessions directory, `scripts/perf.sh`): with the 50 ms hover poll 2.32, 2.75, 2.83/s alone and 3.57/s side by side; with the tracking area 0.18, 0.07/s alone and 0.28, 0.25, 0.08/s side by side, CPU 0.16-0.21% before, 0.01-0.02% after. The rest is not the session rescan (a build with a 1 h rescan: 0.13-0.17/s) nor the media provider (also without the media thread: 0.08-0.17/s), so AppKit's run loop and WebKit's in-process side, not split further (that needs root). `perf.sh` divides by 60 top samples, which take about 65 s of wall time (14 rescans 5.00 s apart in each window), so its rates read about 8% high | `scripts/perf.sh` (`top -stats idlew`, app pid only, WebContent not counted) |
 | Event-to-pixel latency | p95 ≤ 300 ms | `check.swift` 7 |
 | Frame time | p95 ≤ 17.5 ms | `$NOTCH_TRACE` |
 | Hook cost | median ≤ 20 ms (14 ms today, `README.md:24-25`) | a 100-run timing loop in `tests/hook_test.sh` |
@@ -273,4 +273,4 @@ launchd, not as the app's child, so it is not counted (attributing it is unsolve
 | Distribution | Ad-hoc, a stable self-signed identity, or notarized | Personal (decided), with a stable self-signed identity so grants survive rebuilds [unverified]. No notarization |
 | Now Playing source | The adapter (private) or AppleScript only (public) | The adapter, with AppleScript as the fallback. Fine for a personal build |
 | New dependencies | `notify`, a vendored `mediaremote-adapter`, `tauri-nspanel` | Approve the first two. Use the `objc2` crates already in `Cargo.toml:13-15` in place of `tauri-nspanel` |
-| Hover mechanism | Keep the 50 ms poll, or a tracking area | Settle it with the Phase 3 spike's wake-up numbers |
+| Hover mechanism | Keep the 50 ms poll, or a tracking area | Decided 2026-10-22: a tracking area plus a left-button monitor. Idle wake-ups went from 2.3-3.6/s to 0.07-0.28/s (section 7) |
