@@ -136,20 +136,30 @@ fn collapse(group: &[(&Record, Status)], now: u64) -> Session {
     Session { id: top.session_id.clone(), cwd, status, detail, ts }
 }
 
-pub fn summarize(records: &[Record], now: u64) -> Summary {
+/// Records within `TTL_SECS` of `now` that have a status.
+fn kept(records: &[Record], now: u64) -> impl Iterator<Item = (&Record, Status)> {
+    records
+        .iter()
+        .filter(move |r| now.saturating_sub(r.ts) <= TTL_SECS)
+        .filter_map(|r| Some((r, status_of(r)?)))
+}
+
+fn sessions(records: &[Record], now: u64) -> Vec<Session> {
     let mut groups: BTreeMap<&str, Vec<(&Record, Status)>> = BTreeMap::new();
-    for r in records.iter().filter(|r| now.saturating_sub(r.ts) <= TTL_SECS) {
-        if let Some(s) = status_of(r) {
-            groups.entry(r.session_id.as_str()).or_default().push((r, s));
-        }
+    for (r, s) in kept(records, now) {
+        groups.entry(r.session_id.as_str()).or_default().push((r, s));
     }
-    let mut sessions: Vec<Session> = groups
+    groups
         .values_mut()
         .map(|g| {
             supersede_agents(g);
             collapse(g, now)
         })
-        .collect();
+        .collect()
+}
+
+pub fn summarize(records: &[Record], now: u64) -> Summary {
+    let mut sessions = sessions(records, now);
 
     let total = sessions.len();
     let attention = sessions
@@ -184,6 +194,16 @@ pub fn summarize(records: &[Record], now: u64) -> Summary {
         .collect();
 
     Summary { rows, total, attention, working }
+}
+
+/// The next second a record expires or a `Working` session decays, so the app can sleep until then.
+pub fn next_wake(records: &[Record], now: u64) -> Option<u64> {
+    let expiries = kept(records, now).map(|(r, _)| r.ts.saturating_add(TTL_SECS + 1));
+    let decays = sessions(records, now)
+        .into_iter()
+        .filter(|s| s.status == Status::Working)
+        .map(|s| s.ts.saturating_add(QUIET_SECS + 1));
+    expiries.chain(decays).min()
 }
 
 /// Regular `*.json` files in `dir` with their mtimes, unsorted.

@@ -3,8 +3,9 @@ mod media;
 mod session;
 
 use std::cell::{Cell, RefCell};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{mpsc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use objc2::rc::Retained;
@@ -18,7 +19,11 @@ use tauri::{AppHandle, Emitter, WebviewUrl, WebviewWindow, WebviewWindowBuilder}
 
 use layout::{Layout, Shape, Size, Surface, WindowMode};
 use media::Media;
-use session::{prune, read_dir, sessions_dir, summarize, Summary};
+use notify::{RecursiveMode, Watcher};
+use session::{next_wake, prune, read_dir, sessions_dir, summarize, Summary};
+
+/// The sessions safety net: a missed file event, a recreated directory, a display change (CONTRACT.md section 3).
+const RESCAN: Duration = Duration::from_secs(5);
 
 // kCGMainMenuWindowLevel is 24; +3 matches what notch apps use to clear the menu bar and its status items.
 const ABOVE_MENU_BAR: isize = 24 + 3;
@@ -212,19 +217,56 @@ fn track_hover(app: &AppHandle) {
     }
 }
 
-fn poll_sessions(app: &AppHandle) {
+/// Refreshes the summary and returns the deadline `next_wake` gives for these records.
+fn refresh_sessions(app: &AppHandle, dir: &Path) -> Option<u64> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    let dir = sessions_dir();
-    prune(&dir, now);
-    let summary = summarize(&read_dir(&dir), now);
+    prune(dir, now);
+    let records = read_dir(dir);
+    let summary = summarize(&records, now);
     {
         let mut latest = LATEST.lock().unwrap_or_else(|e| e.into_inner());
         if latest.as_ref() != Some(&summary) {
+            if trace_on() {
+                eprintln!("sessions: {}", serde_json::to_string(&summary).unwrap_or_default());
+            }
             *latest = Some(summary.clone());
             let _ = app.emit("sessions", &summary);
         }
     }
     place_soon(app);
+    next_wake(&records, now)
+}
+
+/// How long to sleep before the next refresh: until `deadline` (unix seconds), at most `RESCAN`.
+fn wait_for(deadline: Option<u64>) -> Duration {
+    let until = |secs| match UNIX_EPOCH.checked_add(Duration::from_secs(secs)) {
+        Some(at) => at.duration_since(SystemTime::now()).unwrap_or(Duration::ZERO),
+        None => RESCAN,
+    };
+    deadline.map_or(RESCAN, until).min(RESCAN)
+}
+
+/// Refreshes on every file event in the sessions directory, at the next deadline, and at least every `RESCAN`.
+fn watch_sessions(app: &AppHandle) {
+    let dir = sessions_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let (tx, rx) = mpsc::channel();
+    // Held here so `rx` never disconnects, which would turn `recv_timeout` into a busy loop.
+    let _keep = tx.clone();
+    let mut watcher = notify::recommended_watcher(move |_| {
+        let _ = tx.send(());
+    })
+    .ok();
+    let mut watching = false;
+    loop {
+        if !watching {
+            watching = watcher.as_mut().is_some_and(|w| w.watch(&dir, RecursiveMode::NonRecursive).is_ok());
+        }
+        let deadline = refresh_sessions(app, &dir);
+        if rx.recv_timeout(wait_for(deadline)).is_ok() {
+            while rx.try_recv().is_ok() {}
+        }
+    }
 }
 
 #[tauri::command]
@@ -346,11 +388,8 @@ fn main() {
                 let target = hover.clone();
                 let _ = hover.run_on_main_thread(move || track_hover(&target));
             });
-            let poll = app.handle().clone();
-            std::thread::spawn(move || loop {
-                poll_sessions(&poll);
-                std::thread::sleep(Duration::from_secs(1));
-            });
+            let sessions_app = app.handle().clone();
+            std::thread::spawn(move || watch_sessions(&sessions_app));
             let media_app = app.handle().clone();
             std::thread::spawn(move || media::run(move |m| on_media(&media_app, m)));
             Ok(())
