@@ -122,7 +122,7 @@ if let g = grown {
         let samples = Int((g.width - 36) * 48)
         expect(lit > 200 && lit < samples / 4, "5b. web UI reacted to hover: \(lit) bright text pixels of \(samples) in the detail area (> 200, < 1/4)")
         let bg = brightness(rep, area.origin, CGPoint(x: g.minX + 8, y: g.maxY - 40))
-        expect(bg >= 0 && bg < 0.1, "5b. expanded panel is painted black, not see-through (brightness \(bg))")
+        expect(bg >= 0 && bg < 0.03, "5b. expanded panel is painted black, not see-through (brightness \(bg))")
     }
 }
 move(CGPoint(x: b.midX, y: 400))
