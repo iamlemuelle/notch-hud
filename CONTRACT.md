@@ -805,7 +805,9 @@ pub struct Avatar { pub source: Source, pub definition: serde_json::Value }
 
 - `avatar_path()`: `$NOTCH_AVATAR` if set and non-empty, else `$HOME/Library/Application Support/notch-hud/avatar.json`.
 - `parse(text)` accepts exactly what avatar-core 0.1.0's `parseAvatarDefinition` accepts, and returns the parsed
-  JSON. `Err(reason)` otherwise, where `reason` starts with the RFC 6901 pointer of the offending member and `: `
+  JSON, with one difference: a string holding an unpaired UTF-16 surrogate escape (`"\ud800"`), which JavaScript
+  accepts, is rejected, because a Rust string cannot hold it. Numbers are read exactly (serde_json's `float_roundtrip`),
+  so a bound is never passed by rounding. `Err(reason)` otherwise, where `reason` starts with the RFC 6901 pointer of the offending member and `: `
   (`/animations/idle/steps/0/expression: unknown expression 'nap'`) when there is one. The rules:
   1. At most `MAX_BYTES` UTF-8 bytes. Valid JSON, and no object has the same key twice.
   2. The v1 schema (`avatarDefinition.schema.json` in the package): top level `schema` = `"bible-strong/avatar-definition"`,
