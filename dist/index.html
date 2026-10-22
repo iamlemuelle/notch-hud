@@ -298,15 +298,17 @@
   }
 
   // ---- window (Rust sizes it; the page says when) ----
-  let winMode = 'pill', sentSurface = '', surfaceCall = Promise.resolve();
+  // winMode: the mode the page wants. placedMode: the mode of the last surface call Rust finished placing.
+  let winMode = 'pill', placedMode = 'pill', sentSurface = '', surfaceCall = Promise.resolve();
   const HIT = { peek: 'peek', expanded: 'open', banner: 'banner' };
   // Resolves once Rust has placed the window. A rejected call is sent again on the next change.
   function sendSurface() {
     const hit = HIT[phase] || 'pill', key = winMode + ' ' + hit;
     if (key === sentSurface) return surfaceCall;
     sentSurface = key;
-    surfaceCall = window.__TAURI__.core.invoke('surface', { window: winMode, hit })
-      .catch(() => { if (sentSurface === key) sentSurface = ''; });
+    const mode = winMode;
+    surfaceCall = window.__TAURI__.core.invoke('surface', { window: mode, hit })
+      .then(() => { placedMode = mode; }, () => { if (sentSurface === key) sentSurface = ''; });
     return surfaceCall;
   }
   const clipRunning = () => panel.getAnimations().some((a) => a.transitionProperty === 'clip-path' && a.playState === 'running');
@@ -336,10 +338,10 @@
     syncClock();
     return placed;
   }
-  // Enters phase p with window `mode`. When the window has to grow, `start` waits until Rust has placed it and one
-  // frame has passed, and is dropped if the phase changes meanwhile.
+  // Enters phase p with window `mode`. Until Rust has placed that mode (this call, or one still in flight), `start`
+  // waits for the placement and one frame, and is dropped if the phase changes meanwhile.
   function enter(p, mode, start) {
-    const grows = mode !== winMode;
+    const grows = mode !== placedMode;
     winMode = mode;
     const placed = setPhase(p), at = epoch;
     if (!grows) return start();
@@ -369,9 +371,13 @@
       if (!phaseTimer) later(120, toExpand);
     });
   }
+  // Also the way out when a collapse was interrupted, so it puts the art and layers back at rest.
   function unpeek() {
     earsBright(false);
     clip('pill', 120, EASE.peek);
+    moveArt('ear', 120, EASE.peek);
+    layerRest(content);
+    layerRest(banner);
     setPhase('collapsed');
   }
   function toExpand() {
