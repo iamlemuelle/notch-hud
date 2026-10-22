@@ -202,9 +202,10 @@ empty, and follows the same symlink, backup, permission and temp-file rules.
 
 `scripts/install-login.sh [plist]` (default `~/Library/LaunchAgents/com.lem.notch-hud.plist`) starts the app at login:
 
-- The binary is `$NOTCH_HUD_BIN` if set, else this repo's `src-tauri/target/release/notch-hud`, as an absolute path.
-  When it is not an executable file, print `notch-hud: build first: cd src-tauri && cargo build --release` to stderr,
-  exit 1, write nothing, and call `launchctl` not at all.
+- The binary is `$NOTCH_HUD_BIN` if set, else the executable of this repo's app bundle (section 9),
+  `src-tauri/target/notch-hud.app/Contents/MacOS/notch-hud`, as an absolute path. When it is not an executable file,
+  print `notch-hud: build first: ./scripts/build-app.sh` to stderr, exit 1, write nothing, and call `launchctl` not
+  at all.
 - A binary path containing `&`, `<` or `>` would break the plist's XML: print a message to stderr and exit 1, writing
   nothing.
 - Writes the plist through a temp file in the same directory that `plutil -lint` must accept, then `mv`, mode 0644,
@@ -231,8 +232,11 @@ The panel shows what is playing, and its card has play/pause, previous, next and
 
 1. **Adapter** (primary). The vendored `mediaremote-adapter` (see `vendor/VENDORED.md`), built by
    `scripts/build-adapter.sh` into a directory holding `mediaremote-adapter.pl`, `MediaRemoteAdapter.framework` and
-   `MediaRemoteAdapterTestClient`. That directory is `$NOTCH_MEDIA_ADAPTER` if set and non-empty, else `../adapter`
-   next to the running binary (`src-tauri/target/adapter` for both build profiles). It reports any app macOS lists
+   `MediaRemoteAdapterTestClient`. That directory is `$NOTCH_MEDIA_ADAPTER` if set and non-empty. Otherwise it comes
+   from the running binary's path: inside an app bundle (the binary's directory is `MacOS` and that directory's
+   parent is `Contents`) it is `Contents/Resources/adapter`; for any other path it is `../adapter` next to the binary
+   (`src-tauri/target/adapter` for both build profiles). The choice is by path shape only, never by what exists on
+   disk, so a bundle without its adapter falls back to AppleScript rather than to a dev build's adapter. It reports any app macOS lists
    as Now Playing, browsers included, so YouTube in Chrome or Safari shows up as that browser.
    - Usable when `/usr/bin/perl <dir>/mediaremote-adapter.pl <dir>/MediaRemoteAdapter.framework
      <dir>/MediaRemoteAdapterTestClient test` exits 0 within 5 s.
@@ -613,3 +617,60 @@ spring; `#banner` in like `#content`; closes after 2600 ms.
   back within `MAX_ROWS` stays quiet; the cost is that a brand-new session, or one past `MAX_ROWS`, shows none.
   The first such row in payload order is shown: `#bTitle` its label, `#bSub` its status text (section 4), `#bIcon` with
   an amber dot (needs or error) or a gray one (done); `#bannerBars` hidden and the art stays in the ear.
+
+## 9. App bundle (`scripts/build-app.sh`)
+
+The login item runs a signed `.app`, so macOS permission grants (Automation for Music and Spotify) belong to a stable
+code identity instead of to whichever binary was built last.
+
+### Layout
+
+```text
+src-tauri/target/notch-hud.app/Contents/
+  Info.plist                 CFBundleIdentifier dev.lem.notchhud, LSUIElement true, NSAppleEventsUsageDescription
+  MacOS/notch-hud
+  Resources/adapter/         mediaremote-adapter.pl, MediaRemoteAdapter.framework, MediaRemoteAdapterTestClient
+```
+
+- `CFBundleIdentifier` is `dev.lem.notchhud` (`tauri.conf.json` `identifier`). TCC grants key on it; never rename it.
+- `LSUIElement` is true: no Dock icon and no menu bar, matching the accessory activation policy the app sets at
+  launch.
+- `NSAppleEventsUsageDescription` is a non-empty sentence saying the app reads the current track from Music and
+  Spotify and sends them play, pause and skip. macOS shows it in the Automation prompt.
+- `Resources/adapter/` holds exactly what `scripts/build-adapter.sh` stages in `src-tauri/target/adapter/`, with the
+  framework's symlinks kept as symlinks.
+
+### Build
+
+`scripts/build-app.sh` takes no arguments and:
+
+1. runs `scripts/build-adapter.sh`;
+2. runs `cargo tauri build --bundles app` in `src-tauri` (Tauri CLI 2.x, `cargo install tauri-cli --version 2.12.1
+   --locked`); when `cargo tauri` is missing it prints `build-app: tauri-cli not found: cargo install tauri-cli
+   --version 2.12.1 --locked` to stderr and exits 1;
+3. copies Tauri's `src-tauri/target/release/bundle/macos/notch-hud.app` to a temp bundle beside the final one, signs
+   it, and only then swaps it into `src-tauri/target/notch-hud.app` by renames, so the login item never sees a half
+   written or unsigned bundle. The running app keeps its old code until it is restarted
+   (`launchctl kickstart -k gui/<uid>/com.lem.notch-hud`); the script never restarts it;
+4. prints the bundle's absolute path as its last stdout line and exits 0.
+
+Any failing step exits non-zero and leaves an existing `src-tauri/target/notch-hud.app` as it was.
+
+### Signing
+
+- The identity is `$NOTCH_HUD_SIGN_IDENTITY` if set and non-empty, else `notch-hud Code Signing`: the name of a
+  self-signed Code Signing certificate in the login keychain (README, Install). It is a name, not a secret.
+- Before building, the script checks that `security find-identity -p codesigning` lists the identity by that exact
+  name. When it does not, it prints `build-app: no code signing identity "<name>" (README: Install)` to stderr and
+  exits 1 before building anything.
+- `NOTCH_HUD_SIGN_IDENTITY=-` signs ad hoc, for test machines with no certificate. It prints `build-app: ad hoc
+  signature, permission grants will not survive a rebuild` to stderr. Ad hoc is never the default.
+- Signing goes inside out with `codesign --force --sign <identity> --timestamp=none`: the framework, then the test
+  client, then the app. No hardened runtime: the app is personal and not notarized, and the hardened runtime would
+  need an Apple Events entitlement for the AppleScript fallback.
+- The signed app passes `codesign --verify --strict <app>`.
+- With a certificate, the designated requirement (`codesign -d -r- <app>`) names `identifier "dev.lem.notchhud"`
+  and the certificate's hash, and nothing that changes between builds (an ad hoc requirement names the build's
+  `cdhash` instead). So two builds with the same certificate print the same requirement, and TCC, which matches on
+  it, keeps its grants.
+
