@@ -5,7 +5,7 @@ use std::fmt;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
 
 use crate::media::Media;
@@ -54,58 +54,67 @@ pub fn parse(text: &str) -> Result<Value, String> {
     if text.len() > MAX_BYTES {
         return Err(format!("larger than {MAX_BYTES} bytes"));
     }
-    serde_json::from_str::<NoDuplicates>(text).map_err(|e| e.to_string())?;
+    NoDuplicates(String::new())
+        .deserialize(&mut serde_json::Deserializer::from_str(text))
+        .map_err(|e| e.to_string())?;
     let value: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
     definition(&value)?;
     Ok(value)
 }
 
 /// Walks any JSON and fails on an object that has the same key twice, which `serde_json::Value` would silently merge.
-struct NoDuplicates;
+/// Carries the JSON pointer of the value it is at, so the error names the repeated member.
+struct NoDuplicates(String);
 
-impl<'de> Deserialize<'de> for NoDuplicates {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_any(NoDuplicates)
+impl<'de> DeserializeSeed<'de> for NoDuplicates {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_any(self)
     }
 }
 
 impl<'de> Visitor<'de> for NoDuplicates {
-    type Value = NoDuplicates;
+    type Value = ();
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("JSON")
     }
-    fn visit_bool<E>(self, _: bool) -> Result<Self, E> {
-        Ok(self)
+    fn visit_bool<E>(self, _: bool) -> Result<(), E> {
+        Ok(())
     }
-    fn visit_i64<E>(self, _: i64) -> Result<Self, E> {
-        Ok(self)
+    fn visit_i64<E>(self, _: i64) -> Result<(), E> {
+        Ok(())
     }
-    fn visit_u64<E>(self, _: u64) -> Result<Self, E> {
-        Ok(self)
+    fn visit_u64<E>(self, _: u64) -> Result<(), E> {
+        Ok(())
     }
-    fn visit_f64<E>(self, _: f64) -> Result<Self, E> {
-        Ok(self)
+    fn visit_f64<E>(self, _: f64) -> Result<(), E> {
+        Ok(())
     }
-    fn visit_str<E>(self, _: &str) -> Result<Self, E> {
-        Ok(self)
+    fn visit_str<E>(self, _: &str) -> Result<(), E> {
+        Ok(())
     }
-    fn visit_unit<E>(self) -> Result<Self, E> {
-        Ok(self)
+    fn visit_unit<E>(self) -> Result<(), E> {
+        Ok(())
     }
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self, A::Error> {
-        while seq.next_element::<NoDuplicates>()?.is_some() {}
-        Ok(self)
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        let mut i = 0;
+        while seq.next_element_seed(NoDuplicates(child(&self.0, &i.to_string())))?.is_some() {
+            i += 1;
+        }
+        Ok(())
     }
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self, A::Error> {
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
         let mut seen = HashSet::new();
         while let Some(key) = map.next_key::<String>()? {
-            if !seen.insert(key.clone()) {
-                return Err(de::Error::custom(format!("duplicate key '{key}'")));
+            let at = child(&self.0, &key);
+            if !seen.insert(key) {
+                return Err(de::Error::custom(format!("{at}: duplicate key")));
             }
-            map.next_value::<NoDuplicates>()?;
+            map.next_value_seed(NoDuplicates(at))?;
         }
-        Ok(self)
+        Ok(())
     }
 }
 
@@ -487,3 +496,7 @@ impl Moods {
     }
 }
 
+
+#[cfg(test)]
+#[path = "avatar_tests.rs"]
+mod tests;
