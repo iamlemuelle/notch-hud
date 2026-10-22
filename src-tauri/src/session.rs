@@ -44,6 +44,7 @@ impl Status {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Row {
+    pub id: String,
     pub label: String,
     pub status: Status,
     pub detail: Option<String>,
@@ -55,6 +56,19 @@ pub struct Summary {
     pub total: usize,
     pub attention: usize,
     pub working: usize,
+}
+
+/// One session as the detail card shows it. See CONTRACT.md section 2, "Session ids and `detail`".
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Detail {
+    pub id: String,
+    pub label: String,
+    pub cwd: String,
+    pub status: Status,
+    pub event: String,
+    pub event_ts: u64,
+    pub tool_name: Option<String>,
+    pub agents: usize,
 }
 
 pub const TTL_SECS: u64 = 3 * 3600;
@@ -94,6 +108,11 @@ struct Session {
     status: Status,
     detail: Option<String>,
     ts: u64,
+    /// The newest record left in the group: its event, ts and tool.
+    event: String,
+    event_ts: u64,
+    tool_name: Option<String>,
+    agents: usize,
 }
 
 fn is_turn_boundary(r: &Record) -> bool {
@@ -133,7 +152,26 @@ fn collapse(group: &[(&Record, Status)], now: u64) -> Session {
         Status::NeedsPermission => top.tool_name.clone(),
         _ => None,
     };
-    Session { id: top.session_id.clone(), cwd, status, detail, ts }
+    // Ties go to the main thread, then to the smallest agent id.
+    let (newest, _) = group
+        .iter()
+        .max_by(|(a, _), (b, _)| {
+            a.ts.cmp(&b.ts)
+                .then(a.agent_id.is_none().cmp(&b.agent_id.is_none()))
+                .then(b.agent_id.cmp(&a.agent_id))
+        })
+        .expect("group is non-empty");
+    Session {
+        id: top.session_id.clone(),
+        cwd,
+        status,
+        detail,
+        ts,
+        event: newest.event.clone(),
+        event_ts: newest.ts,
+        tool_name: newest.tool_name.clone(),
+        agents: group.iter().filter(|(r, _)| r.agent_id.is_some()).count(),
+    }
 }
 
 /// Records within `TTL_SECS` of `now` that have a status.
@@ -176,24 +214,52 @@ pub fn summarize(records: &[Record], now: u64) -> Summary {
             .then(a.id.cmp(&b.id))
     });
 
-    let labels: Vec<String> = sessions.iter().map(|s| base_label(&s.cwd)).collect();
     let rows = sessions
         .iter()
-        .zip(&labels)
+        .zip(labels(&sessions))
         .take(MAX_ROWS)
-        .map(|(s, label)| {
-            let shared = labels.iter().filter(|l| *l == label).count() > 1;
-            let label = if shared {
-                let short: String = s.id.chars().take(4).collect();
-                format!("{label} · {short}")
-            } else {
-                label.clone()
-            };
-            Row { label, status: s.status, detail: s.detail.clone() }
-        })
+        .map(|(s, label)| Row { id: s.id.clone(), label, status: s.status, detail: s.detail.clone() })
         .collect();
 
     Summary { rows, total, attention, working }
+}
+
+/// Each session's label: the last folder name, with a short id added when two sessions share it.
+fn labels(sessions: &[Session]) -> Vec<String> {
+    let bases: Vec<String> = sessions.iter().map(|s| base_label(&s.cwd)).collect();
+    sessions
+        .iter()
+        .zip(&bases)
+        .map(|(s, base)| {
+            if bases.iter().filter(|b| *b == base).count() > 1 {
+                let short: String = s.id.chars().take(4).collect();
+                format!("{base} · {short}")
+            } else {
+                base.clone()
+            }
+        })
+        .collect()
+}
+
+/// The hook's rule for ids: non-empty and only `[A-Za-z0-9_-]`.
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+pub fn detail(records: &[Record], id: &str, now: u64) -> Option<Detail> {
+    let sessions = sessions(records, now);
+    let labels = labels(&sessions);
+    let (s, label) = sessions.into_iter().zip(labels).find(|(s, _)| s.id == id)?;
+    Some(Detail {
+        id: s.id,
+        label,
+        cwd: s.cwd,
+        status: s.status,
+        event: s.event,
+        event_ts: s.event_ts,
+        tool_name: s.tool_name,
+        agents: s.agents,
+    })
 }
 
 /// The next second a record expires or a `Working` session decays, so the app can sleep until then.

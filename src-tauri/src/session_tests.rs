@@ -103,7 +103,7 @@ fn summarize_ttl_boundary() {
     assert_eq!(s.total, 1);
     assert_eq!(
         s.rows,
-        vec![Row { label: "keep".into(), status: Status::Done, detail: None }]
+        vec![Row { id: "keep".into(), label: "keep".into(), status: Status::Done, detail: None }]
     );
 }
 
@@ -270,7 +270,7 @@ fn summarize_working_subagent_cannot_hide_needs_permission() {
     assert_eq!(
         s,
         Summary {
-            rows: vec![Row { label: "proj".into(), status: Status::NeedsPermission, detail: Some("Bash".into()) }],
+            rows: vec![Row { id: "s".into(), label: "proj".into(), status: Status::NeedsPermission, detail: Some("Bash".into()) }],
             total: 1,
             attention: 1,
             working: 0,
@@ -286,7 +286,7 @@ fn summarize_main_permission_beats_newer_subagent_working() {
     let s = summarize(&recs, NOW);
     assert_eq!(
         s.rows,
-        vec![Row { label: "proj".into(), status: Status::NeedsPermission, detail: Some("Edit".into()) }]
+        vec![Row { id: "s".into(), label: "proj".into(), status: Status::NeedsPermission, detail: Some("Edit".into()) }]
     );
     assert_eq!((s.total, s.attention, s.working), (1, 1, 0));
 }
@@ -298,7 +298,7 @@ fn summarize_main_done_with_working_subagent_is_working() {
         sub("s", "ag1", "/p/proj", "PreToolUse", NOW - 2),
     ];
     let s = summarize(&recs, NOW);
-    assert_eq!(s.rows, vec![Row { label: "proj".into(), status: Status::Working, detail: None }]);
+    assert_eq!(s.rows, vec![Row { id: "s".into(), label: "proj".into(), status: Status::Working, detail: None }]);
     assert_eq!((s.total, s.attention, s.working), (1, 0, 1));
 }
 
@@ -390,7 +390,7 @@ fn summarize_cwd_from_status_record_without_main() {
 #[test]
 fn summarize_permission_denied_is_waiting() {
     let s = summarize(&[rec("s", "/p/proj", "PermissionDenied", NOW)], NOW);
-    assert_eq!(s.rows, vec![Row { label: "proj".into(), status: Status::Waiting, detail: None }]);
+    assert_eq!(s.rows, vec![Row { id: "s".into(), label: "proj".into(), status: Status::Waiting, detail: None }]);
     assert_eq!((s.total, s.attention, s.working), (1, 0, 0));
 }
 
@@ -674,7 +674,7 @@ fn supersede_boundaries_clear_stale_agent_permission() {
     for (main, want) in cases {
         let label = format!("{} {:?}", main.event, main.notification_type);
         let (row, attention) = one_row(&[stale_perm(), main]);
-        assert_eq!(row, Row { label: "proj".into(), status: want, detail: None }, "{label}");
+        assert_eq!(row, Row { id: "s".into(), label: "proj".into(), status: want, detail: None }, "{label}");
         assert_eq!(attention, usize::from(want == Status::Error), "{label}");
     }
 }
@@ -685,7 +685,7 @@ fn supersede_main_non_boundary_keeps_agent_permission() {
         let (row, attention) = one_row(&[stale_perm(), rec("s", "/p/proj", event, BOUNDARY)]);
         assert_eq!(
             row,
-            Row { label: "proj".into(), status: Status::NeedsPermission, detail: Some("Bash".into()) },
+            Row { id: "s".into(), label: "proj".into(), status: Status::NeedsPermission, detail: Some("Bash".into()) },
             "{event}"
         );
         assert_eq!(attention, 1, "{event}");
@@ -698,7 +698,7 @@ fn supersede_main_permission_prompt_notification_is_not_boundary() {
     let (row, attention) = one_row(&[stale_perm(), main]);
     assert_eq!(
         row,
-        Row { label: "proj".into(), status: Status::NeedsPermission, detail: Some("Bash".into()) }
+        Row { id: "s".into(), label: "proj".into(), status: Status::NeedsPermission, detail: Some("Bash".into()) }
     );
     assert_eq!(attention, 1);
 }
@@ -707,7 +707,7 @@ fn supersede_main_permission_prompt_notification_is_not_boundary() {
 fn supersede_keeps_agent_record_newer_than_boundary() {
     let recs = [rec("s", "/p/proj", "Stop", BOUNDARY), sub("s", "ag1", "/p/proj", "PreToolUse", NEWER)];
     let s = summarize(&recs, NOW);
-    assert_eq!(s.rows, vec![Row { label: "proj".into(), status: Status::Working, detail: None }]);
+    assert_eq!(s.rows, vec![Row { id: "s".into(), label: "proj".into(), status: Status::Working, detail: None }]);
     assert_eq!((s.total, s.attention, s.working), (1, 0, 1));
 }
 
@@ -715,7 +715,7 @@ fn supersede_keeps_agent_record_newer_than_boundary() {
 fn supersede_keeps_agent_record_with_equal_ts() {
     let recs = [rec("s", "/p/proj", "Stop", BOUNDARY), sub("s", "ag1", "/p/proj", "PreToolUse", BOUNDARY)];
     let s = summarize(&recs, NOW);
-    assert_eq!(s.rows, vec![Row { label: "proj".into(), status: Status::Working, detail: None }]);
+    assert_eq!(s.rows, vec![Row { id: "s".into(), label: "proj".into(), status: Status::Working, detail: None }]);
     assert_eq!((s.total, s.attention, s.working), (1, 0, 1));
 }
 
@@ -728,8 +728,8 @@ fn supersede_is_per_session() {
     assert_eq!(
         s.rows,
         vec![
-            Row { label: "other".into(), status: Status::NeedsPermission, detail: Some("Edit".into()) },
-            Row { label: "proj".into(), status: Status::Working, detail: None },
+            Row { id: "t".into(), label: "other".into(), status: Status::NeedsPermission, detail: Some("Edit".into()) },
+            Row { id: "s".into(), label: "proj".into(), status: Status::Working, detail: None },
         ]
     );
     assert_eq!((s.total, s.attention, s.working), (2, 1, 1));
@@ -880,4 +880,206 @@ fn next_wake_ttl_second_drops_the_session() {
     let wake = next_wake(&recs, NOW).unwrap();
     assert_eq!(summarize(&recs, wake - 1).total, 1);
     assert_eq!(summarize(&recs, wake).total, 0);
+}
+
+// valid_id and detail (CONTRACT.md section 2, "Session ids and detail"). Expectations are literals.
+
+#[test]
+fn valid_id_accepts_the_hook_alphabet() {
+    for id in ["abc", "A-z_09", "0", "-", "_"] {
+        assert!(valid_id(id), "{id:?} should be valid");
+    }
+}
+
+#[test]
+fn valid_id_rejects_everything_else() {
+    for id in ["", "a b", "a/b", "a.b", "a\n", "\na", "é", "aé", "a\0", " "] {
+        assert!(!valid_id(id), "{id:?} should be invalid");
+    }
+}
+
+fn with_tool(mut r: Record, tool: &str) -> Record {
+    r.tool_name = Some(tool.to_string());
+    r
+}
+
+#[test]
+fn detail_of_a_plain_session() {
+    let recs = [with_tool(rec("sid1", "/Users/lem/proj", "PreToolUse", NOW - 5), "Bash")];
+    assert_eq!(
+        detail(&recs, "sid1", NOW),
+        Some(Detail {
+            id: "sid1".into(),
+            label: "proj".into(),
+            cwd: "/Users/lem/proj".into(),
+            status: Status::Working,
+            event: "PreToolUse".into(),
+            event_ts: NOW - 5,
+            tool_name: Some("Bash".into()),
+            agents: 0,
+        })
+    );
+}
+
+#[test]
+fn detail_unknown_id_is_none() {
+    let recs = [rec("sid1", "/p/proj", "Stop", NOW)];
+    assert_eq!(detail(&recs, "nope", NOW), None);
+    assert_eq!(detail(&recs, "", NOW), None);
+    assert_eq!(detail(&[], "sid1", NOW), None);
+}
+
+#[test]
+fn detail_expired_session_is_none() {
+    let recs = [rec("old", "/p/old", "Stop", NOW - TTL_SECS - 1), rec("new", "/p/new", "Stop", NOW - TTL_SECS)];
+    assert_eq!(detail(&recs, "old", NOW), None);
+    assert!(detail(&recs, "new", NOW).is_some());
+}
+
+#[test]
+fn detail_session_with_only_ignored_events_is_none() {
+    let recs = [rec("sid1", "/p/proj", "SessionEnd", NOW), rec("sid1", "/p/proj", "SubagentStop", NOW)];
+    assert_eq!(detail(&recs, "sid1", NOW), None);
+}
+
+#[test]
+fn detail_newest_record_gives_event_ts_and_tool() {
+    let recs = [
+        with_tool(rec("s", "/p/proj", "PreToolUse", NOW - 30), "Read"),
+        with_tool(sub("s", "ag1", "/p/proj", "PostToolUse", NOW - 3), "Grep"),
+        with_tool(rec("s", "/p/proj", "PostToolUse", NOW - 20), "Edit"),
+    ];
+    let d = detail(&recs, "s", NOW).unwrap();
+    assert_eq!((d.event.as_str(), d.event_ts, d.tool_name), ("PostToolUse", NOW - 3, Some("Grep".into())));
+    assert_eq!(d.agents, 1);
+}
+
+#[test]
+fn detail_status_comes_from_priority_but_event_from_newest() {
+    let recs = [
+        with_tool(rec("s", "/p/proj", "PermissionRequest", NOW - 20), "Edit"),
+        with_tool(sub("s", "ag1", "/p/proj", "PreToolUse", NOW - 1), "Read"),
+    ];
+    let d = detail(&recs, "s", NOW).unwrap();
+    assert_eq!(d.status, Status::NeedsPermission);
+    assert_eq!((d.event.as_str(), d.event_ts, d.tool_name), ("PreToolUse", NOW - 1, Some("Read".into())));
+    assert_eq!(d.agents, 1);
+}
+
+#[test]
+fn detail_tie_prefers_the_main_thread() {
+    let recs = [
+        with_tool(sub("s", "ag1", "/p/proj", "PreToolUse", NOW - 4), "Grep"),
+        with_tool(rec("s", "/p/proj", "PostToolUse", NOW - 4), "Edit"),
+    ];
+    let d = detail(&recs, "s", NOW).unwrap();
+    assert_eq!((d.event.as_str(), d.event_ts, d.tool_name), ("PostToolUse", NOW - 4, Some("Edit".into())));
+    assert_eq!(d.agents, 1);
+}
+
+#[test]
+fn detail_tie_between_agents_takes_the_smallest_agent_id() {
+    let recs = [
+        with_tool(sub("s", "ag3", "/p/proj", "PreToolUse", NOW - 4), "Three"),
+        with_tool(sub("s", "ag1", "/p/proj", "PostToolUse", NOW - 4), "One"),
+        with_tool(sub("s", "ag2", "/p/proj", "PreToolUse", NOW - 4), "Two"),
+    ];
+    let d = detail(&recs, "s", NOW).unwrap();
+    assert_eq!((d.event.as_str(), d.tool_name), ("PostToolUse", Some("One".into())));
+    assert_eq!(d.agents, 3);
+}
+
+#[test]
+fn detail_ignores_superseded_subagents() {
+    // The main thread's Stop (BOUNDARY) clears the older agent record (STALE); it is neither counted nor newest.
+    let recs = [
+        rec("s", "/p/proj", "Stop", BOUNDARY),
+        with_tool(sub("s", "ag1", "/p/proj", "PreToolUse", STALE), "Bash"),
+    ];
+    let d = detail(&recs, "s", NOW).unwrap();
+    assert_eq!(d.status, Status::Done);
+    assert_eq!((d.event.as_str(), d.event_ts, d.tool_name, d.agents), ("Stop", BOUNDARY, None, 0));
+}
+
+#[test]
+fn detail_agents_counts_live_subagent_records_only() {
+    let recs = [
+        rec("s", "/p/proj", "PreToolUse", NOW - 1),
+        sub("s", "ag1", "/p/proj", "PreToolUse", NOW - 2),
+        sub("s", "ag2", "/p/proj", "PostToolUse", NOW - 3),
+        sub("s", "ag3", "/p/proj", "SubagentStop", NOW - 1),
+        sub("other", "ag9", "/p/other", "PreToolUse", NOW),
+    ];
+    assert_eq!(detail(&recs, "s", NOW).unwrap().agents, 2);
+}
+
+#[test]
+fn detail_ignored_events_are_not_the_newest() {
+    let recs = [rec("s", "/p/proj", "SessionEnd", NOW), rec("s", "/p/proj", "Stop", NOW - 9)];
+    let d = detail(&recs, "s", NOW).unwrap();
+    assert_eq!((d.event.as_str(), d.event_ts), ("Stop", NOW - 9));
+}
+
+#[test]
+fn detail_working_decays_to_waiting_after_the_quiet_window() {
+    let at = |age: u64| detail(&[rec("s", "/p/proj", "PreToolUse", NOW - age)], "s", NOW).unwrap();
+    assert_eq!(at(600).status, Status::Working);
+    let late = at(601);
+    assert_eq!(late.status, Status::Waiting);
+    assert_eq!((late.event.as_str(), late.event_ts), ("PreToolUse", NOW - 601));
+}
+
+#[test]
+fn detail_cwd_comes_from_the_main_thread_record() {
+    let recs = [
+        rec("s", "/main/dir", "Stop", NOW - 30),
+        with_tool(sub("s", "ag1", "/agent/dir", "PermissionRequest", NOW - 1), "Bash"),
+    ];
+    let d = detail(&recs, "s", NOW).unwrap();
+    assert_eq!((d.cwd.as_str(), d.label.as_str()), ("/main/dir", "dir"));
+    assert_eq!(d.status, Status::NeedsPermission);
+}
+
+#[test]
+fn detail_cwd_without_a_main_record_comes_from_the_status_record() {
+    let recs = [
+        sub("s", "ag1", "/p/quiet", "Stop", NOW),
+        sub("s", "ag2", "/p/loud", "PermissionRequest", NOW - 10),
+    ];
+    let d = detail(&recs, "s", NOW).unwrap();
+    assert_eq!((d.cwd.as_str(), d.label.as_str()), ("/p/loud", "loud"));
+}
+
+#[test]
+fn detail_label_has_the_suffix_when_two_sessions_share_a_folder() {
+    let recs = [
+        rec("aaaa1111", "/one/app", "Stop", NOW),
+        rec("bbbb2222", "/two/app", "Stop", NOW - 1),
+        rec("cccc3333", "/three/other", "Stop", NOW - 2),
+    ];
+    assert_eq!(detail(&recs, "aaaa1111", NOW).unwrap().label, "app · aaaa");
+    assert_eq!(detail(&recs, "bbbb2222", NOW).unwrap().label, "app · bbbb");
+    assert_eq!(detail(&recs, "cccc3333", NOW).unwrap().label, "other");
+}
+
+#[test]
+fn detail_label_counts_expired_sessions_out() {
+    let recs = [rec("aaaa1111", "/one/app", "Stop", NOW), rec("bbbb2222", "/two/app", "Stop", NOW - TTL_SECS - 1)];
+    assert_eq!(detail(&recs, "aaaa1111", NOW).unwrap().label, "app");
+}
+
+#[test]
+fn detail_exists_for_a_session_past_the_row_cap() {
+    let recs: Vec<Record> = (0..6u64).map(|i| rec(&format!("w{i}"), &format!("/p/w{i}"), "PreToolUse", NOW - i)).collect();
+    let s = summarize(&recs, NOW);
+    assert_eq!(s.rows.len(), 4);
+    let d = detail(&recs, "w5", NOW).unwrap();
+    assert_eq!((d.label.as_str(), d.event_ts), ("w5", NOW - 5));
+}
+
+#[test]
+fn row_ids_are_the_session_ids() {
+    let recs = [rec("sess-1", "/p/a", "Stop", NOW), rec("sess_2", "/p/b", "PreToolUse", NOW)];
+    let ids: Vec<String> = summarize(&recs, NOW).rows.into_iter().map(|r| r.id).collect();
+    assert_eq!(ids, vec!["sess_2".to_string(), "sess-1".to_string()]);
 }
