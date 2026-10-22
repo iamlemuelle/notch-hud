@@ -382,14 +382,17 @@ async function scenarioMood() {
   check('M2 a mood event with a still pose paints sad, and then nothing mutates', first === 'sad' && b.length === 0, J({ first, mutations: b.length }));
 
   await fire(page, 'mood', POSE.working);
+  await sleep(250); // the face eases out of the previous pose first (a 100 ms transition), so that pose is legitimately on screen at the start
   k = await seen(page, BALL, all, 1800);
   check('M3 a mood event with the working pose plays working (happy and shy)', J(k) === J(['happy', 'shy']), J(k));
 
   await fire(page, 'mood', POSE.alert);
+  await sleep(250); // the face eases out of the previous pose first (a 100 ms transition), so that pose is legitimately on screen at the start
   k = await seen(page, BALL, all, 1800);
   check('M4 a mood event with the alert pose plays curious (grin and peek)', J(k) === J(['grin', 'peek']), J(k));
 
   await fire(page, 'mood', POSE.idle);
+  await sleep(250); // the face eases out of the previous pose first (a 100 ms transition), so that pose is legitimately on screen at the start
   k = await seen(page, BALL, all, 1800);
   check('M5 a mood event back to idle plays idle (calm and wide)', J(k) === J(['calm', 'wide']), J(k));
   await page.close();
