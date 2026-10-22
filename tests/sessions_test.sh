@@ -103,5 +103,45 @@ sleep 3
 extra="$(tail -n +$((m + 1)) "$applog" | grep -cF 'sessions: ')"
 if [ "$extra" = 0 ]; then pass "idle for 3 s: no sessions: line"; else flunk "idle for 3 s: $extra new sessions: line(s)"; fi
 
+# Deadline decay with no file event: a record written straight into the directory (the hook would stamp ts = now),
+# 2 s short of the 600 s quiet limit. Nothing else is written, so only the deadline can turn it to waiting.
+mkdir -p "$NOTCH_DIR"
+m="$(lines "$applog")"
+ts_old=$(( $(date +%s) - 598 ))
+printf '{"session_id":"decay","agent_id":null,"cwd":"/x/decay","event":"PreToolUse","notification_type":null,"tool_name":null,"ts":%s}\n' "$ts_old" >"$NOTCH_DIR/.decay.tmp"
+mv -f "$NOTCH_DIR/.decay.tmp" "$NOTCH_DIR/decay.json"
+if wait_line '"label":"decay","status":"working"' 2 "$m"; then
+  work_ts="$hit_ts"
+  if wait_line '"label":"decay","status":"waiting"' 5 "$m"; then
+    wait_ts="$hit_ts"
+    delay="$(awk -v a="$work_ts" -v b="$wait_ts" 'BEGIN { printf "%.2f", b - a }')"
+    dl="$(tail -n +$((m + 1)) "$applog" | grep -nF 'refresh: deadline' | head -n 1 | cut -d: -f1)"
+    wl="$(tail -n +$((m + 1)) "$applog" | grep -nF 'sessions: ' | grep -F '"label":"decay","status":"waiting"' | head -n 1 | cut -d: -f1)"
+    if [ -z "$dl" ]; then flunk "deadline: no 'refresh: deadline' line before the waiting row"
+    elif [ "$dl" -ge "$wl" ]; then flunk "deadline: 'refresh: deadline' (line $dl) is not before the waiting row (line $wl)"
+    elif awk -v d="$delay" 'BEGIN { exit !(d <= 4.5) }'; then pass "deadline: working to waiting with no file event in ${delay} s (within 4.5), after refresh: deadline"
+    else flunk "deadline: working to waiting took ${delay} s (want within 4.5)"; fi
+  else flunk "deadline: the decay row never became waiting within 5 s of the working line"; fi
+else flunk "deadline: the decay row did not show as working within 2 s"; fi
+
+# Idle: drop the decay session (no Working session is left), then 11 s with no writes. Every refresh must be a
+# rescan (RESCAN is 5 s), so 2 or 3 of them: not a 1 s poll and not a refresh loop.
+ev decay SessionEnd
+sleep 1
+m="$(lines "$applog")"
+sleep 11
+refreshes="$(tail -n +$((m + 1)) "$applog" | grep -F 'refresh: ')"
+total_r="$(printf '%s' "$refreshes" | grep -c . )"
+rescans="$(printf '%s' "$refreshes" | grep -cF 'refresh: rescan')"
+if [ "$total_r" = "$rescans" ] && [ "$rescans" -ge 2 ] && [ "$rescans" -le 3 ]; then pass "idle for 11 s: $rescans refresh: rescan line(s), no other refresh"
+else flunk "idle for 11 s: $total_r refresh line(s), $rescans rescan (want 2 or 3, all rescan)"; printf '%s\n' "$refreshes"; fi
+
+# Deleted and recreated directory: the next hook write must still reach the trace within 300 ms.
+rm -rf "$NOTCH_DIR"
+sleep 1
+m="$(lines "$applog")"; t0="$(now)"
+ev recreated Stop
+measure "recreated directory: Stop shows" '"label":"recreated"' "$m" "$t0"
+
 if [ "$fail" -ne 0 ]; then echo "--- app.log"; cat "$applog"; fi
 exit "$fail"
