@@ -2,18 +2,20 @@
 # Rebuilds dist/vendor/avatar-core.js, the avatar renderer, from the pinned npm release of @bible-strong/avatar-core
 # (CONTRACT.md section 10, vendor/VENDORED.md). The page has no bundler, so this makes one classic script that defines
 # window.AvatarCore. The package's one dependency, ajv (JSON Schema validation), is swapped for a stub that throws:
-# Rust validates every avatar before the page gets it. It writes the bundle only when its sha256 is BUNDLE_SHA256.
+# Rust validates every avatar before the page gets it. It writes the bundle only when its sha256 is the one recorded in
+# vendor/VENDORED.md.
 #
 # Needs npm and network. To update: change VERSION and INTEGRITY (npm view @bible-strong/avatar-core@<v> dist.integrity),
-# rerun, set BUNDLE_SHA256 to the sha256 it reports, rerun, check the page, and update the row in vendor/VENDORED.md.
+# rerun, put the sha256 it reports in vendor/VENDORED.md's row once you know why it changed, rerun, and check the page.
 set -euo pipefail
 VERSION=0.1.0
 INTEGRITY=sha512-b5WAn7QiPlfjomKN9MvXm+Cirpff/yszZ7CJW+BfZSWnZSl+IUdG8zhaElimZAVcLNMzQ9WKngluhJlO6mNUCg==
 ESBUILD=0.28.2
-# The bundle this script must produce. A mismatch writes nothing: set this to the new value only after checking why.
-BUNDLE_SHA256=5094f122454a18830da8df387c5da1af5e8f8e65ce347860413a527f806e3c3d
 root="$(cd "$(dirname "$0")/.." && pwd)"
 out="$root/dist/vendor/avatar-core.js"
+# The bundle this script must produce is the one vendor/VENDORED.md records. A mismatch writes nothing.
+BUNDLE_SHA256="$(grep -o 'bundle sha256 `[0-9a-f]*`' "$root/vendor/VENDORED.md" | grep -o '[0-9a-f]\{64\}')"
+[ -n "$BUNDLE_SHA256" ] || { echo "vendor-avatar-core: no bundle sha256 in vendor/VENDORED.md" >&2; exit 1; }
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

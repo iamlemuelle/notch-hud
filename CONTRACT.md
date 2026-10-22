@@ -780,8 +780,8 @@ sessions and Now Playing and loads the avatar file; the page draws it with the v
   script that defines `window.AvatarCore` (esbuild, IIFE, not minified). The script downloads the pinned tarball,
   refuses it unless its sha512 equals the integrity in `vendor/VENDORED.md`, and replaces the package's one
   dependency, `ajv`, with a stub whose validator throws, so no JSON Schema validator reaches the page: Rust
-  validates every definition before the page sees it (below). The script holds the bundle's expected sha256 and
-  writes nothing when its output differs (esbuild itself is fetched by version, not by hash, so this is the check
+  validates every definition before the page sees it (below). The script reads the bundle's expected sha256 from
+  `vendor/VENDORED.md` and writes nothing when its output differs (esbuild itself is fetched by version, not by hash, so this is the check
   that catches a changed toolchain). The committed bundle's sha256 equals the one in `vendor/VENDORED.md`.
 - The page uses only the package's playback and scene functions (`playAvatarAnimation`, `advanceAvatarPlayback`,
   `sampleAvatarFrame`, `renderAvatarFrame`, `renderAvatarDefinition`), never `validateAvatarDefinition` or
@@ -809,7 +809,8 @@ pub struct Avatar { pub source: Source, pub definition: serde_json::Value }
 
 - `avatar_path()` is `avatar_path_from` of the environment's `NOTCH_AVATAR` and `HOME`.
   `avatar_path_from(notch_avatar, home)` (pure): `notch_avatar` if present and non-empty, else
-  `<home>/Library/Application Support/notch-hud/avatar.json`.
+  `<home>/Library/Application Support/notch-hud/avatar.json` (with no `home`, that path relative to the working
+  directory; launchd always sets `HOME`).
 - `parse(text)` accepts exactly what avatar-core 0.1.0's `parseAvatarDefinition` accepts, and returns the parsed
   JSON, with one difference: a string holding an unpaired UTF-16 surrogate escape (`"\ud800"`), which JavaScript
   accepts, is rejected, because a Rust string cannot hold it. Numbers are read exactly (serde_json's `float_roundtrip`),
@@ -840,7 +841,8 @@ pub struct Avatar { pub source: Source, pub definition: serde_json::Value }
      `animations`; every blink has `minIntervalMs <= maxIntervalMs`; every step's `expression` is a key of
      `expressions`.
 - `load(path)`: `Err("no file")` when nothing is at `path`; `Err("not a file")` when it is not a regular file (a
-  directory, or a FIFO that would block the read; symlinks are followed); `Err("larger than 262144 bytes")` when the file is larger,
+  directory, or a FIFO, which it opens without blocking; symlinks are followed); the error's own text for any other
+  failure to open (permission denied, for example); `Err("larger than 262144 bytes")` when the file is larger,
   without reading more than `MAX_BYTES + 1` bytes; `Err` for a read error or bytes that are not UTF-8; otherwise
   `parse` of the contents.
 - `DEFAULT` is the committed default avatar, `src-tauri/avatar/default.avatar.json`: an original character made in
@@ -854,7 +856,8 @@ pub struct Avatar { pub source: Source, pub definition: serde_json::Value }
   stdout and exits 0; on `Err(reason)` it prints `reason` to stderr and exits 1.
 - The user's file is never in the repository: `.gitignore` ignores `avatar.json` and `*.avatar.json` anywhere,
   except the default. No tracked JSON file outside `src-tauri/avatar/default.avatar.json` and
-  `tests/avatar/fixtures/` has `"schema": "bible-strong/avatar-definition"`.
+  `tests/avatar/fixtures/` has `"schema": "bible-strong/avatar-definition"`. `tests/repo_test.sh` checks both rules
+  and the vendored bundle's hash with nothing but git, and runs in CI on its own.
 
 ### Mood (`src-tauri/src/avatar.rs`, pure)
 
@@ -872,10 +875,12 @@ pub struct Pose { pub mood: Mood, pub animations: &'static [&'static str], pub s
 pub const CELEBRATE_MS: u64 = 4_000;
 pub const DROWSY_MS: u64 = 120_000;
 pub const SLEEP_MS: u64 = 300_000;
+pub const MAX_WAIT_MS: u64 = 60_000;
 
 pub fn signals(summary: Option<&Summary>, media: Option<&Media>) -> Signals;
 pub fn finished(prev: Option<&Summary>, next: &Summary) -> bool;
 pub fn pose(mood: Mood) -> Pose;
+pub fn wait_ms(at: u64, now: u64) -> u64;
 
 pub struct Moods { /* private: celebrate_until, quiet_since, the last step's time */ }
 impl Moods {
@@ -909,9 +914,10 @@ impl Moods {
 - `next_change()`: the smallest of these that is later than the last step's `now`: the celebration's end; and,
   while quiet, the quiet start plus `DROWSY_MS` and plus `SLEEP_MS`. `None` when there is none, so a sleeping avatar
   sets no timer at all.
-- The app runs `Moods` on a thread of its own that waits for an update or for `next_change()`, whichever comes first,
-  but never longer than 60 s while there is a deadline: the deadlines are wall-clock time, and the wait's timer stops
-  while the Mac sleeps.
+- `wait_ms(at, now)`: `at - now` (0 when `at` is not later), at most `MAX_WAIT_MS`.
+- The app runs `Moods` on a thread of its own that waits for an update or for `wait_ms(next_change(), now)`
+  milliseconds, whichever comes first, and with no `next_change()` for an update only. The cap is there because the
+  deadlines are wall-clock time and the wait's timer stops while the Mac sleeps.
   Updates come from the sessions refresh (when the summary changes, with `finished` against the previous summary)
   and from Now Playing (when the media changes). When the pose changes the app emits `mood` with the `Pose`, and
   with `$NOTCH_TRACE` logs `avatar: <mood>`. The command `mood` returns the current `Pose`.

@@ -11,8 +11,11 @@ To update: clone the new tag, replace the directory, and change the row above.
 avatar-core: `scripts/vendor-avatar-core.sh` downloads the tarball, checks the integrity above, and bundles it with
 esbuild 0.28.2 into one classic script that defines `window.AvatarCore` (the page has no bundler). It is the
 package's code unchanged, except that its one dependency, `ajv`, is replaced by a stub that throws if called: the
-page never validates, Rust does (`src-tauri/src/avatar.rs`). The script is reproducible: a rerun prints the sha256
-above. To update: change `VERSION` and `INTEGRITY` in the script, rerun it, and change the row above.
+page never validates, Rust does (`src-tauri/src/avatar.rs`). The script writes the bundle only when its sha256 is the
+one in the row above (esbuild is fetched by version, so this catches a changed toolchain), and `tests/repo_test.sh`
+checks the committed file against it. To update: change `VERSION` and `INTEGRITY` in the script and run it; it stops
+with the new bundle's sha256. Put that in the row above once you know why it changed, run the script again, and check
+the page.
 
 Both licenses fit this repository's AGPL-3.0: BSD-3-Clause code can be included in an AGPL work, and the renderer's
 AGPL-3.0-only terms are why the repository uses the AGPL.

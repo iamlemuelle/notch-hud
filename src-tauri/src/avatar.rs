@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fmt;
 use std::io::Read;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
@@ -41,14 +42,15 @@ pub fn avatar_path_from(notch_avatar: Option<&OsStr>, home: Option<&OsStr>) -> P
 }
 
 pub fn load(path: &Path) -> Result<Value, String> {
-    // Checked before opening: the app loads on the main thread at startup, and opening a FIFO would block it.
-    match std::fs::metadata(path) {
+    // Non-blocking, so opening a FIFO cannot stall the main thread at startup; the type is checked on the open handle.
+    let file = match std::fs::OpenOptions::new().read(true).custom_flags(libc_nonblock()).open(path) {
+        Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err("no file".into()),
         Err(e) => return Err(e.to_string()),
-        Ok(meta) if !meta.is_file() => return Err("not a file".into()),
-        Ok(_) => {}
+    };
+    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+        return Err("not a file".into());
     }
-    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
     file.take(MAX_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     if bytes.len() > MAX_BYTES {
@@ -397,6 +399,11 @@ fn definition(v: &Value) -> Check {
     Ok(())
 }
 
+/// `O_NONBLOCK` on macOS (`<sys/fcntl.h>`), to avoid a libc dependency for one constant.
+const fn libc_nonblock() -> i32 {
+    0x0004
+}
+
 // ---- mood ----
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -430,6 +437,13 @@ pub struct Pose {
 pub const CELEBRATE_MS: u64 = 4_000;
 pub const DROWSY_MS: u64 = 120_000;
 pub const SLEEP_MS: u64 = 300_000;
+pub const MAX_WAIT_MS: u64 = 60_000;
+
+/// How long the mood thread waits for the deadline `at`: until then, but at most `MAX_WAIT_MS`. The deadlines are
+/// wall-clock time and the wait's timer stops while the Mac sleeps, so the cap bounds how late a due mood shows.
+pub fn wait_ms(at: u64, now: u64) -> u64 {
+    at.saturating_sub(now).min(MAX_WAIT_MS)
+}
 
 pub fn signals(summary: Option<&Summary>, media: Option<&Media>) -> Signals {
     let has = |wanted: &[Status]| summary.is_some_and(|s| s.rows.iter().any(|r| wanted.contains(&r.status)));
