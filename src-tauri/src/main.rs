@@ -237,13 +237,37 @@ fn refresh_sessions(app: &AppHandle, dir: &Path) -> Option<u64> {
     next_wake(&records, now)
 }
 
-/// How long to sleep before the next refresh: until `deadline` (unix seconds), at most `RESCAN`.
-fn wait_for(deadline: Option<u64>) -> Duration {
-    let until = |secs| match UNIX_EPOCH.checked_add(Duration::from_secs(secs)) {
-        Some(at) => at.duration_since(SystemTime::now()).unwrap_or(Duration::ZERO),
-        None => RESCAN,
-    };
-    deadline.map_or(RESCAN, until).min(RESCAN)
+/// Why the sessions thread ran a refresh, as `$NOTCH_TRACE` logs it.
+#[derive(Clone, Copy)]
+enum Wake {
+    Start,
+    Event,
+    Deadline,
+    Rescan,
+}
+
+impl Wake {
+    fn name(self) -> &'static str {
+        match self {
+            Wake::Start => "start",
+            Wake::Event => "event",
+            Wake::Deadline => "deadline",
+            Wake::Rescan => "rescan",
+        }
+    }
+}
+
+/// How long to sleep before the next refresh, and what wakes it if no file event comes first: `deadline` (unix
+/// seconds) when it is within `RESCAN`, else the rescan.
+fn wait_for(deadline: Option<u64>) -> (Duration, Wake) {
+    let until = deadline.and_then(|secs| {
+        let at = UNIX_EPOCH.checked_add(Duration::from_secs(secs))?;
+        Some(at.duration_since(SystemTime::now()).unwrap_or(Duration::ZERO))
+    });
+    match until {
+        Some(wait) if wait < RESCAN => (wait, Wake::Deadline),
+        _ => (RESCAN, Wake::Rescan),
+    }
 }
 
 /// Refreshes on every file event in the sessions directory, at the next deadline, and at least every `RESCAN`.
@@ -251,21 +275,37 @@ fn watch_sessions(app: &AppHandle) {
     let dir = sessions_dir();
     let _ = std::fs::create_dir_all(&dir);
     let (tx, rx) = mpsc::channel();
-    // Held here so `rx` never disconnects, which would turn `recv_timeout` into a busy loop.
+    // Held here so `rx` never disconnects when the watcher could not be created, which would turn `recv_timeout`
+    // into a busy loop.
     let _keep = tx.clone();
     let mut watcher = notify::recommended_watcher(move |_| {
         let _ = tx.send(());
-    })
-    .ok();
+    });
     let mut watching = false;
+    let mut wake = Wake::Start;
     loop {
         if !watching {
-            watching = watcher.as_mut().is_some_and(|w| w.watch(&dir, RecursiveMode::NonRecursive).is_ok());
+            let result = match watcher.as_mut() {
+                Ok(w) => w.watch(&dir, RecursiveMode::NonRecursive),
+                Err(e) => Err(notify::Error::generic(&e.to_string())),
+            };
+            watching = result.is_ok();
+            if let (Err(e), true) = (result, trace_on()) {
+                eprintln!("watch: failed: {e}");
+            }
+        }
+        if trace_on() {
+            eprintln!("refresh: {}", wake.name());
         }
         let deadline = refresh_sessions(app, &dir);
-        if rx.recv_timeout(wait_for(deadline)).is_ok() {
-            while rx.try_recv().is_ok() {}
-        }
+        let (wait, timeout) = wait_for(deadline);
+        wake = match rx.recv_timeout(wait) {
+            Ok(()) => {
+                while rx.try_recv().is_ok() {}
+                Wake::Event
+            }
+            Err(_) => timeout,
+        };
     }
 }
 

@@ -165,8 +165,13 @@ The app calls it before each `read_dir`.
   3. the rescan: `RESCAN_SECS` = 5 s after the last refresh, the safety net for a missed event, a directory that
      was deleted and recreated, and a display change.
   At startup the thread creates `dir` (`create_dir_all`, errors ignored) so the watch has something to attach to.
-  When the watch cannot be set up, it is retried on every refresh, and the rescan keeps the panel at most 5 s
-  behind. With no session activity the thread wakes once per rescan, never once per second.
+  When the watch cannot be set up, it is retried on every refresh (logging `watch: failed: <error>` under
+  `$NOTCH_TRACE`), and the rescan keeps the panel at most 5 s behind. FSEvents watches the path, so a directory that
+  is deleted and recreated keeps delivering events (measured 2026-10-22: a hook write after `rm -rf` of the directory
+  refreshed in 35 ms). With no session activity the thread wakes once per rescan, never once per second.
+- Refresh trace: when `$NOTCH_TRACE` is set and non-empty, every refresh first logs `refresh: <cause>` to stderr,
+  where cause is `start` (the first refresh), `event` (a file event), `deadline` (the `next_wake` deadline) or
+  `rescan`.
 - Hover: native cursor polling every 50 ms, emits `hover` (bool) when it changes. The cursor is "in" when it is inside
   the hit rect, the shape the page last reported with `surface` (section 8), with these rules (`next_hover` in
   `layout.rs`): it becomes in only on a poll where the cursor moved since the previous poll, so a shape growing under
