@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{define_class, msg_send, AnyThread, MainThreadOnly};
+use objc2::{define_class, msg_send, sel, AnyThread, MainThreadOnly};
 use objc2_app_kit::{
     NSBackingStoreType, NSColor, NSEvent, NSEventMask, NSEventType, NSPanel, NSScreen, NSTrackingArea,
     NSTrackingAreaOptions, NSWindowCollectionBehavior, NSWindowStyleMask,
@@ -123,14 +123,25 @@ define_class!(
         fn mouse_exited(&self, _event: &NSEvent) {
             track_hover(Input::Exited);
         }
+
+        #[unsafe(method(released))]
+        fn released(&self) {
+            track_hover(Input::Up);
+        }
     }
 );
 
 impl HoverOwner {
-    fn new(mtm: MainThreadMarker) -> Retained<HoverOwner> {
-        let this = HoverOwner::alloc(mtm).set_ivars(());
-        // SAFETY: NSObject's designated initializer.
-        unsafe { msg_send![super(this), init] }
+    /// Main thread only: the one owner, created on first use.
+    fn shared(mtm: MainThreadMarker) -> Retained<HoverOwner> {
+        OWNER.with(|o| {
+            o.get_or_init(|| {
+                let this = HoverOwner::alloc(mtm).set_ivars(());
+                // SAFETY: NSObject's designated initializer.
+                unsafe { msg_send![super(this), init] }
+            })
+            .clone()
+        })
     }
 }
 
@@ -272,7 +283,7 @@ fn track_area(frame: NSRect, size: Size, inside: bool) {
     };
     let rect = view.convertRect_fromView(in_window, None);
     let options = if inside { TRACKING.union(NSTrackingAreaOptions::AssumeInside) } else { TRACKING };
-    let owner = OWNER.with(|o| o.get_or_init(|| HoverOwner::new(mtm)).clone());
+    let owner = HoverOwner::shared(mtm);
     let owner: &AnyObject = &owner;
     // SAFETY: the owner implements the three mouse methods the options ask for and outlives the area (OWNER).
     let area = unsafe {
@@ -285,11 +296,22 @@ fn track_area(frame: NSRect, size: Size, inside: bool) {
 }
 
 /// Main thread only. Feeds left presses and releases on the panel to hover; a press in another app never gets here.
-fn monitor_presses() {
-    let handler = block2::RcBlock::new(|event: NonNull<NSEvent>| -> *mut NSEvent {
+/// The monitor runs before AppKit dispatches the event. A release is applied on the next run-loop pass instead, after
+/// the webview has passed the mouse-up on, so the page sees its `pointerup` before the `hover` out a release can emit
+/// (it ends a seek drag that sees hover out first without seeking).
+fn monitor_presses(mtm: MainThreadMarker) {
+    let owner = HoverOwner::shared(mtm);
+    let handler = block2::RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
         // SAFETY: AppKit passes a valid event for the duration of the call.
-        let kind = unsafe { event.as_ref() }.r#type();
-        track_hover(if kind == NSEventType::LeftMouseDown { Input::Down } else { Input::Up });
+        if unsafe { event.as_ref() }.r#type() == NSEventType::LeftMouseDown {
+            track_hover(Input::Down);
+        } else {
+            let nothing: Option<&AnyObject> = None;
+            // SAFETY: `released` takes no argument; OWNER keeps the owner alive.
+            let _: () = unsafe {
+                msg_send![&*owner, performSelectorOnMainThread: sel!(released), withObject: nothing, waitUntilDone: false]
+            };
+        }
         event.as_ptr()
     });
     let mask = NSEventMask::LeftMouseDown | NSEventMask::LeftMouseUp;
@@ -482,7 +504,7 @@ fn main() {
                 .build()?;
             let _ = APP.set(app.handle().clone());
             adopt_panel(mtm, &window);
-            monitor_presses();
+            monitor_presses(mtm);
             place(app.handle());
 
             drop(window);

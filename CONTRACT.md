@@ -178,7 +178,11 @@ The app calls it before each `read_dir`.
   local event monitor for `LeftMouseDown | LeftMouseUp` sees presses on the panel. `hover` (bool) is emitted when the
   state below changes, evaluated once per input (`Hover::step` in `hover.rs`):
   - inputs: the area's `mouseEntered:`, `mouseMoved:` and `mouseExited:`, the monitor's down and up, and every
-    placement (`place`: startup, each `surface` call, each sessions refresh and so each rescan).
+    placement (`place`: startup, each `surface` call, each sessions refresh and so each rescan). The monitor runs
+    before AppKit dispatches the event; a down is applied there, an up on the next main run-loop pass
+    (`performSelectorOnMainThread:` with `waitUntilDone: false`), after the webview has passed the mouse-up on. So the
+    page gets `pointerup` before the `hover` out a release outside emits. Applied in the monitor, the out came first
+    and the page ended the seek drag without seeking (measured 2026-10-22: `tests/controls_test.sh` overshoot failed).
   - over: `true` on entered or moved, `false` on exited, and on a placement, a down or an up whether
     `hit_contains` holds for `NSEvent::mouseLocation()` against the hit rect.
   - moved: on entered or moved, whether the cursor differs from where it was at the previous input; `false` for any
