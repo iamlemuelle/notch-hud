@@ -233,6 +233,7 @@ async function scenarioFields() {
   const folder = async (cwd) => { await setReply(page, card({ cwd })); await fire(page, 'sessions', SUMMARY); await sleep(150); return (await field(page, 'Folder')).value; };
   check('F7 Folder: "/Users/lem" alone is "~"', (await folder('/Users/lem')) === '~', await field(page, 'Folder'));
   check('F8 Folder: a path outside /Users is shown as is', (await folder('/opt/work/tool')) === '/opt/work/tool', await field(page, 'Folder'));
+  check('F8b Folder: /Users/Shared is not a home folder', (await folder('/Users/Shared/x')) === '/Users/Shared/x', await field(page, 'Folder'));
 
   const words = [
     ['SessionStart', null, 'Started'], ['UserPromptSubmit', null, 'Got a prompt'], ['PreToolUse', 'Bash', 'Running Bash'],
@@ -301,6 +302,15 @@ async function scenarioRefetch() {
   check('X1 a sessions event refetches with the same id', calls.length === n0 + 1 && J(calls[calls.length - 1]) === J({ id: 'id-two' }), J(calls));
   check('X2 the card is redrawn from the reply', (await field(page, 'Status')).value === 'done' && /^Finished its turn/.test((await field(page, 'Last event')).value), J(await fields(page)));
 
+  // A `records` event (no payload, no `sessions` event) refetches and redraws: the newest event and the subagents change.
+  const nr = (await invokes(page, 'session_detail')).length;
+  await setReply(page, card({ status: 'done', event: 'PostToolUse', tool_name: 'Grep', agents: 2 }));
+  await fire(page, 'records', undefined);
+  await sleep(200);
+  const rcalls = await invokes(page, 'session_detail');
+  check('X1b a records event refetches with the same id', rcalls.length === nr + 1 && J(rcalls[rcalls.length - 1]) === J({ id: 'id-two' }), J(rcalls));
+  check('X2b the card is redrawn from the reply to a records event', /^Grep finished ?[45] s ago$/.test((await field(page, 'Last event')).value) && (await field(page, 'Subagents')).value === '2 running', J(await fields(page)));
+
   await setReply(page, null);
   await fire(page, 'sessions', SUMMARY);
   await sleep(250);
@@ -325,6 +335,19 @@ async function scenarioRefetch() {
   check('X8 back sends hit open', J(await lastSurface(page)) === J({ window: 'open', hit: 'open' }), J(await lastSurface(page)));
   const clip = parseClip(await clipOf(page));
   check('X9 back springs the clip to the open shape (420 x 342 for these rows)', clip && near(clip.w, 420, 0.6) && near(clip.h, 342, 0.6), J(clip));
+  await page.close();
+}
+
+async function scenarioRecordsOnList() {
+  const page = await openPage({ tag: 'records-list' });
+  await fire(page, 'sessions', SUMMARY);
+  await expand(page);
+  await fire(page, 'records', undefined);
+  await sleep(250);
+  check('K1 a records event while the list shows calls nothing', (await invokes(page, 'session_detail')).length === 0, J(await invokes(page, 'session_detail')));
+  await fire(page, 'records', null);
+  await sleep(100);
+  check('K2 ... also with a null payload', (await invokes(page, 'session_detail')).length === 0, J(await invokes(page, 'session_detail')));
   await page.close();
 }
 
@@ -377,7 +400,7 @@ async function scenarioReduced() {
   await page.close();
 }
 
-for (const s of [scenarioRows, scenarioOpen, scenarioFields, scenarioRefetch, scenarioCollapse, scenarioNull, scenarioReduced]) {
+for (const s of [scenarioRows, scenarioOpen, scenarioFields, scenarioRefetch, scenarioRecordsOnList, scenarioCollapse, scenarioNull, scenarioReduced]) {
   try { await s(); } catch (e) { check(`${s.name} ran`, false, e.stack || String(e)); }
 }
 await browser.close();

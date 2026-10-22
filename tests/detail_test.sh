@@ -1,6 +1,6 @@
 #!/bin/bash
 # End to end, on the real panel: a real click on the second session row opens its detail card (CONTRACT.md section 3
-# "Session detail" and section 4 "Detail card"). The click reaches the page (the app logs `page: detail <id>` for row
+# "Session detail" and section 4 "Detail card"). The click reaches the page (the app logs `page: detail <id> found` for row
 # 2's session), the frontmost app does not change, nothing is activated, and the window keeps its size, 452 x 396
 # (section 8, "Detail"), so showing the card never resizes it.
 #
@@ -86,7 +86,7 @@ out="$("$drive" click "$app" "$x_row2" "$y_row2" 2>&1)"; rc=$?
 if [ "$rc" -eq 2 ]; then echo "SKIP $out"; exit 2; fi
 [ "$rc" -ne 0 ] && { flunk "click row 2"; echo "$out"; }
 
-if wait_for "$applog" 5 'page: detail sess-work' "$am"; then pass "the app logged: page: detail sess-work"; else flunk "the app did not log: page: detail sess-work"; fi
+if wait_for "$applog" 5 'page: detail sess-work found' "$am"; then pass "the app logged: page: detail sess-work found"; else flunk "the app did not log: page: detail sess-work found"; fi
 if tail -n +$((am + 1)) "$applog" | grep -qF 'page: detail sess-perm'; then flunk "the click opened row 1 (sess-perm)"; fi
 if tail -n +$((am + 1)) "$applog" | grep -qF 'page: detail rejected'; then flunk "the page sent an id the app rejected"; fi
 sleep 0.8
