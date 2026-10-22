@@ -237,36 +237,16 @@ fn refresh_sessions(app: &AppHandle, dir: &Path) -> Option<u64> {
     next_wake(&records, now)
 }
 
-/// Why the sessions thread ran a refresh, as `$NOTCH_TRACE` logs it.
-#[derive(Clone, Copy)]
-enum Wake {
-    Start,
-    Event,
-    Deadline,
-    Rescan,
-}
-
-impl Wake {
-    fn name(self) -> &'static str {
-        match self {
-            Wake::Start => "start",
-            Wake::Event => "event",
-            Wake::Deadline => "deadline",
-            Wake::Rescan => "rescan",
-        }
-    }
-}
-
-/// How long to sleep before the next refresh, and what wakes it if no file event comes first: `deadline` (unix
+/// How long to sleep before the next refresh, and the trace cause if no file event comes first: `deadline` (unix
 /// seconds) when it is within `RESCAN`, else the rescan.
-fn wait_for(deadline: Option<u64>) -> (Duration, Wake) {
+fn wait_for(deadline: Option<u64>) -> (Duration, &'static str) {
     let until = deadline.and_then(|secs| {
         let at = UNIX_EPOCH.checked_add(Duration::from_secs(secs))?;
         Some(at.duration_since(SystemTime::now()).unwrap_or(Duration::ZERO))
     });
     match until {
-        Some(wait) if wait < RESCAN => (wait, Wake::Deadline),
-        _ => (RESCAN, Wake::Rescan),
+        Some(wait) if wait < RESCAN => (wait, "deadline"),
+        _ => (RESCAN, "rescan"),
     }
 }
 
@@ -282,27 +262,29 @@ fn watch_sessions(app: &AppHandle) {
         let _ = tx.send(());
     });
     let mut watching = false;
-    let mut wake = Wake::Start;
+    let mut wake = "start";
     loop {
         if !watching {
             let result = match watcher.as_mut() {
                 Ok(w) => w.watch(&dir, RecursiveMode::NonRecursive),
                 Err(e) => Err(notify::Error::generic(&e.to_string())),
             };
-            watching = result.is_ok();
-            if let (Err(e), true) = (result, trace_on()) {
-                eprintln!("watch: failed: {e}");
+            if let Err(e) = &result {
+                if trace_on() {
+                    eprintln!("watch: failed: {e}");
+                }
             }
+            watching = result.is_ok();
         }
         if trace_on() {
-            eprintln!("refresh: {}", wake.name());
+            eprintln!("refresh: {wake}");
         }
         let deadline = refresh_sessions(app, &dir);
         let (wait, timeout) = wait_for(deadline);
         wake = match rx.recv_timeout(wait) {
             Ok(()) => {
                 while rx.try_recv().is_ok() {}
-                Wake::Event
+                "event"
             }
             Err(_) => timeout,
         };

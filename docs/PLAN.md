@@ -24,7 +24,7 @@ Scope (2026-10-21): personal build, clickable panel, first wave of Now Playing, 
 | Session-shaped globals | `LATEST: Mutex<Option<Summary>>`, `EXPANDED_NOW` (`main.rs:58-59`) | Nowhere to keep other widgets' state |
 | Session-only wire format | `emit("sessions")` (`main.rs:115`), `sessions` command (`:124-127`), `render(s)` (`dist/index.html:36-57`) | The page can render nothing else |
 | Layout tied to rows | `44 + 22 * rows` (`main.rs:42-49`, `CONTRACT.md:143`) | No way to fit widgets of other heights |
-| Polling | 1 s loop (`main.rs:165-168`), 50 ms hover loop (`:159-163`) | Up to 1 s latency. 2.1-3.2 idle wake-ups/s (measured 2026-10-22 with `scripts/perf.sh`; macOS coalesces the timers, so not the 21/s the loops suggest) |
+| Polling | 1 s loop (`main.rs:165-168`), 50 ms hover loop (`:159-163`) | Up to 1 s latency. 2.1-3.5 idle wake-ups/s across runs (measured 2026-10-22 with `scripts/perf.sh`; macOS coalesces the timers, so not the 21/s the loops suggest) |
 | Instant resize | `setFrame_display` (`main.rs:82`), `display:none` (`dist/index.html:15-16`) | No animation possible |
 | No click path | hover is computed natively because the webview gets no mouse events (`main.rs:86-99`) | Controls have no route in |
 | Panic freezes the data | bare `thread::spawn` poll loop (`main.rs:165`) | A panic leaves stale rows with no sign of failure |
@@ -248,15 +248,15 @@ Every phase ends with `cargo test`, both `tests/*.sh` and `./check.sh` green, pl
 
 ## 7. Performance and reliability budgets
 
-`scripts/perf.sh` samples the release build for 60 s: the app pid plus WebKit `WebContent` processes that appear
-after launch (`pgrep` diff, [unverified attribution]).
+`scripts/perf.sh` samples a running build for 60 s: the app pid only. WebKit's `WebContent` process runs under
+launchd, not as the app's child, so it is not counted (attributing it is unsolved).
 
 | Metric | Budget | Measured by |
 |---|---|---|
 | Idle CPU (collapsed, pet asleep) | ≤ 0.5% of one core, 60 s average | `top -l 61 -s 1 -stats pid,cpu` |
 | CPU while expanding | ≤ 15% of one core, over 5 cycles | the same, while `check.swift` hovers |
 | Memory | ≤ 150 MB combined footprint | `footprint` per pid [unverified flags] |
-| Idle wake-ups | ≤ 5/s, target ≤ 1/s. Measured 2026-10-22, idle, side by side: 2.1/s on #8, 2.3/s once sessions are event-driven (within noise; `idlew` does not resolve the session thread, which `refresh:` traces show going from 1/s to 0.2/s) | `scripts/perf.sh` (`top -stats idlew`, app pid only, WebContent not counted) |
+| Idle wake-ups | ≤ 5/s, target ≤ 1/s. Measured 2026-10-22, idle, side by side: 2.1/s on #8, 2.3/s once sessions are event-driven (runs vary 2.1-3.5/s, so within noise). The 50 ms hover poll is most of it: the same build without it measured 0.25/s. The session thread itself goes from 1 to 0.2 wake-ups/s (`refresh:` trace) | `scripts/perf.sh` (`top -stats idlew`, app pid only, WebContent not counted) |
 | Event-to-pixel latency | p95 ≤ 300 ms | `check.swift` 7 |
 | Frame time | p95 ≤ 17.5 ms | `$NOTCH_TRACE` |
 | Hook cost | median ≤ 20 ms (14 ms today, `README.md:24-25`) | a 100-run timing loop in `tests/hook_test.sh` |
