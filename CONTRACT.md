@@ -331,7 +331,8 @@ has no prompt box: its slot stays empty.
     (whole numbers, rounded down; a future `event_ts` is `0 s ago`). It is redrawn every second while the card is
     shown and the phase is `expanded`.
 - While the card is shown, every `sessions` and every `records` event calls `session_detail` again with its id and
-  redraws the card from the reply. A null reply replaces the four rows with one muted 88 pt block reading `Session ended` (500 12 px); the
+  redraws the card from the reply. Such an event while a click's first reply is still pending sends that request again, and only
+  the reply to the latest request counts. A null reply replaces the four rows with one muted 88 pt block reading `Session ended` (500 12 px); the
   header keeps the back control and the last label. A later reply that is not null shows the rows again.
 - The back control shows the list. When the phase becomes `collapsed`, the list shows again, so the next expand
   starts on the list.

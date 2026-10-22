@@ -828,6 +828,7 @@
   let detailId = null; // the session the card shows, or null while the list shows
   let detailSeq = 0; // bumped by every request, back and reset: only the reply to the latest request is drawn
   let detailShown = null; // the Detail drawn, or null once the session ended
+  let openingId = null; // the row clicked whose first reply has not come yet
   let ageTimer = null;
   const openShape = () => detailId ? 'detail' : 'open';
   const EVENT_TEXT = {
@@ -903,20 +904,28 @@
       .then((d) => seq === detailSeq ? { d: d || null } : null, () => null);
   }
   function openDetail(id) {
+    openingId = id;
     detailRequest(id).then((r) => {
-      if (!r || !r.d) return;
+      if (!r) return;
+      openingId = null;
+      if (!r.d) return;
       detailId = id;
       drawDetail(r.d);
       showCard(true);
     });
   }
+  // An event while a card is opening asks again, so the card never opens on records older than the event.
   function refreshDetail() {
-    if (detailId === null) return;
+    if (detailId === null) {
+      if (openingId !== null) openDetail(openingId);
+      return;
+    }
     const id = detailId;
     detailRequest(id).then((r) => { if (r && detailId === id) drawDetail(r.d); });
   }
   function closeCard(instant) {
     detailSeq++;
+    openingId = null;
     if (detailId === null) return;
     detailId = null;
     detailShown = null;
