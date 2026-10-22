@@ -88,6 +88,8 @@ thread_local! {
     /// The cursor at the previous hover input.
     static LAST_CURSOR: Cell<Option<(f64, f64)>> = const { Cell::new(None) };
     static HOVER: Cell<Hover> = const { Cell::new(Hover::new()) };
+    /// A placement found the latch set with the button up; the next one that does releases it.
+    static NET_ARMED: Cell<bool> = const { Cell::new(false) };
     /// The tracking area on the panel's content view, replaced on every placement and every release.
     static AREA: RefCell<Option<Retained<NSTrackingArea>>> = const { RefCell::new(None) };
     /// The area's owner. AppKit does not retain it, so it lives here for the app's lifetime.
@@ -131,16 +133,13 @@ define_class!(
     }
 );
 
-/// Main thread only. An entered or exited queued for an area that has since been replaced is dropped. A moved
-/// carries no area (`-[NSEvent trackingArea]` raises for it), so it always counts.
+/// Main thread only. An entered or exited queued for an area that has since been replaced is applied as a moved,
+/// judged against the current hit rect. Only those two may be asked for their area: `-[NSEvent trackingArea]` raises
+/// for a moved.
 fn pointer(event: &NSEvent, input: Input) {
-    if input != Input::Moved {
-        let current = AREA.with(|a| a.borrow().as_ref().map(|area| Retained::as_ptr(area)));
-        if event.trackingArea().as_ref().map(|area| Retained::as_ptr(area)) != current {
-            return;
-        }
-    }
-    track_hover(input);
+    let current = AREA.with(|a| a.borrow().as_ref().map(|area| Retained::as_ptr(area)));
+    let stale = input != Input::Moved && event.trackingArea().as_ref().map(|area| Retained::as_ptr(area)) != current;
+    track_hover(if stale { Input::Moved } else { input });
 }
 
 impl HoverOwner {
@@ -282,10 +281,16 @@ fn track_hover(input: Input) {
     if matches!(input, Input::Placed | Input::Up) {
         track_area(frame, size, contains);
     }
-    // The net for an up the monitor never saw goes through the same deferred release as a real one.
-    if input == Input::Placed && hover.latched() && NSEvent::pressedMouseButtons() & 1 == 0 {
-        if let Some(mtm) = MainThreadMarker::new() {
-            release_soon(&HoverOwner::shared(mtm));
+    // The net for an up the monitor never saw: the button reads up before AppKit dispatches the real up, so only a
+    // second placement in a row that still finds it latched schedules the deferred release.
+    if input == Input::Placed {
+        let stuck = hover.latched() && NSEvent::pressedMouseButtons() & 1 == 0;
+        if stuck && NET_ARMED.replace(true) {
+            if let Some(mtm) = MainThreadMarker::new() {
+                release_soon(&HoverOwner::shared(mtm));
+            }
+        } else if !stuck {
+            NET_ARMED.set(false);
         }
     }
 }

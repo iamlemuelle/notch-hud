@@ -183,8 +183,9 @@ The app calls it before each `read_dir`.
     (`performSelectorOnMainThread:` with `waitUntilDone: false`), after the webview has passed the mouse-up on. So the
     page gets `pointerup` before the `hover` out a release outside emits. Applied in the monitor, the out came first
     and the page ended the seek drag without seeking (measured 2026-10-22: `tests/controls_test.sh` overshoot failed).
-  - over: `true` on entered or moved, `false` on exited, and on a placement, a down or an up whether
-    `hit_contains` holds for `NSEvent::mouseLocation()` against the hit rect.
+  - over: `true` on entered, `false` on exited, and on a moved, a placement, a down or an up whether `hit_contains`
+    holds for `NSEvent::mouseLocation()` against the hit rect (a superset of AppKit's half-open rect, so a moved from
+    the current area always counts as over).
   - moved: on entered or moved, whether the cursor differs from where it was at the previous entered, moved or
     exited; `false` for any other input. So a shape growing under a still cursor (a banner opening where the cursor rests) is not a hover,
     and moving within it afterwards is.
@@ -193,14 +194,17 @@ The app calls it before each `read_dir`.
     is applied; while it is latched `hover` stays true even when the cursor leaves, so a seek drag that overshoots the
     bar does not collapse the panel under the pointer. No other input unlatches: `NSEvent::pressedMouseButtons()` is
     the hardware state, already up before AppKit dispatches the mouse-up, so unlatching on it could still send the
-    out ahead of `pointerup`. As a net for an up the monitor never saw, a placement that finds the latch set and the
-    left button up (`pressedMouseButtons() & 1 == 0`) schedules the same deferred up. A press that starts anywhere
+    out ahead of `pointerup`. As a net for an up the monitor never saw, the deferred up is scheduled by the second
+    placement in a row that finds the latch set and the left button up (`pressedMouseButtons() & 1 == 0`); a real
+    up unlatches before the next placement, so the net never runs ahead of one. A missed up lasts at most two
+    rescans (10 s). A press that starts anywhere
     else (a window drag or a text selection passing over the notch) never reaches the monitor, is never latched and
     changes nothing.
-  - The owner ignores an entered or exited whose `trackingArea` is not the current area, so an event queued for a
-    replaced area cannot change the state. A moved carries no area: `-[NSEvent trackingArea]` raises for any other
-    event type, and an Objective-C exception there aborts the app (measured 2026-10-22: the motion check's 1 pt move
-    crashed it).
+  - An entered or exited whose `trackingArea` is not the current area (queued before a placement replaced it) is
+    applied as a moved, so it is judged against the current hit rect: it neither sets in outside the rect nor is
+    lost when the cursor came to rest inside it. A moved carries no area: `-[NSEvent trackingArea]` raises for any
+    other event type, and an Objective-C exception there aborts the app (measured 2026-10-22: the motion check's 1 pt
+    move crashed it).
   - After every placement and every up, the area is replaced by one for the current hit rect and panel frame, added
     with `AssumeInside` exactly when over was `true` at that input, so AppKit's idea of inside matches the state and
     an area appearing under a still cursor sends no `mouseEntered:`. The rescan places the panel every 5 s, so a
@@ -576,7 +580,7 @@ impl Hover {
 - `Hover::new()`: out, not latched, last value `false`. `latched()`: whether a press is latched now.
 - `step` applies one input (section 3). `contains`: `hit_contains` at the cursor; `moved`: the cursor differs from
   where it was at the previous pointer input; `hit`: the current hit shape. In order:
-  1. over: `true` for `Entered` and `Moved`, `false` for `Exited`, else `contains`.
+  1. over: `true` for `Entered`, `false` for `Exited`, else `contains`.
   2. in = `next_hover(in, over, moved && input is Entered or Moved)`.
   3. latch: `Down` while in and `hit != Pill` latches; `Up` unlatches; no other input changes it.
   4. the value is `in || latched`. Returns `Some(value)` when it differs from the last value returned (or from

@@ -28,13 +28,13 @@ impl Hover {
     /// Returns the new `hover` value when it changed. Only `Up` unlatches: the live button state is up before AppKit
     /// dispatches the release, so unlatching on it could send hover out ahead of the page's `pointerup`.
     pub fn step(&mut self, input: Input, contains: bool, moved: bool, hit: Shape) -> Option<bool> {
-        let pointer = matches!(input, Input::Entered | Input::Moved);
+        let motion = matches!(input, Input::Entered | Input::Moved);
         let over = match input {
-            Input::Entered | Input::Moved => true,
+            Input::Entered => true,
             Input::Exited => false,
-            Input::Down | Input::Up | Input::Placed => contains,
+            Input::Moved | Input::Down | Input::Up | Input::Placed => contains,
         };
-        self.hover_in = next_hover(self.hover_in, over, pointer && moved);
+        self.hover_in = next_hover(self.hover_in, over, motion && moved);
         match input {
             Input::Down if self.hover_in && hit != Shape::Pill => self.latched = true,
             Input::Up => self.latched = false,
