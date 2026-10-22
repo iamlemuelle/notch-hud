@@ -123,6 +123,8 @@ cd src-tauri && cargo test && cd ..   # status rules: grouping, priority, decay,
 ./tests/media_test.sh                 # Now Playing end to end on the bundled app: a fixture player through the real adapter, then the fallback
 ./tests/controls_test.sh              # real clicks on the controls drive the fixture player; the front app must not change
 ./tests/motion_test.sh                # the window grows on hover and for banners, and shrinks back to the pill
+./tests/avatar_test.sh                # --check-avatar, the avatar: log lines and mood traces on the real app, and the .gitignore rule
+./tests/avatar_schema_test.sh         # Rust's avatar parser against avatar-core 0.1.0 on a corpus of ~900 files (needs npm and the network)
 ./check.sh                            # end to end on the real screen, needs Screen Recording permission
 ```
 
