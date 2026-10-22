@@ -11,7 +11,7 @@ flunk() { echo "FAIL $1"; fail=1; }
 "$root/scripts/build-adapter.sh" >/dev/null || { echo "FAIL adapter build"; exit 2; }
 fixture_app="$("$root/tests/media/build-fixture.sh")" || { echo "FAIL fixture build"; exit 2; }
 fixture="$fixture_app/Contents/MacOS/NowPlayingFixture"
-(cd "$root/src-tauri" && cargo build --release -q) || { echo "FAIL app build"; exit 2; }
+"$root/scripts/build-app.sh" >/dev/null || { echo "FAIL app build"; exit 2; }
 
 tmp="$(mktemp -d)"
 export NOTCH_DIR="$tmp/sessions"
@@ -116,7 +116,7 @@ lines() { wc -l <"$1" | tr -d ' '; }
 # 1. Adapter path: a playing fixture shows up and disappears when it quits; a dead stream clears the track and
 # recovers; killing the app leaves no adapter process behind.
 log1="$tmp/app1.log"
-"$root/src-tauri/target/release/notch-hud" 2>"$log1" & app=$!
+"$root/src-tauri/target/notch-hud.app/Contents/MacOS/notch-hud" 2>"$log1" & app=$!
 "$fixture" "E2E Song" "E2E Artist" square 223 74 & player=$!
 playing='media: adapter ok playing "E2E Song" (dev.lem.notchhud.fixture)'
 if wait_for "$log1" 10 "$playing"; then pass "adapter reports the fixture"; else flunk "adapter reports the fixture"; fi
@@ -129,6 +129,8 @@ mark="$(lines "$log1")"
 "$fixture" "E2E Song" "E2E Artist" square 223 74 & player=$!
 wait_for "$log1" 10 "$playing" "$mark" || echo "note: fixture did not show again before the stream kill"
 spid="$(stream_pid "$app")"
+if [ -n "$spid" ] && ps -o command= -p "$spid" 2>/dev/null | grep -qF -- "/notch-hud.app/Contents/Resources/adapter/mediaremote-adapter.pl"; then
+  pass "adapter found inside the bundle"; else flunk "adapter found inside the bundle"; fi
 mark="$(lines "$log1")"
 if [ -n "$spid" ]; then kill -KILL "$spid" 2>/dev/null; else echo "note: no adapter stream process found under app $app"; fi
 if [ -n "$spid" ] && wait_for "$log1" 10 'media: adapter failed nothing' "$mark"; then pass "stream death clears the track"; else flunk "stream death clears the track"; fi
@@ -151,7 +153,7 @@ kill "$player" 2>/dev/null; wait "$player" 2>/dev/null; player=""
 
 # 2. Isolation: no adapter, the app keeps running and falls back to AppleScript.
 log2="$tmp/app2.log"
-NOTCH_MEDIA_ADAPTER=/nonexistent "$root/src-tauri/target/release/notch-hud" 2>"$log2" & app=$!
+NOTCH_MEDIA_ADAPTER=/nonexistent "$root/src-tauri/target/notch-hud.app/Contents/MacOS/notch-hud" 2>"$log2" & app=$!
 if wait_for "$log2" 10 'media: adapter Failed ('; then pass "missing adapter is logged"; else flunk "missing adapter is logged"; fi
 if wait_for "$log2" 10 'media: applescript '; then pass "fallback reports a state"; else flunk "fallback reports a state"; fi
 if kill -0 "$app" 2>/dev/null; then pass "app still running"; else flunk "app still running"; fi
@@ -162,7 +164,7 @@ kill "$app" 2>/dev/null; wait "$app" 2>/dev/null; app=""
 # after 5 s, logs it and stops the adapter, and nothing of the fake adapter stays alive.
 fake3="$(make_fake_adapter)"
 log3="$tmp/app3.log"
-NOTCH_MEDIA_ADAPTER="$fake3" "$root/src-tauri/target/release/notch-hud" 2>"$log3" & app=$!
+NOTCH_MEDIA_ADAPTER="$fake3" "$root/src-tauri/target/notch-hud.app/Contents/MacOS/notch-hud" 2>"$log3" & app=$!
 if wait_for "$log3" 12 'media: adapter Failed (test timed out'; then pass "test timeout is logged"; else flunk "test timeout is logged"; fi
 left3="$(wait_gone "$fake3" 8)"
 if [ -z "$left3" ]; then pass "test timeout stops the test client"; else
@@ -175,7 +177,7 @@ pkill -KILL -f -- "$fake3" 2>/dev/null
 # 4. App killed during test: the watchdog stops the adapter, including the test client in its own group.
 fake4="$(make_fake_adapter)"
 log4="$tmp/app4.log"
-NOTCH_MEDIA_ADAPTER="$fake4" "$root/src-tauri/target/release/notch-hud" 2>"$log4" & app=$!
+NOTCH_MEDIA_ADAPTER="$fake4" "$root/src-tauri/target/notch-hud.app/Contents/MacOS/notch-hud" 2>"$log4" & app=$!
 i=0
 while [ "$i" -lt 15 ]; do pgrep -f -- "$fake4/fake-child" >/dev/null && break; sleep 0.2; i=$((i + 1)); done
 if pgrep -f -- "$fake4/fake-child" >/dev/null; then pass "fake test client started"; else flunk "fake test client started"; fi

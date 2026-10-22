@@ -102,7 +102,7 @@ else
 fi
 
 # --- install: bad binaries ---
-MSG="notch-hud: build first: cd src-tauri && cargo build --release"
+MSG="notch-hud: build first: ./scripts/build-app.sh"
 for case_ in missing nonexec; do
   reset; rm -rf "$ROOT/agents"
   if [ "$case_" = missing ]; then bad="$ROOT/bin/nope"; else bad="$ROOT/bin/plain"; : > "$bad"; chmod -x "$bad"; fi
@@ -117,6 +117,31 @@ for case_ in missing nonexec; do
     for n in "exit 1" "stderr" "no plist" "no launchctl calls"; do fail "$name: $n" "script missing"; done
   fi
 done
+
+# --- install: default binary is the app bundle's executable (NOTCH_HUD_BIN unset) ---
+FAKE_REPO="$ROOT/repo"
+FAKE_INSTALL="$FAKE_REPO/scripts/install-login.sh"
+DEFAULT_BIN="$FAKE_REPO/src-tauri/target/notch-hud.app/Contents/MacOS/notch-hud"
+mkdir -p "$FAKE_REPO/scripts"
+if need_script "default binary" "$INSTALL"; then
+  cp "$INSTALL" "$FAKE_INSTALL"
+  reset; rm -rf "$ROOT/agents" "$FAKE_REPO/src-tauri"
+  mkdir -p "$(dirname "$DEFAULT_BIN")"
+  printf '#!/bin/sh\nexit 0\n' > "$DEFAULT_BIN"; chmod +x "$DEFAULT_BIN"
+  (unset NOTCH_HUD_BIN; run "$FAKE_INSTALL" "$PLIST")
+  check_eq "default bundle binary: exit 0" "$RC" "0"
+  check_eq "default bundle binary: ProgramArguments.0" "$(extract "$PLIST" ProgramArguments.0)" "$DEFAULT_BIN"
+
+  reset; rm -rf "$ROOT/agents" "$FAKE_REPO/src-tauri"
+  (unset NOTCH_HUD_BIN; run "$FAKE_INSTALL" "$PLIST")
+  check_eq "default bundle binary absent: exit 1" "$RC" "1"
+  check_eq "default bundle binary absent: stderr" "$(cat "$ROOT/err")" "$MSG"
+  check_eq "default bundle binary absent: no plist" "$([ -e "$PLIST" ] && echo present || echo absent)" "absent"
+  check_eq "default bundle binary absent: no launchctl calls" "$(calls)" ""
+else
+  for n in "exit 0" "ProgramArguments.0"; do fail "default bundle binary: $n" "script missing"; done
+  for n in "exit 1" "stderr" "no plist" "no launchctl calls"; do fail "default bundle binary absent: $n" "script missing"; done
+fi
 
 # --- install: binary path with & ---
 reset; rm -rf "$ROOT/agents"

@@ -665,3 +665,68 @@ fn apply_script_for_a_player_that_is_not_running_is_an_error() {
     let err = apply(&r).expect_err("must not run");
     assert!(err.contains("not running"), "{err}");
 }
+
+// ---- adapter_dir_for ----
+
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
+
+const BUNDLE_EXE: &str = "/Applications/notch-hud.app/Contents/MacOS/notch-hud";
+
+#[test]
+fn adapter_dir_env_wins_over_a_bundle_exe() {
+    assert_eq!(
+        adapter_dir_for(Some(OsStr::new("/custom/adapter")), Some(Path::new(BUNDLE_EXE))),
+        PathBuf::from("/custom/adapter")
+    );
+}
+
+#[test]
+fn adapter_dir_empty_env_is_ignored() {
+    assert_eq!(
+        adapter_dir_for(Some(OsStr::new("")), Some(Path::new(BUNDLE_EXE))),
+        PathBuf::from("/Applications/notch-hud.app/Contents/Resources/adapter")
+    );
+}
+
+#[test]
+fn adapter_dir_bundle_exe_uses_contents_resources() {
+    assert_eq!(
+        adapter_dir_for(None, Some(Path::new(BUNDLE_EXE))),
+        PathBuf::from("/Applications/notch-hud.app/Contents/Resources/adapter")
+    );
+}
+
+#[test]
+fn adapter_dir_dev_release_exe_uses_target_adapter() {
+    assert_eq!(
+        adapter_dir_for(None, Some(Path::new("/r/src-tauri/target/release/notch-hud"))),
+        PathBuf::from("/r/src-tauri/target/adapter")
+    );
+}
+
+#[test]
+fn adapter_dir_dev_debug_exe_uses_target_adapter() {
+    assert_eq!(
+        adapter_dir_for(None, Some(Path::new("/r/src-tauri/target/debug/notch-hud"))),
+        PathBuf::from("/r/src-tauri/target/adapter")
+    );
+}
+
+#[test]
+fn adapter_dir_macos_dir_not_under_contents_is_not_a_bundle() {
+    assert_eq!(
+        adapter_dir_for(None, Some(Path::new("/x/MacOS/notch-hud"))),
+        PathBuf::from("/adapter")
+    );
+}
+
+#[test]
+fn adapter_dir_without_exe_is_relative() {
+    assert_eq!(adapter_dir_for(None, None), PathBuf::from("adapter"));
+}
+
+#[test]
+fn adapter_dir_exe_without_grandparent_is_relative() {
+    assert_eq!(adapter_dir_for(None, Some(Path::new("notch-hud"))), PathBuf::from("adapter"));
+}
