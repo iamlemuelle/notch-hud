@@ -311,17 +311,12 @@ fn layout() -> Option<Layout> {
 }
 
 /// The page's window mode and hit shape (CONTRACT.md section 8). Serde rejects unknown values before this runs.
-/// Resolves once the panel has been placed, so the page can wait for a bigger window before animating into it.
+/// Synchronous, so Tauri runs it on the main thread in arrival order, and it returns once the panel is placed: the
+/// page waits for that before animating into a bigger window.
 #[tauri::command]
-async fn surface(app: AppHandle, window: WindowMode, hit: Shape) {
+fn surface(app: AppHandle, window: WindowMode, hit: Shape) {
     SURFACE.lock().unwrap_or_else(|e| e.into_inner()).set(window, hit);
-    let (done, placed) = std::sync::mpsc::channel();
-    let target = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        place(&target);
-        let _ = done.send(());
-    });
-    let _ = tauri::async_runtime::spawn_blocking(move || placed.recv_timeout(Duration::from_secs(1))).await;
+    place(&app);
 }
 
 fn main() {
