@@ -66,7 +66,7 @@ if [ ! -e "$sess" ]; then pass "--check-avatar does not start the app (no sessio
 else flunk "--check-avatar created $sess: it started the app"; fi
 
 # --- .gitignore -----------------------------------------------------------------------------------------------------
-for p in x.avatar.json tests/x.avatar.json src-tauri/avatar/mine.avatar.json deep/er/still/x.avatar.json; do
+for p in avatar.json some/dir/avatar.json x.avatar.json tests/x.avatar.json src-tauri/avatar/mine.avatar.json deep/er/still/x.avatar.json; do
   if (cd "$root" && git check-ignore -q "$p"); then pass "git ignores $p"; else flunk "git does not ignore $p"; fi
 done
 for p in src-tauri/avatar/default.avatar.json tests/avatar/fixtures/ball.json; do

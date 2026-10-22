@@ -11,12 +11,16 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 export PLAYWRIGHT_CORE="${PLAYWRIGHT_CORE:-/Users/lem/.npm/_npx/a1722018f28f9df2/node_modules/playwright-core}"
 export CHROMIUM="${CHROMIUM:-/Users/lem/Library/Caches/ms-playwright/chromium_headless_shell-1208/chrome-headless-shell-mac-arm64/chrome-headless-shell}"
 
+# Structural repository checks (no browser needed), so CI runs them with the page checks.
+"$root/tests/repo_test.sh"
+repo_rc=$?
+
 command -v node >/dev/null || { echo "SKIP node is not installed"; exit 2; }
 [ -d "$PLAYWRIGHT_CORE" ] || { echo "SKIP playwright-core not found at $PLAYWRIGHT_CORE (set PLAYWRIGHT_CORE)"; exit 2; }
 [ -x "$CHROMIUM" ] || { echo "SKIP headless chromium not found at $CHROMIUM (set CHROMIUM)"; exit 2; }
 [ -f "${NOTCH_PAGE:-$root/dist/index.html}" ] || { echo "FAIL no page at ${NOTCH_PAGE:-$root/dist/index.html}"; exit 1; }
 
-status=0
+status=$repo_rc
 node "$root/tests/page/motion-check.mjs"
 rc=$?
 [ "$rc" -eq 1 ] && status=1
