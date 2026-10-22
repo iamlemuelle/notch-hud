@@ -143,6 +143,43 @@ The app calls it before each `read_dir`.
 
 `$NOTCH_DIR` if set and non-empty, else `$HOME/.claude/notch/sessions`.
 
+### Session ids and `detail` (amendment, 2026-10-22)
+
+This amends the model above; where it differs, it wins.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Row { pub id: String, pub label: String, pub status: Status, pub detail: Option<String> }
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Detail {
+    pub id: String,
+    pub label: String,
+    pub cwd: String,
+    pub status: Status,
+    pub event: String,
+    pub event_ts: u64,
+    pub tool_name: Option<String>,
+    pub agents: usize,
+}
+
+pub fn valid_id(id: &str) -> bool;
+pub fn detail(records: &[Record], id: &str, now: u64) -> Option<Detail>;
+```
+
+- `Row.id` is the session's `session_id`.
+- `valid_id`: the hook's rule (section 1, step 1): non-empty and entirely `[A-Za-z0-9_-]`, anchored at both ends, so
+  a trailing newline is invalid.
+- `detail(records, id, now)`: `None` when no session that `summarize(records, now)` derives (steps 1 and 2, before
+  rows are truncated to `MAX_ROWS`) has `session_id == id`. Otherwise, for that session after superseding:
+  - `id`, `cwd` and `status` (after quiet decay) as `summarize` derives them;
+  - `label` as step 4 derives it among all sessions, so it equals the session's `Row.label` whenever it has a row;
+  - `event`, `event_ts` and `tool_name` from the newest record left in the group: the largest `ts`; on a tie, the
+    main-thread record, then the smallest `agent_id`;
+  - `agents`: how many records left in the group have `agent_id` set.
+
+  Pure: it reads no clock and no files.
+
 ## 3. App behavior
 
 - Startup: when no screen in `NSScreen::screens` has `safeAreaInsets().top > 0`, print `notch-hud: no notched display`
@@ -230,6 +267,11 @@ The app calls it before each `read_dir`.
   most), a "N more" row when `total` is larger, and the "No Claude Code sessions" row when there are none. The music block above the sessions
   is always there (it shows "Nothing playing" without a track), so the height does not depend on `Media`. This is the `open`
   shape of section 8's `Layout`.
+- Session detail (amendment, 2026-10-22): every sessions refresh also keeps the `records` it read and its `now`.
+  Command `session_detail(id: String) -> Option<Detail>`: when `valid_id(&id)` is false it returns `None` and, when
+  `$NOTCH_TRACE` is set and non-empty, logs `page: detail rejected` to stderr. Otherwise it logs `page: detail <id>`
+  under `$NOTCH_TRACE` and returns `detail(&records, &id, now)` with the records and `now` of the last refresh (`None`
+  before the first), so the card agrees with the list it was opened from.
 
 ## 4. UI (`dist/index.html`)
 
@@ -253,6 +295,43 @@ section 7 "App and UI" are its static part (no motion). Colors: text `#f5f5f5`, 
     `needs your input`, `error`, `working`, `done`, `waiting for you`.
   - when `total > rows.length`, one more muted row: `<total - rows.length> more`. With no sessions, one muted row:
     `No Claude Code sessions`.
+
+### Detail card (amendment, 2026-10-22)
+
+Visual reference: the [Sessions and Video prototype](https://claude.ai/artifact/W6jgY4nGA9NwnY7xYCbAcQ). This phase
+has no prompt box: its slot stays empty.
+
+- Each entry of `rows` is drawn as `<button type="button" class="srow" data-id="<row.id>">` with the content above,
+  no border, a transparent background, radius 6, and 6 pt of horizontal padding offset by -6 pt margins, so the
+  content keeps its place. The `N more` and `No Claude Code sessions` rows are not buttons.
+- A click on a row button calls `invoke('session_detail', { id })`. When the reply is not null and no other row or
+  the back control was clicked since, the session section is replaced by the card. A null reply leaves the list.
+- The card starts where the session section does (196 pt from the top, 16 pt in, 388 wide):
+  - header, 18 pt: a back control, `<button type="button" class="back" aria-label="Back to all sessions">`, with a
+    10 pt chevron and `Claude Code` (600 11 px muted), then the detail's `label` (600 11 px `#f5f5f5`, ellipsis);
+  - 4 pt, then four 22 pt rows: a 78 pt name column (500 11.5 px muted) and the value (500 12 px, ellipsis):
+
+    | Name | Value |
+    |---|---|
+    | `Status` | an 8 pt dot as the list row's, then the status text above, without a tool (`needs permission`); amber for `needs_permission`, `needs_input`, `error` |
+    | `Folder` | `cwd`, with a leading `/Users/<name>` shown as `~` |
+    | `Last event` | the event in words (below), then its age, muted tabular figures |
+    | `Subagents` | `<agents> running`, or `None` when 0 |
+
+  - Event words, with `<tool>` the `tool_name` or `a tool` when null: `SessionStart` `Started`; `UserPromptSubmit`
+    `Got a prompt`; `PreToolUse` `Running <tool>`; `PostToolUse` `<tool> finished`; `PostToolUseFailure`
+    `<tool> failed`; `PermissionRequest` `Asked to use <tool>`; `PermissionDenied` `Permission denied`;
+    `Notification` `Waiting for your answer`; `Stop` `Finished its turn`; `StopFailure` `Stopped with an error`; any
+    other event, its name.
+  - Age from `event_ts` and the page's clock: `<s> s ago` under 60 s, `<m> min ago` under an hour, else `<h> h ago`
+    (whole numbers, rounded down; a future `event_ts` is `0 s ago`). It is redrawn every second while the card is
+    shown and the phase is `expanded`.
+- While the card is shown, every `sessions` event calls `session_detail` again with its id and redraws the card from
+  the reply. A null reply replaces the four rows with one muted 88 pt block reading `Session ended` (500 12 px); the
+  header keeps the back control and the last label. A later reply that is not null shows the rows again.
+- The back control shows the list. When the phase becomes `collapsed`, the list shows again, so the next expand
+  starts on the list.
+- The list and the card crossfade in 120 ms linear (none with reduced motion).
 
 ## 5. Install
 
@@ -711,6 +790,28 @@ spring; `#banner` in like `#content`; closes after 2600 ms.
   back within `MAX_ROWS` stays quiet; the cost is that a brand-new session, or one past `MAX_ROWS`, shows none.
   The first such row in payload order is shown: `#bTitle` its label, `#bSub` its status text (section 4), `#bIcon` with
   an amber dot (needs or error) or a gray one (done); `#bannerBars` hidden and the art stays in the ear.
+
+### Detail (amendment, 2026-10-22)
+
+This amends the geometry and phases above for the session detail card (section 4, "Detail card"); where it differs, it
+wins.
+
+```rust
+pub struct Layout { pub stage: Size, pub pill: Size, pub peek: Size, pub banner: Size, pub open: Size, pub detail: Size, pub ear: f64 }
+pub enum Shape { Pill, Peek, Banner, Open, Detail }   // "detail" on the wire
+pub const DETAIL_HEIGHT: f64 = 380.0;
+```
+
+- `layout`: `detail` = (`EXPANDED_WIDTH`, `DETAIL_HEIGHT`). 380 = the music block (196), then the card: header 18,
+  4 pt, four 22 pt rows, 10 pt, the prompt box slot 34, 6 pt, the hint line 14, 10 pt. It depends on nothing else.
+- `shape_size(layout, Detail)` is `detail`.
+- `window_size(layout, Open)` is (`stage.width`, `max(open.height, detail.height) + MARGIN`), replacing
+  `open.height + MARGIN` above, so switching between the list and the card never resizes the window. With these
+  numbers the open window is always 452 × 396. `Surface::window_size` keeps its floor rule on top of this.
+- Page: while the card is shown, phase `expanded` has hit shape `detail` and its clip is the `detail` shape (radius
+  22); otherwise `open` as before. Showing the card or going back while expanded springs the clip to the other shape
+  (the spring of "Layout change while expanded") and calls `surface` with the new hit; the window mode stays `open`.
+  A `layout` event that changes `open.height` while the card is shown moves no clip.
 
 ## 9. App bundle (`scripts/build-app.sh`)
 
