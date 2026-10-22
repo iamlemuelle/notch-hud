@@ -842,7 +842,74 @@ async function scenarioFirstTrack() {
   await page.close();
 }
 
-const scenarios = [scenarioLayout, scenarioHover, scenarioSongBanner, scenarioWideBanner, scenarioSessionBanner, scenarioEar, scenarioRelayout, scenarioReduced, scenarioGrowWait, scenarioDroppedStart, scenarioRejected, scenarioStartup, scenarioArtUrl, scenarioFirstTrack];
+// ---- section 8, "peek | hover out" and "a mode counts as right only once a `surface` call for it has resolved" -------
+const REST_TF = /^(translateY\(4px\)|matrix\(1, 0, 0, 1, 0, 4\))$/;
+
+// Re-enter during the collapse, then leave from peek: the rest state is restored in full.
+async function scenarioUnpeek() {
+  const page = await openPage({ tag: 'unpeek' });
+  const sq = await art(page, 'square');
+  await fire(page, 'sessions', summary([row('paxiv', 'working')]));
+  await fire(page, 'media', media(track(sq)));
+  await sleep(700);
+  await fire(page, 'hover', true);
+  await sleep(950);
+  await fire(page, 'hover', false);
+  await sleep(270);
+  await fire(page, 'hover', true);
+  await sleep(100);
+  await fire(page, 'hover', false);
+  await sleep(250 + 120 + 300);
+  const s = await snap(page);
+  const at = (sel) => s.el[sel];
+  check('UP1 expanded, hover out, hover in during the collapse, hover out from peek: collapsed, #art back in the ear 18x18 at (326.5, 7), ears bright, layers at rest, window pill',
+    s.phase === 'collapsed' && boxIs(at('#art'), 326.5, 7, 18, 18) && !!at('#earBars') && near(at('#earBars').opacity, 1, 0.01)
+      && !!at('#content') && at('#content').opacity === 0 && REST_TF.test(at('#content').transform)
+      && !!at('#banner') && at('#banner').opacity === 0 && REST_TF.test(at('#banner').transform)
+      && s.vw === 305 && s.vh === 32,
+    J({ phase: s.phase, vw: s.vw, vh: s.vh, art: explain(at('#art')), earBars: explain(at('#earBars')), content: at('#content') && { op: at('#content').opacity, tf: at('#content').transform }, banner: at('#banner') && { op: at('#banner').opacity, tf: at('#banner').transform } }));
+  const t1 = await fire(page, 'hover', true);
+  await sleep(500);
+  const r = await rec(page);
+  const tf = trans(r, '#content', 'transform', t1)[0];
+  check('UP2 a fresh hover in after that: expanded, and #content\'s transform transition runs from translateY(4px)',
+    !!phaseAt(r, 'expanded', t1, t1 + 400) && !!tf && REST_TF.test(String(tf.from).trim()), J({ phases: r.phases.filter((p) => p.t >= t1).map((p) => [p.phase, gap(p.t, t1)]), tf }));
+  await fire(page, 'hover', false);
+  await waitPhase(page, 'collapsed', 2500);
+  await sleep(300);
+  await page.close();
+}
+
+// A grow still in flight: an expand that follows peek waits for the {open, peek} call to resolve.
+async function scenarioGrowInFlight() {
+  const page = await openPage({ tag: 'grow-in-flight' });
+  const sq = await art(page, 'square');
+  await fire(page, 'sessions', summary([row('paxiv', 'working')]));
+  await fire(page, 'media', media(track(sq)));
+  await sleep(700);
+  await page.evaluate(() => { window.__surfaceDelay = 200; });
+  const t0 = await fire(page, 'hover', true);
+  await sleep(110);
+  await fire(page, 'hover', false);
+  await sleep(60);
+  await fire(page, 'hover', true);
+  await sleep(1300);
+  const r = await rec(page);
+  const call = surfaceCalls(r, t0).find((x) => surfaceIs(x, 'open', 'peek'));
+  const springs = r.trans.filter((x) => x.sel === '#panel' && x.prop === 'clip-path' && x.run >= t0 - 2 && x.timing && x.timing.duration === SPRING.ms);
+  const first = springs[0];
+  const resolved = call && call.resolved;
+  const log = r.phases.filter((p) => p.t >= t0).map((p) => [p.phase, gap(p.t, t0)]);
+  check('GF1 hover in, out, in with the grow in flight: no 366 ms spring on #panel starts before the {open, peek} call resolved, and it starts within ~2 frames after',
+    !!call && resolved != null && !!first && first.run >= resolved - 2 && first.run - resolved <= 50, J({ resolved: gap(resolved, t0), springs: springs.map((x) => gap(x.run, t0)), phases: log }));
+  check('GF2 ... and the phase ends expanded', (await snap(page, [])).phase === 'expanded', J(log));
+  await fire(page, 'hover', false);
+  await waitPhase(page, 'collapsed', 2500);
+  await sleep(300);
+  await page.close();
+}
+
+const scenarios = [scenarioLayout, scenarioHover, scenarioSongBanner, scenarioWideBanner, scenarioSessionBanner, scenarioEar, scenarioRelayout, scenarioReduced, scenarioGrowWait, scenarioDroppedStart, scenarioRejected, scenarioStartup, scenarioArtUrl, scenarioFirstTrack, scenarioUnpeek, scenarioGrowInFlight];
 for (const s of scenarios) {
   try { await s(); } catch (e) { check(`${s.name} ran to the end`, false, e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : String(e)); }
 }
