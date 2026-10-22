@@ -245,6 +245,8 @@ const rec = async (page) => {
 const snap = (page, selectors = ELEMENTS) => page.evaluate((s) => window.__snap(s), selectors);
 const art = (page, kind) => page.evaluate((k) => window.__art[k], kind);
 const collectProps = async (page) => { (await page.evaluate(() => window.__animatedProps())).forEach((p) => seenProps.add(p)); };
+// Waits for every CSS transition to end (keyframe loops such as the equalizer bars never do, so they don't count).
+const waitTransitionsDone = (page, ms) => page.waitForFunction(() => document.getAnimations().every((a) => !(a instanceof CSSTransition) || a.playState !== 'running'), null, { timeout: ms, polling: 20 }).then(() => true, () => false);
 const waitPhase = (page, phase, ms) => page.waitForFunction((p) => document.body.dataset.phase === p, phase, { timeout: ms, polling: 20 }).then(() => true, () => false);
 
 const track = (art, over = {}) => ({ title: 'Low Tide Static', artist: 'Mara Venn', album: 'Fixture Album', app: 'Apple Music', bundle_id: 'com.apple.Music', playing: true, duration_ms: 223000, elapsed_ms: 74000, elapsed_at_ms: Date.now(), artwork: art, ...over });
@@ -924,6 +926,7 @@ async function scenarioUnpeek() {
   await sleep(100);
   await fire(page, 'hover', false);
   await sleep(250 + 120 + 300);
+  const rested = await waitTransitionsDone(page, 2000);
   const s = await snap(page);
   const at = (sel) => s.el[sel];
   check('UP1 expanded, hover out, hover in during the collapse, hover out from peek: collapsed, #art back in the ear 18x18 at (326.5, 7), ears bright, layers at rest, window pill',
@@ -931,7 +934,7 @@ async function scenarioUnpeek() {
       && !!at('#content') && at('#content').opacity === 0 && REST_TF.test(at('#content').transform)
       && !!at('#banner') && at('#banner').opacity === 0 && REST_TF.test(at('#banner').transform)
       && s.vw === 305 && s.vh === 32,
-    J({ phase: s.phase, vw: s.vw, vh: s.vh, art: explain(at('#art')), earBars: explain(at('#earBars')), content: at('#content') && { op: at('#content').opacity, tf: at('#content').transform }, banner: at('#banner') && { op: at('#banner').opacity, tf: at('#banner').transform } }));
+    J({ rested, phase: s.phase, vw: s.vw, vh: s.vh, art: explain(at('#art')), earBars: explain(at('#earBars')), content: at('#content') && { op: at('#content').opacity, tf: at('#content').transform }, banner: at('#banner') && { op: at('#banner').opacity, tf: at('#banner').transform } }));
   const t1 = await fire(page, 'hover', true);
   await sleep(500);
   const r = await rec(page);

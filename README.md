@@ -48,26 +48,50 @@ goes into Claude's context, which is why both are ruled out.
   `notch-hud: no notched display` and exits.
 - Rust (`brew install rustup`), and `jq` at `/usr/bin/jq`, which macOS ships.
 - `cmake` (`brew install cmake`) to build the Now Playing adapter.
+- The Tauri CLI, which builds the `.app`: `cargo install tauri-cli --version 2.12.1 --locked`.
 - Claude Code.
 
 ## Install
 
+The app runs as a signed bundle, `src-tauri/target/notch-hud.app`, so macOS keeps its permission grants (Automation
+for Music and Spotify) across rebuilds. That needs a self-signed code signing certificate, made once:
+
+1. Open Keychain Access (Spotlight: "Keychain Access").
+2. In the menu bar choose **Keychain Access > Certificate Assistant > Create a Certificate…**
+3. Set **Name** to `notch-hud Code Signing`, **Identity Type** to **Self Signed Root**, and **Certificate Type** to
+   **Code Signing**. Click **Create**, then **Continue** at the warning about self-signed certificates, then **Done**.
+4. Check that `security find-identity -p codesigning` lists `"notch-hud Code Signing"`.
+
+The first build asks whether `codesign` may use the key; click **Always Allow**. To use a certificate with another
+name, set `NOTCH_HUD_SIGN_IDENTITY` to that name. `NOTCH_HUD_SIGN_IDENTITY=-` signs ad hoc, for a machine without the
+certificate, but then macOS treats every build as a new app and asks for permissions again.
+
 ```sh
-cd src-tauri && cargo build --release && cd ..
-./scripts/build-adapter.sh         # builds the Now Playing adapter into src-tauri/target/adapter (needs cmake)
+./scripts/build-app.sh            # builds the adapter and the app, signs it: src-tauri/target/notch-hud.app
 ./scripts/install-hooks.sh        # registers the hook in ~/.claude/settings.json, after a backup
-./src-tauri/target/release/notch-hud &
+./scripts/install-login.sh        # starts the app now and at every login
 ```
+
+`build-app.sh` checks for the certificate before it builds anything. It signs a copy and swaps it in with a rename, so
+the login item never starts a half-built bundle. `codesign -d -r- src-tauri/target/notch-hud.app` prints the
+requirement macOS matches grants against; it stays the same from one build to the next.
 
 `install-hooks.sh` writes a uniquely named backup next to `settings.json` first. It keeps every other hook, keeps the
 file's permissions, follows a symlink, and running it twice registers each event once. `scripts/uninstall-hooks.sh`
 removes exactly what it added.
 
-To start the panel at login, run `./scripts/install-login.sh` after building. It writes
-`~/Library/LaunchAgents/com.lem.notch-hud.plist` and loads it now. launchd restarts the app after a crash but not after
-a clean exit, so a Mac without a notch doesn't relaunch it in a loop. Errors go to `~/Library/Logs/notch-hud.log`. After
-a rebuild, run `launchctl kickstart -k gui/$(id -u)/com.lem.notch-hud` to load the new binary.
-`./scripts/uninstall-login.sh` stops it and removes the plist.
+`install-login.sh` writes `~/Library/LaunchAgents/com.lem.notch-hud.plist`, pointing at
+`src-tauri/target/notch-hud.app/Contents/MacOS/notch-hud` (`NOTCH_HUD_BIN` overrides it), and loads it now. launchd
+restarts the app after a crash but not after a clean exit, so a Mac without a notch doesn't relaunch it in a loop.
+Errors go to `~/Library/Logs/notch-hud.log`. After a rebuild, run
+`launchctl kickstart -k gui/$(id -u)/com.lem.notch-hud` to load the new bundle; the build never restarts the app
+itself. `./scripts/uninstall-login.sh` stops it and removes the plist.
+
+The first time the adapter is not usable and the app falls back to AppleScript, macOS asks whether notch-hud may
+control Music (or Spotify). The answer sticks to the certificate, not to one build.
+
+For development, `cd src-tauri && cargo build --release` plus `./scripts/build-adapter.sh` still gives a plain binary
+at `src-tauri/target/release/notch-hud`, which finds the adapter in `src-tauri/target/adapter`.
 
 ## Tests
 
@@ -77,7 +101,8 @@ cd src-tauri && cargo test && cd ..   # status rules: grouping, priority, decay,
 ./tests/install_test.sh               # the installer against temp copies of settings.json
 ./tests/login_test.sh                 # the login item scripts against a fake launchctl
 ./tests/page_test.sh                  # the panel page in headless Chromium: motion timings, art move, banners, window calls
-./tests/media_test.sh                 # Now Playing end to end: a fixture player through the real adapter, then the fallback
+./tests/bundle_test.sh                # builds the signed app twice: Info.plist keys, adapter inside, same designated requirement
+./tests/media_test.sh                 # Now Playing end to end on the bundled app: a fixture player through the real adapter, then the fallback
 ./tests/controls_test.sh              # real clicks on the controls drive the fixture player; the front app must not change
 ./tests/motion_test.sh                # the window grows on hover and for banners, and shrinks back to the pill
 ./check.sh                            # end to end on the real screen, needs Screen Recording permission
@@ -87,6 +112,8 @@ CI (`.github/workflows/ci.yml`) runs the first five on macOS 15 for every pull r
 `page_test.sh` needs `playwright-core` and its headless Chromium shell; locally it uses the npx cache, or the paths in
 `PLAYWRIGHT_CORE` and `CHROMIUM`, and exits 2 (skipped) without them. `media_test.sh`, `controls_test.sh`,
 `motion_test.sh` and `check.sh` run only locally, because they launch the app, which exits without a notched display.
+`bundle_test.sh` and `media_test.sh` build the signed bundle, so they need the certificate from Install (or
+`NOTCH_HUD_SIGN_IDENTITY=-`, which skips the signature checks).
 `check.sh` also needs Screen Recording permission.
 
 `motion_test.sh` moves the real cursor (no clicks) onto the pill and away, and restores it at the end, so leave the

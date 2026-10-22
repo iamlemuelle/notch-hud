@@ -5,11 +5,11 @@ set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 label=com.lem.notch-hud
 plist="${1:-$HOME/Library/LaunchAgents/$label.plist}"
-bin="${NOTCH_HUD_BIN:-$root/src-tauri/target/release/notch-hud}"
+bin="${NOTCH_HUD_BIN:-$root/src-tauri/target/notch-hud.app/Contents/MacOS/notch-hud}"
 case "$bin" in /*) ;; *) bin="$PWD/$bin" ;; esac
 
 if [ ! -f "$bin" ] || [ ! -x "$bin" ]; then
-  echo "notch-hud: build first: cd src-tauri && cargo build --release" >&2
+  echo "notch-hud: build first: ./scripts/build-app.sh" >&2
   exit 1
 fi
 case "$bin" in *'&'* | *'<'* | *'>'*)
