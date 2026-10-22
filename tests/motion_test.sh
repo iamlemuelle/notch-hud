@@ -34,11 +34,11 @@ read -r notch_w notch_h < <("$drive" notch) || { echo "SKIP no notched display";
 read -r screen_x screen_y screen_w screen_h < <("$drive" screen) || { echo "SKIP no notched display"; exit 2; }
 
 # Window sizes of CONTRACT.md section 8 for this notch: pill = notch + 2 * 60 ears; banner = 380 + 2 * 16 wide and
-# banner height (notch + 46) + 16 tall; open = stage 452 wide, open height + 16 tall. The open height is
-# 196 + 18 + 4 + 22 * shown_rows + 14 whatever the media is, so one session row makes it 254.
+# banner height (notch + 46) + 16 tall; open = stage 452 wide, max(open height, detail height 380) + 16 tall. The open height is
+# 196 + 18 + 4 + 22 * shown_rows + 14 whatever the media is (254 for one row), so the window is always 396 tall.
 pill_w=$((notch_w + 120)); pill_h=$notch_h
 banner_w=412; banner_h=$((notch_h + 62))
-open_w=452; open_h=270
+open_w=452; open_h=396
 
 "$root/scripts/build-adapter.sh" >/dev/null || { echo "FAIL adapter build"; exit 2; }
 adapter_dir="$root/src-tauri/target/adapter"

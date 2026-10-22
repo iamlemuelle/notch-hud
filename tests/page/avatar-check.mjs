@@ -39,9 +39,11 @@ const LAYOUT = {
   peek: { width: 309, height: 36 },
   banner: { width: 380, height: 78 },
   open: { width: 420, height: 254 },
+  detail: { width: 420, height: 380 }, // section 8, Detail: (420, DETAIL_HEIGHT 380) whatever the rows
   ear: 60,
 };
-const WINDOW = { pill: { w: 305, h: 32 }, banner: { w: 412, h: 94 }, open: { w: 452, h: 270 } };
+// The open window is max(open, detail) + 16 = 396 high (section 8, Detail), 452 wide.
+const WINDOW = { pill: { w: 305, h: 32 }, banner: { w: 412, h: 94 }, open: { w: 452, h: 396 } };
 const PILL_L = 73.5;
 const CONTENT_L = 16;
 const AMBER = 'rgb(245, 166, 35)';

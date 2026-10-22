@@ -108,20 +108,22 @@ if let rep = collapsedRep {
 
 let home = CGEvent(source: nil)!.location
 move(CGPoint(x: b.midX, y: b.midY))
-// Four seeded sessions: the open window is 452 wide (420 + 2 * 16) and (196 + 18 + 4 + 22 * 4 + 14) + 16 tall.
+// Four seeded sessions: the open window is 452 wide (420 + 2 * 16) and max(open, detail) + 16 = 396 tall (CONTRACT.md
+// section 8, Detail); the open shape is 196 + 18 + 4 + 22 * 4 + 14 = 320 tall, so it ends above the window's bottom.
 let grown = waitFor { $0.height >= 250 }
-expect(grown?.height == 336 && grown?.width == 452, "4a. hover grows the window to 452x336 for 4 sessions (got \(grown?.size ?? .zero))")
+expect(grown?.height == 396 && grown?.width == 452, "4a. hover grows the window to 452x396 for 4 sessions (got \(grown?.size ?? .zero))")
 if let g = grown {
     usleep(300_000)
+    let shapeBottom = g.minY + 320
     let area = CGRect(x: g.midX - 260, y: 0, width: 520, height: g.height + 30)
     if let rep = shot(area, "shot-expanded.png") {
         var lit = 0
         for x in stride(from: g.minX + 34, to: g.maxX - 34, by: 1) {
-            for y in stride(from: g.maxY - 76, to: g.maxY - 28, by: 1) where brightness(rep, area.origin, CGPoint(x: x, y: y)) > 0.5 { lit += 1 }
+            for y in stride(from: shapeBottom - 60, to: shapeBottom - 12, by: 1) where brightness(rep, area.origin, CGPoint(x: x, y: y)) > 0.5 { lit += 1 }
         }
         let samples = Int((g.width - 68) * 48)
         expect(lit > 200 && lit < samples / 4, "5b. web UI reacted to hover: \(lit) bright text pixels of \(samples) in the detail area (> 200, < 1/4)")
-        let bg = brightness(rep, area.origin, CGPoint(x: g.minX + 24, y: g.maxY - 56))
+        let bg = brightness(rep, area.origin, CGPoint(x: g.minX + 24, y: shapeBottom - 40))
         expect(bg >= 0 && bg < 0.03, "5b. expanded panel is painted black, not see-through (brightness \(bg))")
     }
 }
