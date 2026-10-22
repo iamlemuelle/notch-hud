@@ -139,9 +139,12 @@ The app calls it before each `read_dir`.
   the main thread: compute the frame the panel should have now (notched screen looked up again, current window mode,
   section 8) and set it when it differs from the window's frame, so a display change moves the collapsed pill too.
   When the summary differs from the last one, emit `sessions` with the `Summary` as payload.
-- Hover: native cursor polling every 50 ms, emits `hover` (bool): whether the cursor is inside the hit rect, the shape
-  the page last reported with `surface` (section 8). A left-button press that the poll first sees
-  (`NSEvent::pressedMouseButtons() & 1` going from up to down) while the cursor is inside a hit rect other than `pill`
+- Hover: native cursor polling every 50 ms, emits `hover` (bool) when it changes. The cursor is "in" when it is inside
+  the hit rect, the shape the page last reported with `surface` (section 8), with these rules (`next_hover` in
+  `layout.rs`): it becomes in only on a poll where the cursor moved since the previous poll, so a shape growing under
+  a still cursor (a banner opening where the cursor rests) is not a hover; it becomes out on any poll where the cursor
+  is outside. A left-button press that the poll first sees
+  (`NSEvent::pressedMouseButtons() & 1` going from up to down) while the cursor is in a hit rect other than `pill`
   is latched until the button is up again; while it is latched `hover` stays true even when the cursor leaves, so a
   seek drag that overshoots the bar does not collapse the panel under the pointer. A press that starts anywhere else
   (a window drag or a text selection passing over the notch) is never latched and changes nothing.
@@ -422,6 +425,17 @@ pub const MARGIN: f64 = 16.0;
 pub fn layout(notch_width: f64, notch_height: f64, screen_height: f64, rows: usize, media_extra: f64) -> Layout;
 pub fn shape_size(layout: &Layout, shape: Shape) -> Size;
 pub fn window_size(layout: &Layout, mode: WindowMode) -> Size;
+
+/// What the page last asked for. `Surface::new()` is (Pill, Pill).
+pub struct Surface { pub window: WindowMode, pub hit: Shape, /* private: the open-height floor */ }
+impl Surface {
+    pub const fn new() -> Surface;
+    pub fn set(&mut self, window: WindowMode, hit: Shape);
+    pub fn window_size(&mut self, layout: &Layout) -> Size;
+}
+
+pub fn hit_contains(size: Size, center_x: f64, top: f64, x: f64, y: f64) -> bool;
+pub fn next_hover(was_in: bool, over: bool, moved: bool) -> bool;
 ```
 
 - `layout`: `pill` = (`notch_width + 2 * EAR`, `notch_height`); `peek` = `pill` + 4 in both; `banner` =
@@ -431,16 +445,21 @@ pub fn window_size(layout: &Layout, mode: WindowMode) -> Size;
   MARGIN`, `banner.height + MARGIN`); `Open` is (`stage.width`, `open.height + MARGIN`). The margin leaves room for
   the spring's overshoot.
 - Every rect (shape, hit, window) is centered horizontally on the notch's center with its top edge at the screen top.
+- `Surface::window_size`: `window_size(layout, self.window)`, except that while the mode stays `Open` the height never
+  drops below the tallest `Open` height it returned since the mode became `Open`, so a row disappearing mid-spring
+  never cuts the shape. `set` with a different window mode resets that floor; `set` with the same mode keeps it.
+- `hit_contains`: the point (AppKit coordinates, y up) is inside the rect of `size` centered on `center_x` whose top
+  edge is `top`: `|x - center_x| <= width / 2` and `top - height <= y <= top`, edges included.
+- `next_hover`: `false` when not `over`; else `was_in || moved` (section 3).
 
 ### Bridge
 
 - Command `layout` returns the current `Layout`. The app emits `layout` with it whenever it changes (row count, the
   media extra height, or the notched screen's geometry).
 - Command `surface` takes `{ window: WindowMode, hit: Shape }` (lowercase strings; an unknown value is rejected with
-  `Err`). It records both and places the panel on the main thread. The page is its only caller.
-- Window frame: `window_size(layout, mode)` for the recorded mode. While the mode stays `open`, the height never
-  drops below the largest `open` height since the mode became `open`, so a row disappearing mid-spring never cuts the
-  shape; any other mode change resets that. The frame is set only when it differs from the panel's frame.
+  `Err`). It records both with `Surface::set`, places the panel on the main thread, and resolves only after that
+  placement ran, so the page can wait for the bigger window. The page is its only caller.
+- Window frame: `Surface::window_size(layout)`, set only when it differs from the panel's frame.
 - Trace (`$NOTCH_TRACE`): `window: <pill|banner|open> <width>x<height>` each time the frame's size changes, and
   `hover: in` / `hover: out` each time `hover` is emitted.
 
@@ -515,12 +534,21 @@ pub fn window_size(layout: &Layout, mode: WindowMode) -> Size;
 ### Window
 
 - Grow before the shape needs the room: window `open` on entering `peek` or expanding from a banner; window `banner`
-  on entering `banner`.
+  on entering `banner`. When the window mode changes on the way in, the phase's animations (clip, art, layer, and
+  the phase's own timer) start one animation frame after the `surface` call resolves, not before; a later hover
+  change or phase change cancels that start. When the mode is already right, they start at once.
+- When a `surface` call rejects, the page sends the same (window, hit) pair again on its next phase change instead
+  of treating it as sent.
 - Shrink only after the shape is back: when the phase becomes `collapsed`, window `pill` is sent once no `clip-path`
   transition is running on `#panel`, on its `transitionend` (or at once when the clip changed without a transition).
   Re-entering before that cancels the shrink.
 - Effect: collapsed, the window is the pill exactly, so menu-bar clicks outside the visible shape go to the menu bar.
   The page never activates the app, so the frontmost app never changes.
+
+### Startup
+
+The page asks for `layout`, `media` and `sessions` once at load. A reply is ignored when an event of the same kind
+arrived first (it is older than the event), so a stale reply never counts as a change.
 
 ### Banners
 
@@ -531,7 +559,9 @@ spring; `#banner` in like `#content`; closes after 2600 ms.
   for the first media the page receives. `#bTitle` is the title; `#bSub` is `<artist>, on <app>` (`in` instead of `on`
   when the artwork is wide), or `<app>` with no artist. The art moves to the banner with the spring and back to the
   ear on close; `#bIcon` is hidden and `#bannerBars` shown.
-- **Session:** a `sessions` payload, not the first, with a row whose status differs from that label's status in the
-  previous payload (a new label counts as different) and is now `needs_permission`, `needs_input`, `error` or `done`.
+- **Session:** a `sessions` payload, not the first, with a row whose label was in the previous payload with a
+  different status and whose status is now `needs_permission`, `needs_input`, `error` or `done`. A label missing from
+  the previous payload never shows a banner, so a row that was relabeled (`· <id>` added or dropped) or that comes
+  back within `MAX_ROWS` stays quiet; the cost is that a brand-new session, or one past `MAX_ROWS`, shows none.
   The first such row in payload order is shown: `#bTitle` its label, `#bSub` its status text (section 4), `#bIcon` with
   an amber dot (needs or error) or a gray one (done); `#bannerBars` hidden and the art stays in the ear.
