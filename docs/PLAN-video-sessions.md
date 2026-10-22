@@ -16,7 +16,7 @@ Claude Code 2.1.308 CLI, Desktop's bundled 2.1.304), deleted afterwards; each is
 |---|---|---|
 | 1. Video player in the notch | **Possible with caveats** | `<video>` plays in a WKWebView inside a borderless non-activating `NSPanel` while the panel is not key and the app is inactive (measured: `currentTime` 1.92 → 5.08 s over 3 s, `key=false active=false`). It plays from a custom URL scheme that serves byte ranges (measured: `play()` resolved, `readyState` 4, about 200 small `Range:` requests for a 130 KB clip), which is how Tauri's asset protocol serves files (`tauri-2.12.4/src/protocol/asset.rs:99-128`). wry turns autoplay on by default (`wry-0.57.0/src/lib.rs:881`, `wkwebview/mod.rs:363-366`). Caveats: it needs the `protocol-asset` feature and `assetProtocol` config (a config change), the bigger window covers more of the menu bar while it is open, and **the browser video that Now Playing detects can't be played in the notch**: the adapter payload carries no media URL (measured keys: `album artist artworkData artworkMimeType bundleIdentifier contentItemIdentifier durationMicros elapsedTimeMicros playbackRate playing processIdentifier timestampEpochMicros title`) |
 | 2. Clickable sessions | **Possible** | Clicks already reach the page without activating the app (`main.rs:165-166`, `:636`, `CONTRACT.md` section 3 "Clicks", `tests/controls_test.sh`). The record holds everything the view shows: status, `cwd`, `event`, `tool_name`, `ts` (`session.rs:7-19`). The blocker is only that `Row` carries no session id (`session.rs:45-50`), so the amendment is to `CONTRACT.md` section 2, not the hook |
-| 3. Prompt box | **Possible with caveats** | Every Claude Code session binds a per-session inbox socket and exports its path to hooks as `CLAUDE_CODE_MESSAGING_SOCKET`. The docs name "when you want a script or hook to post into a session" as a use ([cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging#the-sessions-inbox-socket), [env vars](https://code.claude.com/docs/en/env-vars)). Measured: this Desktop session's environment has `CLAUDE_CODE_MESSAGING_SOCKET=/tmp/cc-socks/97149.sock`, so Desktop sessions bind one too. An idle session starts a turn with the message, and a busy one reads it between tool calls (docs). Caveats: **the message line format is undocumented** (open docs issues [anthropics/claude-code#103048](https://github.com/anthropics/claude-code/issues/103048), [#103123](https://github.com/anthropics/claude-code/issues/103123); plain text is reported to be ignored); the message arrives framed as coming from another session, not from you, so it can't approve a permission prompt; a session that bypasses permissions holds it for approval; the record needs a new `inbox` field (a `CONTRACT.md` section 1 amendment, measured at no cost to the hook); the panel needs a key-capable subclass (measured below). Not a hack: it is the documented inbox for local scripts, with one undocumented line. Phase 0 settles that line before any code |
+| 3. Prompt box | **Possible with caveats** | Every Claude Code session binds a per-session inbox socket and exports its path to hooks as `CLAUDE_CODE_MESSAGING_SOCKET`. The docs name "when you want a script or hook to post into a session" as a use ([cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging#the-sessions-inbox-socket), [env vars](https://code.claude.com/docs/en/env-vars)). Measured: this Desktop session's environment has `CLAUDE_CODE_MESSAGING_SOCKET=/tmp/cc-socks/97149.sock`, so Desktop sessions bind one too. An idle session starts a turn with the message, and a busy one reads it between tool calls (docs). Caveats: **the message line format is undocumented** (open docs issues [anthropics/claude-code#103048](https://github.com/anthropics/claude-code/issues/103048), [#103123](https://github.com/anthropics/claude-code/issues/103123); Phase 0 measured that a JSON user line is delivered and plain text is ignored, on 2.1.308); the message arrives framed as coming from another session, not from you, so it can't approve a permission prompt; a session that bypasses permissions holds it for approval; the record needs a new `inbox` field (a `CONTRACT.md` section 1 amendment, measured at no cost to the hook); the panel needs a key-capable subclass (measured below). Not a hack: it is the documented inbox for local scripts, with one undocumented line. Phase 0 settles that line before any code |
 
 ## 2. Current-state blockers
 
@@ -48,7 +48,7 @@ today's build. The webview accepts first mouse (`main.rs:636`).
 | Terminal scripting (Terminal `do script`, iTerm2 `write text`, `tmux send-keys`) | Each terminal's own API | Needs the tab's tty (not in the record; hooks have no controlling terminal per [hooks](https://code.claude.com/docs/en/hooks)), Automation permission per terminal, and types into the TUI mid-turn. No Desktop equivalent | Not planned |
 | Focus the host app and paste | Activate the app, then post ⌘V and Return | Needs Accessibility to post keys, overwrites your clipboard, races your typing, and can't pick a tab or a Desktop session | Rejected. **Focus only** (no paste) is the fallback in 3.3 |
 | Channels | An MCP server declared `claude/channel` pushes `notifications/claude/channel` ([channels reference](https://code.claude.com/docs/en/channels-reference)) | Fully documented, arrives as a `<channel>` tag, but every session must be started with `--dangerously-load-development-channels server:<name>` plus a confirmation dialog (research preview, custom servers aren't on the allowlist), interactive only, and one server per session. A Desktop Code-tab session can't take CLI flags [unverified] | Possible, but it changes how you start every session. Not chosen |
-| **Inbox socket** | Connect to the session's `CLAUDE_CODE_MESSAGING_SOCKET` and write one line | None to the transcript: the running session itself takes the message, queued mid-turn or as a new turn when idle (docs). It is framed as from another session: it can't answer a permission prompt or change settings. A receiving session in bypass mode holds it for approval; Desktop and `-p` sessions can't show that dialog and drop it after `dialogExpiry` (5 min) | **Chosen**, behind Phase 0 |
+| **Inbox socket** | Connect to the session's `CLAUDE_CODE_MESSAGING_SOCKET` and write one line | None to the transcript: the running session itself takes the message, queued mid-turn or as a new turn when idle (docs). It is framed as from another session: it can't answer a permission prompt or change settings. A receiving session in bypass mode holds it for approval; Desktop and `-p` sessions can't show that dialog and drop it after `dialogExpiry` (5 min) | **Chosen**. Phase 0 measured delivery in default mode and the documented hold in bypass mode |
 
 **Routing data.** Today's record (`session_id`, `cwd`) can't route. Proposed `CONTRACT.md` section 1 amendment, two
 nullable fields copied from the hook's environment:
@@ -161,19 +161,24 @@ page: invoke("prompt", {id, text}) ─▶ prompt::parse ─▶ prompt::route(rec
   pub struct Prompt { pub id: String, pub text: String } // parse_prompt: id rule, 1..=8000 chars after trim, no NUL
   pub enum Route { Inbox(PathBuf) }
   pub fn route(records: &[Record], id: &str) -> Result<Route, String>; // main-thread record; absolute path; < 104 bytes; one live record per socket
-  pub fn frame(text: &str) -> String;                    // one JSON line, Phase 0 decides the shape
+  pub fn frame(text: &str) -> String;                    // one JSON line, the shape Phase 0 measured
   pub fn send(path: &Path, line: &str) -> Result<(), String>; // lstat: a socket, our uid, not a symlink
   ```
 
-  `frame` will be `{"type":"user","message":{"role":"user","content":<text>}}\n` if Phase 0 confirms it; that shape
-  comes from community clients and the repro in #93720, not from Anthropic [unverified].
+  `frame` is `{"type":"user","message":{"role":"user","content":<text>}}\n`. Phase 0 measured it delivered from an
+  unrelated process (Claude Code 2.1.308); Anthropic still doesn't document it, so it can change in any release.
 - **Commands.** `prompt(id, text) -> Result<(), String>` off the main thread, like `act` (`main.rs:545-572`), with a
   `$NOTCH_TRACE` line `prompt: sent <id> <n> chars`, `prompt: rejected: <reason>` or `prompt: failed: <reason>`.
   `open_host(id)` for `Reach::HostOnly`: bring that app forward with `NSWorkspace` (cooperative activation from an
   inactive accessory app on macOS 27 [unverified]; the Phase 6 check decides).
-- **Delivery feedback.** The socket gives no acknowledgement (documented for channels; for the inbox [unverified]).
-  The page shows `Sent` when the write succeeds, then watches the row: a status change to `working` within 10 s
-  confirms it; otherwise `No reply yet. It may be waiting for approval in that session.`.
+- **Delivery feedback.** The socket gives no acknowledgement: it closes with zero bytes back for a delivered, a held
+  and an ignored line alike (measured). The page shows `Sent` when the write succeeds, then watches the row. A
+  delivered message fires `UserPromptSubmit` and then `Stop` (measured), so a status change to `working`, or a newer
+  record `ts`, within 10 s confirms it. Otherwise it shows `No reply yet. It may be waiting for approval in that
+  session.`
+- **Sessions with no inbox.** A session started with `--restricted` binds no inbox (measured: no
+  `CLAUDE_CODE_MESSAGING_SOCKET` in its hook environment), and neither does `--bare` (docs). Its record has
+  `inbox: null`, so it gets `Reach::HostOnly` or `Reach::None`.
 - **Page.** The prompt box sits in the detail card. Disabled with a reason when `reach` is `None` (`This session
   can't take messages`), and replaced by `Open <app>` for `HostOnly`.
 
@@ -243,6 +248,24 @@ with a temp `NOTCH_DIR` and kills only its own pids.
   in default mode and once in bypass mode, then once against a Desktop session the user picks.
 - **Exit:** if no line is delivered from a non-child process, #3 stops at the focus fallback (Phase 6), and Phases 4
   and 5 are dropped.
+- **Result (run 2026-10-22, Claude Code 2.1.308): passed for default mode, held in bypass mode as documented.**
+  Setup: `claude -p --input-format stream-json --output-format stream-json --verbose --model haiku
+  --setting-sources project --strict-mcp-config --settings <scratch>` in an empty temp directory with a stripped
+  environment, kept open on stdin so it stays idle like a live session. `--setting-sources project` keeps your user
+  settings and hooks out. The poster ran under `env -i`, with no auth line and no relation to the session's process.
+  Transcripts and scratch files were deleted afterwards.
+
+  | Mode | Line | Outcome | Hook events after the post |
+  |---|---|---|---|
+  | default | plain text | Ignored, no error, nothing back on the socket | none in 30 s |
+  | default | `{"type":"user","message":{"role":"user","content":"…"}}` | Delivered: a new turn started and replied | `UserPromptSubmit`, then `Stop`, within 2 s |
+  | bypass | plain text | Ignored | none in 30 s |
+  | bypass | the JSON line | Held: the session emitted `peer_message_hold` with `state: held`, `lane: socket`, `cause: no-mode-asserted` | none in 30 s |
+
+  Two more measurements: a delivered turn ran the same way twice (2 of 2 runs), and a `--restricted` session binds no
+  inbox at all (its hook environment has no `CLAUDE_CODE_MESSAGING_SOCKET`). `cause: no-mode-asserted` suggests the
+  line format can claim a permission class; notch-hud never claims one, for the same reason it never sends the token
+  (D4). Not run yet: the Desktop session from D1, which needs a session you pick.
 
 ### Phase 1: session ids and the detail view (#2)
 
@@ -317,7 +340,7 @@ with a temp `NOTCH_DIR` and kills only its own pids.
 
 | Risk | Evidence | Mitigation |
 |---|---|---|
-| The inbox line format changes or is never documented | #103048, #103123 open; plain text reported ignored | Phase 0 gate; `frame` in one function with literal tests; the 10 s "no reply yet" state makes a silent failure visible |
+| The inbox line format changes or is never documented | #103048, #103123 open; Phase 0 measured the line only on 2.1.308 | `frame` in one function with literal tests; a rerun of the Phase 0 script after Claude Code updates; `frame` in one function with literal tests; the 10 s "no reply yet" state makes a silent failure visible |
 | Messages to bypass-mode or Desktop sessions are held, then dropped after 5 min | Cross-session messaging, "Control inbound messages" | Show the hint; never send the token |
 | A prompt arrives as from another session, not from you | Same page, "How a session treats an incoming message" | Accepted (D2). Channels stays the documented alternative if the inbox line breaks |
 | Stale socket or pid reuse | Measured stale socket from 2026-10-20; `<pid>.sock` names | `route` refuses a socket two live records share; connection refused → `This session isn't reachable` |
