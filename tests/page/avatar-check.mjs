@@ -6,8 +6,8 @@
 // scene's head and eye paths.
 //
 // Fixtures: tests/avatar/fixtures/*.json (original definitions; expressions have distinct geometry).
-// Env: PLAYWRIGHT_CORE, CHROMIUM, NOTCH_PAGE as in tests/page_test.sh. Exit 0 when every check passes, 1 when one
-// fails, 2 when the browser cannot start.
+// Env: PLAYWRIGHT_CORE, CHROMIUM, NOTCH_PAGE, PAGE_CPU_THROTTLE as in tests/page_test.sh. Exit 0 when every check
+// passes, 1 when one fails, 2 when the browser cannot start.
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -136,6 +136,7 @@ async function openPage(opts = {}) {
   page.on('pageerror', (e) => pageErrors.push(`${tag}: pageerror: ${e.message}`));
   page.on('console', (m) => { if (m.type() === 'error' && !opts.expectErrors) pageErrors.push(`${tag}: console: ${m.text()}`); });
   if (opts.reduced) await page.emulateMedia({ reducedMotion: 'reduce' });
+  if (process.env.PAGE_CPU_THROTTLE) await (await page.context().newCDPSession(page)).send('Emulation.setCPUThrottlingRate', { rate: Number(process.env.PAGE_CPU_THROTTLE) });
   await page.exposeFunction('__setWindow', (w, h) => page.setViewportSize({ width: w, height: h }).catch(() => {}));
   await page.addInitScript(installBridge, {
     layout: LAYOUT, windows: WINDOW,
