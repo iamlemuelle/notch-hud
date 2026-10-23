@@ -5,6 +5,7 @@
 #
 # Exit 0 when every check passes, 1 when one fails, 2 when playwright-core or the headless shell is missing.
 # PLAYWRIGHT_CORE and CHROMIUM override the cached copies; NOTCH_PAGE overrides the page under test.
+# PAGE_CPU_THROTTLE=8 slows each page's CPU eightfold, to reproduce a loaded CI runner on a fast machine.
 set -u
 root="$(cd "$(dirname "$0")/.." && pwd)"
 

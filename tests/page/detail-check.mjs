@@ -3,8 +3,8 @@
 // shows, the refetch on every `sessions` event, `Session ended`, back, and the reset to the list on collapse. Every
 // expected value is a literal written from the contract text. Real time, no retries.
 //
-// Env: PLAYWRIGHT_CORE, CHROMIUM, NOTCH_PAGE as in tests/page_test.sh. Exit 0 when every check passes, 1 when one
-// fails, 2 when the browser cannot start.
+// Env: PLAYWRIGHT_CORE, CHROMIUM, NOTCH_PAGE, PAGE_CPU_THROTTLE as in tests/page_test.sh. Exit 0 when every check
+// passes, 1 when one fails, 2 when the browser cannot start.
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -90,6 +90,7 @@ async function openPage(opts = {}) {
   page.on('pageerror', (e) => pageErrors.push(`${tag}: pageerror: ${e.message}`));
   page.on('console', (m) => { if (m.type() === 'error') pageErrors.push(`${tag}: console: ${m.text()}`); });
   if (opts.reduced) await page.emulateMedia({ reducedMotion: 'reduce' });
+  if (process.env.PAGE_CPU_THROTTLE) await (await page.context().newCDPSession(page)).send('Emulation.setCPUThrottlingRate', { rate: Number(process.env.PAGE_CPU_THROTTLE) });
   await page.exposeFunction('__setWindow', (w, h) => page.setViewportSize({ width: w, height: h }).catch(() => {}));
   await page.addInitScript(installBridge, { layout: LAYOUT, windows: WINDOW });
   await page.goto('file://' + PAGE_FILE);
@@ -145,6 +146,17 @@ const fields = (page) => page.evaluate(() => [...document.querySelectorAll('#dRo
   color: kv.querySelector('dd') && kv.querySelector('dd').lastElementChild ? getComputedStyle(kv.querySelector('dd').lastElementChild).color : null,
 })));
 const field = async (page, name) => (await fields(page)).find((f) => f.name === name);
+// The Last event value and the page's clock in seconds, read together. The age is floor(page clock - event_ts) when the
+// card last drew it, which is at most one 1 s redraw ago, so it is the age now or one less. An age fixed from this
+// script's clock when the card was built is not: the steps between building and reading can take more than a second.
+const lastEvent = (page) => page.evaluate(() => {
+  const kv = [...document.querySelectorAll('#dRows .kv')].find((e) => (e.querySelector('dt') || {}).textContent === 'Last event');
+  return { value: kv ? kv.querySelector('dd').textContent.replace(/\s+/g, ' ').trim() : null, now: Date.now() / 1000 };
+});
+const ageIs = (got, words, eventTs) => {
+  const n = Math.max(0, Math.floor(got.now - eventTs));
+  return new RegExp(`^${words} ?(${Math.max(0, n - 1)}|${n}) s ago$`).test(got.value);
+};
 
 // Hover in and wait for the expanded phase and its spring.
 async function expand(page) {
@@ -219,13 +231,15 @@ async function scenarioFields() {
   const page = await openPage({ tag: 'fields' });
   await fire(page, 'sessions', SUMMARY);
   await expand(page);
-  await openCard(page, card({ status: 'needs_permission', event: 'PermissionRequest', tool_name: 'Edit' }));
+  const asked = card({ status: 'needs_permission', event: 'PermissionRequest', tool_name: 'Edit' });
+  await openCard(page, asked);
   const f = await fields(page);
+  const askedAge = await lastEvent(page);
   check('F1 four rows named Status, Folder, Last event, Subagents', J(f.map((x) => x.name)) === J(['Status', 'Folder', 'Last event', 'Subagents']), J(f));
   const status = f[0];
   check('F2 Status: "needs permission" without the tool, in amber', status && status.value === 'needs permission' && status.color === AMBER, J(status));
   check('F3 Folder: /Users/<name> shown as ~', f[1] && f[1].value === '~/dev/bravo', J(f[1]));
-  check('F4 Last event: the event words, then an age like "4 s ago"', f[2] && /^Asked to use Edit ?[45] s ago$/.test(f[2].value), J(f[2]));
+  check('F4 Last event: the event words, then an age like "4 s ago"', ageIs(askedAge, 'Asked to use Edit', asked.event_ts), J(askedAge));
   check('F5 Subagents: "2 running"', f[3] && f[3].value === '2 running', J(f[3]));
   const dot = await page.evaluate(() => !!document.querySelector('#dRows .kv .dot, #dRows .kv [class*="dot"]'));
   check('F6 the Status row carries a dot', dot, 'no dot element in the Status row');
@@ -244,11 +258,12 @@ async function scenarioFields() {
   ];
   const bad = [];
   for (const [event, tool_name, want] of words) {
-    await setReply(page, card({ event, tool_name }));
+    const reply = card({ event, tool_name });
+    await setReply(page, reply);
     await fire(page, 'sessions', SUMMARY);
     await sleep(120);
-    const got = (await field(page, 'Last event')).value;
-    if (!new RegExp(`^${want} ?[45] s ago$`).test(got)) bad.push(`${event}/${tool_name}: ${got}`);
+    const got = await lastEvent(page);
+    if (!ageIs(got, want, reply.event_ts)) bad.push(`${event}/${tool_name}: ${J(got)}`);
   }
   check('F9 Last event words for every event of the contract table', bad.length === 0, J(bad));
 
@@ -304,12 +319,14 @@ async function scenarioRefetch() {
 
   // A `records` event (no payload, no `sessions` event) refetches and redraws: the newest event and the subagents change.
   const nr = (await invokes(page, 'session_detail')).length;
-  await setReply(page, card({ status: 'done', event: 'PostToolUse', tool_name: 'Grep', agents: 2 }));
+  const grep = card({ status: 'done', event: 'PostToolUse', tool_name: 'Grep', agents: 2 });
+  await setReply(page, grep);
   await fire(page, 'records', undefined);
   await sleep(200);
   const rcalls = await invokes(page, 'session_detail');
   check('X1b a records event refetches with the same id', rcalls.length === nr + 1 && J(rcalls[rcalls.length - 1]) === J({ id: 'id-two' }), J(rcalls));
-  check('X2b the card is redrawn from the reply to a records event', /^Grep finished ?[45] s ago$/.test((await field(page, 'Last event')).value) && (await field(page, 'Subagents')).value === '2 running', J(await fields(page)));
+  const grepAge = await lastEvent(page);
+  check('X2b the card is redrawn from the reply to a records event', ageIs(grepAge, 'Grep finished', grep.event_ts) && (await field(page, 'Subagents')).value === '2 running', J({ grepAge, fields: await fields(page) }));
 
   await setReply(page, null);
   await fire(page, 'sessions', SUMMARY);
@@ -362,7 +379,8 @@ async function scenarioPendingOpen() {
     const later = card({ status: 'done', event: 'PostToolUse', tool_name: 'Grep', agents: 2 });
     await release(page, 1, later);
     await sleep(900);
-    check(`P3 ${kind}: the later request's reply draws the card`, (await vis(page, '#detail')).eff > 0.9 && /^Grep finished ?[45] s ago$/.test((await field(page, 'Last event')).value), J(await fields(page)));
+    const laterAge = await lastEvent(page);
+    check(`P3 ${kind}: the later request's reply draws the card`, (await vis(page, '#detail')).eff > 0.9 && ageIs(laterAge, 'Grep finished', later.event_ts), J({ laterAge, fields: await fields(page) }));
     await release(page, 0, early);
     await sleep(300);
     const f = await fields(page);

@@ -6,8 +6,8 @@
 // scene's head and eye paths.
 //
 // Fixtures: tests/avatar/fixtures/*.json (original definitions; expressions have distinct geometry).
-// Env: PLAYWRIGHT_CORE, CHROMIUM, NOTCH_PAGE as in tests/page_test.sh. Exit 0 when every check passes, 1 when one
-// fails, 2 when the browser cannot start.
+// Env: PLAYWRIGHT_CORE, CHROMIUM, NOTCH_PAGE, PAGE_CPU_THROTTLE as in tests/page_test.sh. Exit 0 when every check
+// passes, 1 when one fails, 2 when the browser cannot start.
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -97,12 +97,29 @@ function installBridge({ layout, windows, avatar, mood, holdMood, noCore }) {
     },
   };
   if (noCore) Object.defineProperty(window, 'AvatarCore', { configurable: false, get() { return undefined; }, set() {} });
+  // Each frame the page renders, with the playback state it rendered: the step, its phase and when that phase started
+  // on the page's playback clock, which keeps to the definition's schedule even when a timer fires late.
+  const renders = (window.__renders = []);
+  if (!noCore) {
+    let core;
+    Object.defineProperty(window, 'AvatarCore', {
+      configurable: true,
+      get() { return core; },
+      set(v) {
+        core = v && { ...v, renderAvatarFrame: (def, play, at, env) => {
+          renders.push({ t: now(), step: play.stepIndex, phase: play.phase, phaseStartedAt: play.phaseStartedAt });
+          return v.renderAvatarFrame(def, play, at, env);
+        } };
+      },
+    });
+  }
 
-  // One entry per observer callback that touched #avatar: a paint is one task, so one callback.
-  const mut = (window.__mut = { batches: [], records: 0 });
+  // One entry per observer callback that touched #avatar: a paint is one task, so one callback. `rendered` is how many
+  // frames had been rendered by then.
+  const mut = (window.__mut = { batches: [], rendered: [], records: 0 });
   new MutationObserver((ms) => {
     const hits = ms.filter((m) => { const n = m.target.nodeType === 1 ? m.target : m.target.parentElement; return n && n.closest && n.closest('#avatar'); });
-    if (hits.length) { mut.batches.push(now()); mut.records += hits.length; }
+    if (hits.length) { mut.batches.push(now()); mut.rendered.push(renders.length); mut.records += hits.length; }
   }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
 
   // Box relative to #stage, effective visibility, computed color.
@@ -136,6 +153,7 @@ async function openPage(opts = {}) {
   page.on('pageerror', (e) => pageErrors.push(`${tag}: pageerror: ${e.message}`));
   page.on('console', (m) => { if (m.type() === 'error' && !opts.expectErrors) pageErrors.push(`${tag}: console: ${m.text()}`); });
   if (opts.reduced) await page.emulateMedia({ reducedMotion: 'reduce' });
+  if (process.env.PAGE_CPU_THROTTLE) await (await page.context().newCDPSession(page)).send('Emulation.setCPUThrottlingRate', { rate: Number(process.env.PAGE_CPU_THROTTLE) });
   await page.exposeFunction('__setWindow', (w, h) => page.setViewportSize({ width: w, height: h }).catch(() => {}));
   await page.addInitScript(installBridge, {
     layout: LAYOUT, windows: WINDOW,
@@ -165,6 +183,15 @@ async function observe(page, ms) {
   const t0 = await nowOf(page);
   await sleep(ms);
   return page.evaluate((t) => window.__mut.batches.filter((b) => b >= t), t0);
+}
+// Like observe, with each batch's render count and the frames rendered in the window.
+async function observePaints(page, ms) {
+  const t0 = await nowOf(page);
+  await sleep(ms);
+  return page.evaluate((t) => ({
+    batches: window.__mut.batches.map((b, i) => ({ t: b, rendered: window.__mut.rendered[i] })).filter((b) => b.t >= t),
+    renders: window.__renders.filter((r) => r.t >= t),
+  }), t0);
 }
 // The keys seen, sampling every 40 ms for `ms`.
 async function seen(page, def, keys, ms) {
@@ -329,13 +356,19 @@ async function scenarioBudget() {
   let page = await openPage({ tag: 'budget' });
   await painted(page);
   await sleep(1200);
-  let b = await observe(page, 4000);
+  const paints = await observePaints(page, 4000);
+  let b = paints.batches.map((x) => x.t);
   const cs = clusters(b, 150);
   const tooLong = cs.filter((c) => c.end - c.start > 250 || c.n > 6);
-  const spacing = cs.slice(1).map((c, i) => c.start - cs[i].start);
+  // A hold is read on the page's playback clock, not from gaps in wall time: a transition frame whose timer fired late
+  // lands in the hold's wall time, and the next transition still starts on schedule.
+  const sameHold = (x, y) => x.phase === 'hold' && y.phase === 'hold' && x.step === y.step && x.phaseStartedAt === y.phaseStartedAt;
+  const holdTwice = paints.renders.slice(1).filter((r, i) => sameHold(paints.renders[i], r));
+  const unrendered = paints.batches.slice(1).filter((x, i) => x.rendered <= paints.batches[i].rendered);
   check('B1 a loop of 400 ms holds with 100 ms transitions: frames come in bursts (6 or more over 4 s), each at most 250 ms long',
     cs.length >= 6 && tooLong.length === 0, J({ bursts: cs.length, tooLong, total: b.length }));
-  check('B2 ... and nothing mutates during a hold: bursts start at least 400 ms apart', spacing.length > 0 && spacing.every((x) => x >= 400), J(spacing));
+  check('B2 ... and nothing mutates during a hold: no hold is painted twice, and every mutation comes with a rendered frame',
+    paints.renders.some((r) => r.phase === 'hold') && holdTwice.length === 0 && unrendered.length === 0, J({ renders: paints.renders.length, holdTwice, unrendered }));
   check('B3 ... never more than one frame per 50 ms (gaps of at least 45 ms)', b.length > 0 && minGap(b) >= 45, `min gap ${minGap(b)} over ${b.length}`);
   await page.close();
 
