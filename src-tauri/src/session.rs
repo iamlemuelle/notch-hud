@@ -16,6 +16,10 @@ pub struct Record {
     #[serde(default)]
     pub tool_name: Option<String>,
     pub ts: u64,
+    #[serde(default)]
+    pub inbox: Option<String>,
+    #[serde(default)]
+    pub host: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]

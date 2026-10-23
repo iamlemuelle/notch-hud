@@ -3,7 +3,9 @@
 // from the contract text, not from the page. A phase-timer check is never early by more than 10 ms, and may be late by
 // the event-loop lag measured in the page while the step ran (a probe chain of the same delays, started in the same
 // task as the event) plus 25 ms. A step after a window grow is timed from the frame after the grow's `surface` call
-// resolved, because that is when the contract starts its timer.
+// resolved, because that is when the contract starts its timer. Whether that start came in the first frame after the
+// resolve is read from the page's write of the clip, not from `transitionrun`: Chromium delivers that event one to
+// three frames after the write, so its wall time says how busy the machine was, not when the page started.
 //
 // The fake bridge answers `layout`, `media`, `sessions`, `act` and `surface`. `surface` is recorded with the page's
 // clock and then resizes the viewport to the contract's `window_size` of the requested mode, standing in for Rust.
@@ -12,7 +14,8 @@
 // and target value.
 //
 // Env: PLAYWRIGHT_CORE (path to playwright-core), CHROMIUM (path to a headless chromium), NOTCH_PAGE (page to load,
-// default dist/index.html). Exit 0 when every check passes, 1 when one fails, 2 when the browser cannot start.
+// default dist/index.html), PAGE_CPU_THROTTLE (slow the page's CPU by this factor, as a loaded CI runner does).
+// Exit 0 when every check passes, 1 when one fails, 2 when the browser cannot start.
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -86,6 +89,10 @@ function installBridge({ layout, windows, holdLayout, initial, avatar }) {
   const rec = (window.__rec = { events: [], surfaces: [], phases: [], trans: [], resizes: [], invokes: [] });
   const handlers = {};
   const now = () => performance.now();
+  // The surface calls (indexes into rec.surfaces) whose first animation frame after resolving is running now: set by a
+  // rAF callback queued at the resolve, ahead of any the page queues, and cleared by a task, which runs after the frame.
+  // It requests no frames of its own, so it does not change how often the page gets one.
+  const firstFrameOf = new Set();
   // `chain` is a list of delays: probe timers with the same chained delays start at this moment, so the lateness of
   // each hop (cumulative, like the page's own timer chain) says how slow the event loop was while the step ran.
   window.__probes = {};
@@ -126,7 +133,7 @@ function installBridge({ layout, windows, holdLayout, initial, avatar }) {
         if (cmd === 'avatar') return Promise.resolve({ source: 'default', definition: avatar });
         if (cmd === 'mood') return Promise.resolve({ mood: 'idle', animations: ['idle'], still: false });
         if (cmd === 'surface') {
-          const entry = { t: now(), args: JSON.parse(JSON.stringify(args ?? null)), resolved: null, rejected: false };
+          const entry = { t: now(), args: JSON.parse(JSON.stringify(args ?? null)), resolved: null, rejected: false, i: rec.surfaces.length };
           rec.surfaces.push(entry);
           const at = window.__reject.indexOf(args && args.window + ' ' + args.hit);
           if (at >= 0) {
@@ -139,7 +146,11 @@ function installBridge({ layout, windows, holdLayout, initial, avatar }) {
             entry.grew = !!w && (innerWidth !== w.w || innerHeight !== w.h);
             if (w) await window.__setWindow(w.w, w.h);
             entry.resolved = now();
-            requestAnimationFrame(() => { entry.frame = now(); });
+            requestAnimationFrame(() => {
+              entry.frame = now();
+              firstFrameOf.add(entry.i);
+              setTimeout(() => firstFrameOf.delete(entry.i), 0);
+            });
             resolve(null);
           }, window.__surfaceDelay));
         }
@@ -160,6 +171,19 @@ function installBridge({ layout, windows, holdLayout, initial, avatar }) {
     });
   }).observe(document, { attributes: true, attributeFilter: ['data-phase'], attributeOldValue: true, subtree: true });
   document.addEventListener('DOMContentLoaded', () => { if (phaseNow()) rec.phases.push({ phase: phaseNow(), t: now() }); });
+
+  // Clip writes: each change of #panel's inline clip-path, with the surface calls whose first frame after resolving it
+  // was made in.
+  rec.clips = [];
+  document.addEventListener('DOMContentLoaded', () => {
+    const panel = document.querySelector('#panel');
+    let last = panel.style.clipPath;
+    new MutationObserver(() => {
+      if (panel.style.clipPath === last) return;
+      last = panel.style.clipPath;
+      rec.clips.push({ t: now(), firstFrameOf: [...firstFrameOf], clip: last, transition: panel.style.transition });
+    }).observe(panel, { attributes: true, attributeFilter: ['style'] });
+  });
 
   window.addEventListener('resize', () => rec.resizes.push({ t: now(), w: innerWidth, h: innerHeight }));
 
@@ -229,6 +253,7 @@ async function openPage(opts = {}) {
   page.on('pageerror', (e) => pageErrors.push(`${tag}: pageerror: ${e.message}`));
   page.on('console', (m) => { if (m.type() === 'error') pageErrors.push(`${tag}: console: ${m.text()}`); });
   if (opts.reduced) await page.emulateMedia({ reducedMotion: 'reduce' });
+  if (process.env.PAGE_CPU_THROTTLE) await (await page.context().newCDPSession(page)).send('Emulation.setCPUThrottlingRate', { rate: Number(process.env.PAGE_CPU_THROTTLE) });
   await page.exposeFunction('__setWindow', (w, h) => page.setViewportSize({ width: w, height: h }).catch(() => {}));
   await page.addInitScript(installBridge, { layout: LAYOUT, windows: WINDOW, holdLayout: !!opts.holdLayout, initial: opts.initial || null, avatar: AVATAR });
   await page.goto('file://' + PAGE_FILE);
@@ -238,7 +263,10 @@ async function openPage(opts = {}) {
 
 const fire = (page, name, payload, chain = null) => page.evaluate(([n, p, c]) => window.__fire(n, p, c), [name, payload, chain]);
 // The probe lateness recorded for the event fired at `t` with a chain: { lags: [ms late after each hop], frame }.
+// Its last hop can run just before the page's own last step, so it waits up to 2 s for the probe's frame.
 const probeOf = async (page, t) => {
+  const done = (k) => { const p = window.__probes[k]; return !!p && p.lags.length === p.chain.length && p.frame != null; };
+  await page.waitForFunction(done, t, { timeout: 2000, polling: 20 }).catch(() => {});
   const p = await page.evaluate((k) => window.__probes[k] || null, t);
   if (!p || p.lags.length !== p.chain.length || p.frame == null) throw new Error(`probe for the event at ${t} did not finish: ${J(p)}`);
   return { lags: p.lags, frameLate: Math.max(0, Math.round(p.frame - 17)) };
@@ -718,6 +746,12 @@ async function scenarioReduced() {
 // ---- section 8, "Window": a start waits for the grown window ---------------------------------------------------------
 const clipFrom = (r, from) => trans(r, '#panel', 'clip-path', from)[0];
 const gap = (a, b) => (a == null || b == null ? null : Math.round(a - b));
+// The first write of #panel's clip from `from` on, and whether it is a transition of `ms` that the page made in the first
+// animation frame after the `surface` call resolved (CONTRACT.md section 8, "Window": one frame after, not before).
+const firstWrite = (r, from) => r.clips.find((c) => c.t >= from - 2);
+const startsOneFrameAfter = (w, call, ms) => !!w && !!call && call.resolved != null && w.t >= call.resolved
+  && w.firstFrameOf.includes(call.i) && new RegExp(`^clip-path ${ms}ms `).test(w.transition);
+const writeLog = (w, call, from) => w && call && { at: gap(w.t, from), call: call.i, firstFrameOf: w.firstFrameOf, transition: w.transition };
 
 async function scenarioGrowWait() {
   const page = await openPage({ tag: 'grow-wait' });
@@ -733,8 +767,9 @@ async function scenarioGrowWait() {
   const r = await rec(page);
   const call = surfaceCalls(r, t0).find((x) => surfaceIs(x, 'open', 'peek'));
   const clip = clipFrom(r, t0);
-  check('G1 peek: no clip-path transition starts before the open/peek surface call resolved, and one starts within ~2 frames after',
-    !!call && call.resolved != null && !!clip && clip.run >= call.resolved && clip.run - call.resolved <= 50, J({ resolved: call && gap(call.resolved, t0), clipRun: clip && gap(clip.run, t0) }));
+  const write = firstWrite(r, t0);
+  check('G1 peek: no clip-path transition starts before the open/peek surface call resolved, and the page starts the 120 ms clip in the first frame after',
+    !!call && call.resolved != null && !!clip && clip.run >= call.resolved && startsOneFrameAfter(write, call, 120), J({ resolved: call && gap(call.resolved, t0), clipRun: clip && gap(clip.run, t0), write: writeLog(write, call, t0) }));
   check('G2 peek: the viewport is already the grown size 452x396 when the clip starts', !!clip && clip.vw === 452 && clip.vh === 396 && !clipIs(clip.to, 'peek'), J({ vw: clip && clip.vw, vh: clip && clip.vh, to: clip && clip.to }));
   const exp = phaseAt(r, 'expanded', t0, t0 + 900);
   check('G3 peek: the page still expands (hover held) and the window ends open', !!exp && (await snap(page, [])).vw === 452, J({ exp: exp && gap(exp.t, t0) }));
@@ -750,8 +785,9 @@ async function scenarioGrowWait() {
   const rb = await rec(page);
   const bcall = surfaceCalls(rb, tB).find((x) => surfaceIs(x, 'banner', 'banner'));
   const bclip = clipFrom(rb, tB);
-  check('G5 banner: no clip-path transition starts before the banner/banner surface call resolved, and one starts within ~2 frames after',
-    !!bcall && bcall.resolved != null && !!bclip && bclip.run >= bcall.resolved && bclip.run - bcall.resolved <= 50, J({ resolved: bcall && gap(bcall.resolved, tB), clipRun: bclip && gap(bclip.run, tB) }));
+  const bwrite = firstWrite(rb, tB);
+  check('G5 banner: no clip-path transition starts before the banner/banner surface call resolved, and the page starts the clip spring in the first frame after',
+    !!bcall && bcall.resolved != null && !!bclip && bclip.run >= bcall.resolved && startsOneFrameAfter(bwrite, bcall, SPRING.ms), J({ resolved: bcall && gap(bcall.resolved, tB), clipRun: bclip && gap(bclip.run, tB), write: writeLog(bwrite, bcall, tB) }));
   check('G6 banner: the viewport is already the banner window 412x94 when the clip starts', !!bclip && bclip.vw === 412 && bclip.vh === 94 && !clipIs(bclip.to, 'banner'), J({ vw: bclip && bclip.vw, vh: bclip && bclip.vh, to: bclip && bclip.to }));
   await waitPhase(page, 'collapsing', 3600);
   const rc = await rec(page);
@@ -975,8 +1011,9 @@ async function scenarioGrowInFlight() {
   const first = springs[0];
   const resolved = call && call.resolved;
   const log = r.phases.filter((p) => p.t >= t0).map((p) => [p.phase, gap(p.t, t0)]);
-  check('GF1 hover in, out, in with the grow in flight: no 366 ms spring on #panel starts before the {open, peek} call resolved, and it starts within ~2 frames after',
-    !!call && resolved != null && !!first && first.run >= resolved - 2 && first.run - resolved <= 50, J({ resolved: gap(resolved, t0), springs: springs.map((x) => gap(x.run, t0)), phases: log }));
+  const write = firstWrite(r, t0);
+  check('GF1 hover in, out, in with the grow in flight: no 366 ms spring on #panel starts before the {open, peek} call resolved, and the page starts it in the first frame after',
+    !!call && resolved != null && !!first && first.run >= resolved - 2 && startsOneFrameAfter(write, call, SPRING.ms), J({ resolved: gap(resolved, t0), springs: springs.map((x) => gap(x.run, t0)), write: writeLog(write, call, t0), phases: log }));
   check('GF2 ... and the phase ends expanded', (await snap(page, [])).phase === 'expanded', J(log));
   await fire(page, 'hover', false);
   await waitPhase(page, 'collapsed', 2500);

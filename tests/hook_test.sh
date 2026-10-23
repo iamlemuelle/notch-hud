@@ -5,6 +5,10 @@ HOOK="$HERE/../hooks/notch-hook.sh"
 ROOT="$(mktemp -d)"
 trap 'chmod -R u+rwx "$ROOT" 2>/dev/null; rm -rf "$ROOT"' EXIT
 
+# The suite may itself run inside a Claude Code session: start every case from an environment without the two
+# variables the hook copies into inbox and host, and set them per case.
+unset CLAUDE_CODE_MESSAGING_SOCKET __CFBundleIdentifier
+
 FAILS=0
 pass() { echo "PASS: $1"; }
 fail() { echo "FAIL: $1 -- $2"; FAILS=$((FAILS + 1)); }
@@ -38,13 +42,13 @@ if check_quiet "$NAME"; then
   F="$D/abc123.json"
   if [ ! -f "$F" ]; then fail "$NAME" "no $F"
   else
-    GOT="$(jq -c '{session_id,agent_id,cwd,event,notification_type,tool_name}' "$F" 2>&1)"
-    WANT='{"session_id":"abc123","agent_id":null,"cwd":"/Users/lem/bianki","event":"PermissionRequest","notification_type":null,"tool_name":"Bash"}'
+    GOT="$(jq -c '{session_id,agent_id,cwd,event,notification_type,tool_name,inbox,host}' "$F" 2>&1)"
+    WANT='{"session_id":"abc123","agent_id":null,"cwd":"/Users/lem/bianki","event":"PermissionRequest","notification_type":null,"tool_name":"Bash","inbox":null,"host":null}'
     TS_OK="$(jq -r --argjson b "$BEFORE" --argjson a "$AFTER" '(.ts|type=="number") and (.ts==(.ts|floor)) and .ts>=$b and .ts<=$a' "$F" 2>&1)"
     KEYS="$(jq -c 'keys' "$F" 2>&1)"
     if [ "$GOT" != "$WANT" ]; then fail "$NAME" "got $GOT"
     elif [ "$TS_OK" != "true" ]; then fail "$NAME" "ts not integer in [$BEFORE,$AFTER]: $(cat "$F")"
-    elif [ "$KEYS" != '["agent_id","cwd","event","notification_type","session_id","tool_name","ts"]' ]; then fail "$NAME" "keys $KEYS"
+    elif [ "$KEYS" != '["agent_id","cwd","event","host","inbox","notification_type","session_id","tool_name","ts"]' ]; then fail "$NAME" "keys $KEYS"
     else pass "$NAME"; fi
   fi
 fi
@@ -312,6 +316,71 @@ RC=$?
 NAME="missing jq is quiet, exit 0"
 if PATH="$NOJQ" command -v jq >/dev/null 2>&1; then echo "SKIP: $NAME (jq still on PATH)"
 elif check_quiet "$NAME"; then pass "$NAME"; fi
+
+# 28. inbox and host are copied from the environment: set gives the string, unset or empty gives null
+# field_case <name> <want inbox,host as JSON> [VAR=value ...]
+field_case() {
+  NAME="$1"; WANT="$2"; shift 2
+  D="$(new_dir)"
+  OUT="$(printf '%s' '{"session_id":"ib","cwd":"/a","hook_event_name":"Stop"}' | env "$@" NOTCH_DIR="$D" "$HOOK" 2>&1)"
+  RC=$?
+  if check_quiet "$NAME"; then
+    GOT="$(jq -c '[.inbox,.host]' "$D/ib.json" 2>&1)"
+    if [ "$GOT" = "$WANT" ]; then pass "$NAME"; else fail "$NAME" "got $GOT"; fi
+  fi
+}
+field_case "inbox from CLAUDE_CODE_MESSAGING_SOCKET" '["/tmp/x.sock",null]' CLAUDE_CODE_MESSAGING_SOCKET=/tmp/x.sock
+field_case "empty CLAUDE_CODE_MESSAGING_SOCKET gives null inbox" '[null,null]' CLAUDE_CODE_MESSAGING_SOCKET=
+field_case "host from __CFBundleIdentifier" '[null,"com.anthropic.claudefordesktop"]' __CFBundleIdentifier=com.anthropic.claudefordesktop
+field_case "empty __CFBundleIdentifier gives null host" '[null,null]' __CFBundleIdentifier=
+field_case "both set" '["/tmp/cc-socks/1.sock","com.apple.Terminal"]' CLAUDE_CODE_MESSAGING_SOCKET=/tmp/cc-socks/1.sock __CFBundleIdentifier=com.apple.Terminal
+field_case "both unset gives nulls" '[null,null]'
+
+# 29. a value with a quote, a backslash, a newline and shell syntax stays one JSON string and runs nothing
+PWNED="$ROOT/pwned"
+for VAR in CLAUDE_CODE_MESSAGING_SOCKET __CFBundleIdentifier; do
+  V="/tmp/a\"b\\c
+d\$(touch $PWNED)\`touch $PWNED\`.sock"
+  D="$(new_dir)"
+  OUT="$(printf '%s' '{"session_id":"q","cwd":"/a","hook_event_name":"Stop"}' | env "$VAR=$V" NOTCH_DIR="$D" "$HOOK" 2>&1)"
+  RC=$?
+  FIELD=inbox
+  [ "$VAR" = "CLAUDE_CODE_MESSAGING_SOCKET" ] || FIELD=host
+  NAME="$VAR with quote, backslash, newline is one JSON string in $FIELD"
+  if check_quiet "$NAME"; then
+    SAME="$(jq --arg v "$V" --arg f "$FIELD" '.[$f] == $v' "$D/q.json" 2>&1)"
+    LINES="$(wc -l <"$D/q.json" | tr -d ' ')"
+    if [ "$SAME" != "true" ]; then fail "$NAME" "file: $(cat "$D/q.json")"
+    elif [ "$LINES" != "1" ]; then fail "$NAME" "$LINES lines"
+    elif [ -e "$PWNED" ]; then fail "$NAME" "the value ran as a command"
+    else pass "$NAME"; fi
+  fi
+done
+
+# 30. timing: median of 100 runs with both fields set stays within the 20 ms budget (docs/PLAN.md section 7).
+# The budget is this Mac's; a CI runner starts processes slower (25.1 ms there with ~15 ms here), so CI only
+# reports the median. Every run must still exit 0 and yield a number.
+D="$(new_dir)"
+IN="$ROOT/timing.json"
+printf '%s' '{"session_id":"tm","cwd":"/Users/lem/bianki","hook_event_name":"PreToolUse","tool_name":"Bash"}' >"$IN"
+MEDIAN="$(CLAUDE_CODE_MESSAGING_SOCKET=/tmp/cc-socks/1.sock __CFBundleIdentifier=com.apple.Terminal NOTCH_DIR="$D" \
+  /usr/bin/perl -MTime::HiRes=time -e '
+    my ($hook, $in) = @ARGV;
+    my @ms;
+    for (1 .. 100) {
+      open(STDIN, "<", $in) or die;
+      my $t = time;
+      system($hook) == 0 or die "exit $?";
+      push @ms, (time - $t) * 1000;
+    }
+    @ms = sort { $a <=> $b } @ms;
+    printf "%.1f", ($ms[49] + $ms[50]) / 2;
+  ' "$HOOK" "$IN" 2>&1)"
+NAME="median of 100 runs is at most 20 ms"
+if ! awk -v m="$MEDIAN" 'BEGIN { exit !(m ~ /^[0-9]+\.[0-9]$/) }'; then fail "$NAME" "no median: [$MEDIAN]"
+elif [ -n "${CI:-}" ]; then echo "INFO: hook median of 100 runs is $MEDIAN ms (CI: reported, not held to 20 ms)"
+elif awk -v m="$MEDIAN" 'BEGIN { exit !(m <= 20) }'; then pass "$NAME ($MEDIAN ms)"
+else fail "$NAME" "median [$MEDIAN] ms"; fi
 
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; exit 0; fi
 echo "$FAILS FAILED"
