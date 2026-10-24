@@ -69,6 +69,14 @@ function installBridge({ layout, windows }) {
       },
     },
   };
+  // Each write inside #dRows (a redraw of the card or of its age): the Last event value and its age then, and the page's
+  // clock in seconds at that moment.
+  const draws = (window.__draws = []);
+  new MutationObserver((ms) => {
+    if (!ms.some((m) => { const n = m.target.nodeType === 1 ? m.target : m.target.parentElement; return n && n.closest && n.closest('#dRows'); })) return;
+    const age = document.querySelector('#dRows .age');
+    if (age) draws.push({ value: age.parentElement.textContent.replace(/\s+/g, ' ').trim(), age: age.textContent.trim(), now: Date.now() / 1000 });
+  }).observe(document, { subtree: true, childList: true, characterData: true });
   // A visible box: opacity of the element and its ancestors, display, visibility.
   window.__vis = (sel) => {
     const e = document.querySelector(sel);
@@ -146,17 +154,19 @@ const fields = (page) => page.evaluate(() => [...document.querySelectorAll('#dRo
   color: kv.querySelector('dd') && kv.querySelector('dd').lastElementChild ? getComputedStyle(kv.querySelector('dd').lastElementChild).color : null,
 })));
 const field = async (page, name) => (await fields(page)).find((f) => f.name === name);
-// The Last event value and the page's clock in seconds, read together. The age is floor(page clock - event_ts) when the
-// card last drew it, which is at most one 1 s redraw ago, so it is the age now or one less. An age fixed from this
-// script's clock when the card was built is not: the steps between building and reading can take more than a second.
-const lastEvent = (page) => page.evaluate(() => {
-  const kv = [...document.querySelectorAll('#dRows .kv')].find((e) => (e.querySelector('dt') || {}).textContent === 'Last event');
-  return { value: kv ? kv.querySelector('dd').textContent.replace(/\s+/g, ' ').trim() : null, now: Date.now() / 1000 };
-});
-const ageIs = (got, words, eventTs) => {
-  const n = Math.max(0, Math.floor(got.now - eventTs));
-  return new RegExp(`^${words} ?(${Math.max(0, n - 1)}|${n}) s ago$`).test(got.value);
+// Ages are read per redraw, with the page's clock at that redraw, never by comparing a later read with a clock: a read
+// can come more than a second after the last redraw (a slow runner, a machine that dozes), and two reads land wherever
+// the page's 1 s tick and the second boundaries fall between them.
+const draws = (page) => page.evaluate(() => window.__draws);
+const lastEvent = async (page) => (await draws(page)).pop() || null;
+// A redraw shows floor(page clock - event_ts) at its own moment, or one less only when the second turned in the few ms
+// between the page's write and the observer reading the clock.
+const drawnAgeIs = (d, eventTs) => {
+  const n = Math.max(0, Math.floor(d.now - eventTs));
+  return d.age === `${n} s ago` || (d.age === `${n - 1} s ago` && d.now - eventTs - n < 0.01);
 };
+// The latest redraw shows these event words, then the age at that redraw.
+const ageIs = (d, words, eventTs) => !!d && d.value.replace(d.age, '').trim() === words && d.value.endsWith(d.age) && drawnAgeIs(d, eventTs);
 
 // Hover in and wait for the expanded phase and its spring.
 async function expand(page) {
@@ -293,14 +303,15 @@ async function scenarioFields() {
   check('F12 Status text and color for the other statuses', bad2.length === 0, J(bad2));
 
   // The age is redrawn every second while the card shows expanded.
-  await setReply(page, card({ event_ts: nowSec() - 10 }));
+  const aged = card({ event_ts: nowSec() - 10 });
+  await setReply(page, aged);
   await fire(page, 'sessions', SUMMARY);
   await sleep(150);
-  const a1 = await page.evaluate(() => document.querySelector('#dRows .age').textContent.trim());
+  const from = await page.evaluate(() => Date.now() / 1000);
   await sleep(2300);
-  const a2 = await page.evaluate(() => document.querySelector('#dRows .age').textContent.trim());
-  const n1 = parseInt(a1, 10), n2 = parseInt(a2, 10);
-  check('F13 #dRows .age is redrawn every second', /^\d+ s ago$/.test(a1) && /^\d+ s ago$/.test(a2) && n2 - n1 >= 2, J({ a1, a2 }));
+  const redraws = (await draws(page)).filter((d) => d.now >= from);
+  check('F13 #dRows .age is redrawn every second: at least 2 redraws in 2.3 s, each showing the age at that moment on the page\'s clock',
+    redraws.length >= 2 && redraws.every((d) => drawnAgeIs(d, aged.event_ts)), J({ eventTs: aged.event_ts, redraws }));
   await page.close();
 }
 
