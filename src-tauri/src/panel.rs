@@ -7,7 +7,8 @@ use objc2_app_kit::{
     NSWindowDidResignKeyNotification, NSWindowStyleMask,
 };
 use objc2_foundation::{MainThreadMarker, NSNotification, NSNotificationCenter, NSObject, NSRect};
-use tauri::{Emitter, WebviewWindow};
+use tauri::menu::{Menu, PredefinedMenuItem, Submenu};
+use tauri::{AppHandle, Emitter, WebviewWindow};
 
 use crate::{trace_on, APP};
 
@@ -102,17 +103,39 @@ pub(crate) fn adopt_panel(mtm: MainThreadMarker, window: &WebviewWindow) {
     PANEL.with(|p| *p.borrow_mut() = Some(panel));
 }
 
+/// The app's menu: Edit items only (CONTRACT.md section 11). While the panel is key, menu key equivalents reach this
+/// app, so the default menu's Quit, Hide and Close Window would act on notch-hud; Command-V and the other edit keys
+/// need these items.
+pub(crate) fn edit_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let edit = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+    Menu::with_items(app, &[&edit])
+}
+
 /// Gives the panel key focus so typing reaches the page, or gives it back (CONTRACT.md section 3, "Key focus").
-/// Synchronous like `surface`, so it runs on the main thread in arrival order. Never calls `resignKeyWindow`: the
-/// panel was key again 3 s after it in the spike.
+/// Returns whether the panel is key afterwards (always `false` for off), so the page can tell a request that did not
+/// take. Synchronous like `surface`, so it runs on the main thread in arrival order. Never calls `resignKeyWindow`:
+/// the panel was key again 3 s after it in the spike.
 #[tauri::command]
-pub(crate) fn focus(on: bool) {
-    let Some(mtm) = MainThreadMarker::new() else { return };
-    let Some(panel) = PANEL.with(|p| p.borrow().clone()) else { return };
+pub(crate) fn focus(on: bool) -> bool {
+    let Some(mtm) = MainThreadMarker::new() else { return false };
+    let Some(panel) = PANEL.with(|p| p.borrow().clone()) else { return false };
     if !on {
         KEY_WANTED.set(false);
         NSApplication::sharedApplication(mtm).deactivate();
-        return;
+        return false;
     }
     KEY_WANTED.set(true);
     let was_key = panel.isKeyWindow();
@@ -121,9 +144,11 @@ pub(crate) fn focus(on: bool) {
     if let Some(webview) = panel.contentView().and_then(|view| view.subviews().firstObject()) {
         panel.makeFirstResponder(Some(&webview));
     }
-    if !panel.isKeyWindow() {
+    let key = panel.isKeyWindow();
+    if !key {
         KEY_WANTED.set(false);
     } else if !was_key && trace_on() {
         eprintln!("key: on");
     }
+    key
 }

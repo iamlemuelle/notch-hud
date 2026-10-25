@@ -261,11 +261,18 @@ with a temp `NOTCH_DIR` and kills only its own pids.
   | default | `{"type":"user","message":{"role":"user","content":"…"}}` | Delivered: a new turn started and replied | `UserPromptSubmit`, then `Stop`, within 2 s |
   | bypass | plain text | Ignored | none in 30 s |
   | bypass | the JSON line | Held: the session emitted `peer_message_hold` with `state: held`, `lane: socket`, `cause: no-mode-asserted` | none in 30 s |
+  | Desktop, default (2026-10-23, bundled 2.1.304) | the JSON line | Delivered: a new turn started and replied | its record (installed hook) turned to `Stop` 5 s after the post |
 
   Two more measurements: a delivered turn ran the same way twice (2 of 2 runs), and a `--restricted` session binds no
   inbox at all (its hook environment has no `CLAUDE_CODE_MESSAGING_SOCKET`). `cause: no-mode-asserted` suggests the
   line format can claim a permission class; notch-hud never claims one, for the same reason it never sends the token
-  (D4). Not run yet: the Desktop session from D1, which needs a session you pick.
+  (D4).
+
+  The Desktop run used a throwaway Code-tab session on Haiku in default mode, started only for the probe. The poster
+  ran under `env -i` and read the socket path from the session's own `CLAUDE_CODE_MESSAGING_SOCKET`. The session's
+  transcript shows how the message arrives: under "Another Claude session sent a message:", followed by a note that
+  it was "not typed by your user" and can't grant escalation or approve a pending prompt. So the prompt box's text
+  reaches Claude as a teammate's request, not as your own prompt, as section 3.0 expects. **Phase 0 is complete.**
 
 ### Phase 1: session ids and the detail view (#2)
 

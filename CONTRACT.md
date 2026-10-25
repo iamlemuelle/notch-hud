@@ -863,6 +863,20 @@ pub const DETAIL_HEIGHT: f64 = 380.0;
   (the spring of "Layout change while expanded") and calls `surface` with the new hit; the window mode stays `open`.
   A `layout` event that changes `open.height` while the card is shown moves no clip.
 
+### Typing (amendment, 2026-10-25)
+
+This amends the phases above for the prompt box (section 11); where it differs, it wins.
+
+- `typing` is a substate of `expanded`, entered only from the detail card (section 11). `body.dataset.phase` stays
+  `expanded`, the hit shape stays `detail` and the window mode stays `open`.
+- While typing, hover out sets no timer, so the panel stays expanded with the pointer gone. Hover in still cancels a
+  pending collapse.
+- Typing ends on Esc, on a `key` event with `false`, on a pointer press in the page outside the box, when
+  `focus(true)` returns anything but `true` or fails, when a null reply hides the box, and when the card closes (back,
+  or the reset when the phase becomes `collapsed`). Ending calls `focus(false)` once. When the phase is still
+  `expanded` and the latest `hover` event was `false`, it then collapses after 250 ms, as hover out does.
+- Starting to type cancels a pending hover-out collapse.
+
 ## 9. App bundle (`scripts/build-app.sh`)
 
 The login item runs a signed `.app`, so macOS permission grants (Automation for Music and Spotify) belong to a stable
@@ -1101,3 +1115,55 @@ impl Moods {
   timer. Measured numbers are in `docs/PLAN.md` section 7.
 - Fallback: when `window.AvatarCore` is missing, the `avatar` reply is missing or rejected, or painting throws, the
   page hides `#avatar`, shows section 4's dot in its place, and stops the avatar's timers.
+
+## 11. Session prompt (`dist/index.html`)
+
+The prompt box of `docs/PLAN-video-sessions.md` section 3.3, typing only: it takes the keyboard and gives it back, and
+Return sends nothing. Sending (`prompt`, `Reach`, the delivery states) comes later. Visual reference: the
+[Sessions and Video prototype](https://claude.ai/artifact/W6jgY4nGA9NwnY7xYCbAcQ). This amends section 4 "Detail card":
+the slot below the four rows holds the box and the hint line. The box is the `focus` caller that section 3 "Key
+focus" waits for.
+
+### Box
+
+- `#pbox`, 10 pt below the rows (at y 316 of `#content`, x 16), 388 x 34, radius 10, background `#141414`, a 1 px
+  inset line `rgba(245,245,245,0.1)` that turns `rgba(245,245,245,0.34)` while typing (120 ms linear, none with
+  reduced motion). 11 pt of left padding, 4 pt right, 6 pt gap. Inside:
+  - `<textarea id="msg" rows="1" maxlength="8000" aria-label="Message to this session">`, 18 pt tall, 500 12.5/18 px,
+    no wrapping, placeholder `Message <label>` (the detail's label) in muted;
+  - `<button type="button" class="send" id="send" aria-label="Send">`, 26 pt round, `#f5f5f5` with a black up arrow;
+    disabled (`#2a2a2a`, arrow `#6f6f6f`) while the draft is empty after trimming.
+- `#phint`, 6 pt below the box, 388 x 14, 500 11/14 px muted, one line with an ellipsis. While typing it reads
+  `Return to send, Shift+Return for a new line, Esc to stop typing`; otherwise it is empty.
+- A null detail reply (`Session ended`) hides the box and the hint.
+- The draft is kept when typing ends, and cleared when the card closes or shows another session.
+
+### Typing
+
+- A pointer press on the box (not on the send button) while the card shows a session and the phase is `expanded`
+  starts typing: `invoke('focus', { on: true })`, then, once it returns `true`, DOM focus moves to `#msg`. When it
+  returns `false` or fails, the panel is not key, so no key and no `key` event can reach the page: typing ends at once.
+  A press on the box outside `#msg` leaves DOM focus where it is.
+- While typing, keys go to the page: Return (no Shift) is the send key; Shift+Return inserts a newline; Esc ends
+  typing. A keydown with `isComposing` or `keyCode` 229 belongs to an input method composition and does nothing
+  (WebKit sends the Return that commits a candidate with `isComposing` false and `keyCode` 229). Section 8 "Typing"
+  lists every way typing ends.
+- A `key` event with `false` that arrives while a `focus(true)` call has not returned is the previous give-back's and
+  is ignored. A second `false` after typing ended does nothing.
+- The send key and a click on the send button do the same: when the trimmed draft is not empty, call
+  `invoke('prompt_draft', { text })` with it. Typing goes on and the draft stays. A press on the send button keeps DOM
+  focus in the box.
+
+### Menu
+
+The app's menu holds one submenu, `Edit`: Undo, Redo, a separator, Cut, Copy, Paste, Select All (Tauri's predefined
+items). While the panel is key, menu key equivalents reach notch-hud, not the frontmost app: Command-V and the other
+edit keys need these items, and Tauri's default menu would make Command-Q quit notch-hud, Command-H hide it and
+Command-W close the panel.
+
+### Bridge
+
+- `focus(on: bool) -> bool` (amends section 3 "Key focus"): `on` returns whether the panel is key after the call;
+  off returns `false`.
+- Command `prompt_draft(text: String)`: sends nothing. Under `$NOTCH_TRACE` it logs `prompt: draft <n> chars` to
+  stderr, `n` being the number of Unicode scalar values in `text` trimmed.
