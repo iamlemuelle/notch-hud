@@ -426,6 +426,14 @@ fn session_detail(id: String) -> Option<Detail> {
     detail
 }
 
+/// Return in the prompt box while sending does not exist yet (CONTRACT.md section 11): traces the draft's length only.
+#[tauri::command]
+fn prompt_draft(text: String) {
+    if trace_on() {
+        eprintln!("prompt: draft {} chars", text.trim().chars().count());
+    }
+}
+
 fn trace_on() -> bool {
     std::env::var_os("NOTCH_TRACE").is_some_and(|v| !v.is_empty())
 }
@@ -605,7 +613,7 @@ fn main() {
         check_avatar(args.next());
     }
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![sessions, session_detail, media, act, layout, surface, panel::focus, avatar, mood])
+        .invoke_handler(tauri::generate_handler![sessions, session_detail, prompt_draft, media, act, layout, surface, panel::focus, avatar, mood])
         .setup(|app| {
             let mtm = MainThreadMarker::new().expect("main thread");
             if notched_screen(mtm).is_none() {

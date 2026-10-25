@@ -1,6 +1,6 @@
 #!/bin/bash
 # Page checks for CONTRACT.md section 8 (panel motion, banners, the grow-then-shrink window) and section 10 "Page" (the
-# avatar) and section 4 "Detail card" (the session detail): dist/index.html runs in
+# avatar), section 4 "Detail card" (the session detail) and section 11 (the prompt box, typing only): dist/index.html runs in
 # headless Chromium against a fake Tauri bridge. It moves no cursor and needs no display.
 #
 # Exit 0 when every check passes, 1 when one fails, 2 when playwright-core or the headless shell is missing.
@@ -27,6 +27,10 @@ rc=$?
 [ "$rc" -eq 1 ] && status=1
 [ "$rc" -eq 2 ] && [ "$status" -eq 0 ] && status=2
 node "$root/tests/page/detail-check.mjs"
+rc=$?
+[ "$rc" -eq 1 ] && status=1
+[ "$rc" -eq 2 ] && [ "$status" -eq 0 ] && status=2
+node "$root/tests/page/prompt-check.mjs"
 rc=$?
 [ "$rc" -eq 1 ] && status=1
 [ "$rc" -eq 2 ] && [ "$status" -eq 0 ] && status=2

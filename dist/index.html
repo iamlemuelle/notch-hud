@@ -136,6 +136,21 @@
   #dEnded { height: 88px; margin-top: 4px; display: grid; align-content: center; font-weight: 500; font-size: 12px; line-height: 17px;
     color: #8b8b8b; }
   #dEnded[hidden] { display: none; }
+  /* The prompt box (CONTRACT.md section 11). */
+  .pbox { margin-top: 10px; height: 34px; display: flex; align-items: center; gap: 6px; padding: 0 4px 0 11px; border-radius: 10px;
+    background: #141414; box-shadow: inset 0 0 0 1px rgba(245, 245, 245, 0.1); transition: box-shadow 120ms linear; cursor: text; }
+  .pbox.typing { box-shadow: inset 0 0 0 1px rgba(245, 245, 245, 0.34); }
+  .pbox[hidden], .phint[hidden] { display: none; }
+  #msg { flex: 1; min-width: 0; height: 18px; padding: 0; border: 0; background: transparent; resize: none; outline: none;
+    font: 500 12.5px/18px -apple-system, system-ui, sans-serif; color: #f5f5f5; white-space: pre; overflow: hidden; user-select: text; cursor: text; }
+  #msg::placeholder { color: #8b8b8b; }
+  .send { flex: none; width: 26px; height: 26px; border: 0; padding: 0; border-radius: 50%; background: #f5f5f5; color: #000;
+    display: grid; place-items: center; cursor: default; }
+  .send:disabled { background: #2a2a2a; color: #6f6f6f; }
+  .send:not(:disabled):active { transform: scale(0.92); }
+  .phint { height: 14px; margin-top: 6px; font: 500 11px/14px -apple-system, system-ui, sans-serif; color: #8b8b8b; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  @media (prefers-reduced-motion: reduce) { .pbox { transition: none; } }
 
   /* A short look at what changed, shown under the notch while the panel is closed. */
   #banner { position: absolute; inset: 0; opacity: 0; transform: translateY(4px); pointer-events: none; }
@@ -177,6 +192,11 @@
           <div class="sess-h"><button type="button" class="back" id="back" aria-label="Back to all sessions"><svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M6.4 1.6 3 5l3.4 3.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Claude Code</button><span id="dLabel"></span></div>
           <dl id="dRows"></dl>
           <div id="dEnded" hidden>Session ended</div>
+          <div class="pbox" id="pbox">
+            <textarea id="msg" rows="1" maxlength="8000" aria-label="Message to this session"></textarea>
+            <button type="button" class="send" id="send" aria-label="Send" disabled><svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M6 10V2.4M2.7 5.4 6 2.1l3.3 3.3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          </div>
+          <div class="phint" id="phint"></div>
         </div>
       </div>
       <div id="banner">
@@ -590,6 +610,7 @@
     phase = p;
     epoch++;
     document.body.dataset.phase = p;
+    if (p !== 'expanded') stopTyping();
     if (p === 'collapsed') closeCard(true);
     settleWindow();
     syncClock();
@@ -619,7 +640,7 @@
       if (shapeAt === 'pill') { layerRest(content); layerRest(banner); setPhase('collapsed'); } else collapse();
     } else if (phase === 'banner') later(250, closeBanner);
     else if (phase === 'peek') later(250, unpeek);
-    else if (phase === 'expanded') later(250, collapse);
+    else if (phase === 'expanded' && !typing) later(250, collapse);
   }
   // A start that waited for the window keeps any timer a hover set meanwhile (the leave grace, or the expand).
   function toPeek() {
@@ -867,8 +888,11 @@
     detailShown = d;
     $('dRows').hidden = !d;
     $('dEnded').hidden = !!d;
+    $('pbox').hidden = $('phint').hidden = !d;
+    if (!d) stopTyping();
     if (d) {
       $('dLabel').textContent = d.label;
+      msg.placeholder = 'Message ' + d.label;
       const folder = span(homeTilde(d.cwd));
       folder.title = d.cwd;
       $('dRows').replaceChildren(
@@ -909,6 +933,7 @@
       if (!r) return;
       openingId = null;
       if (!r.d) return;
+      if (detailId !== id) clearDraft();
       detailId = id;
       drawDetail(r.d);
       showCard(true);
@@ -926,6 +951,8 @@
   function closeCard(instant) {
     detailSeq++;
     openingId = null;
+    stopTyping();
+    clearDraft();
     if (detailId === null) return;
     detailId = null;
     detailShown = null;
@@ -936,6 +963,56 @@
     if (row) openDetail(row.dataset.id);
   });
   $('back').addEventListener('click', () => closeCard(false));
+
+  // ---- prompt box (CONTRACT.md section 11): typing only, so Return traces the draft and sends nothing ----
+  // typing: the box has the keyboard, a substate of `expanded` (section 8) in which hover-out does not collapse.
+  let typing = false;
+  let focusing = 0; // focus(true) calls not yet returned: a `key` false meanwhile is the previous give-back's
+  let hovered = false; // the latest `hover` event
+  const msg = $('msg');
+  const draftText = () => msg.value.trim();
+  function syncPrompt() {
+    $('send').disabled = !draftText();
+    $('pbox').classList.toggle('typing', typing);
+    $('phint').textContent = typing ? 'Return to send, Shift+Return for a new line, Esc to stop typing' : '';
+  }
+  function clearDraft() {
+    msg.value = '';
+    syncPrompt();
+  }
+  function startTyping() {
+    if (typing || phase !== 'expanded' || !detailShown) return;
+    typing = true;
+    cancelTimer();
+    syncPrompt();
+    focusing++;
+    const done = () => { focusing--; if (typing) msg.focus(); };
+    window.__TAURI__.core.invoke('focus', { on: true }).then(done, done);
+  }
+  // Gives the keyboard back; the panel then collapses as usual if the pointer is gone.
+  function stopTyping() {
+    if (!typing) return;
+    typing = false;
+    msg.blur();
+    syncPrompt();
+    window.__TAURI__.core.invoke('focus', { on: false }).catch(() => {});
+    if (phase === 'expanded' && !hovered) later(250, collapse);
+  }
+  function draft() {
+    const text = draftText();
+    if (text) window.__TAURI__.core.invoke('prompt_draft', { text }).catch(() => {});
+  }
+  $('pbox').addEventListener('pointerdown', (e) => { if (!e.target.closest('#send')) startTyping(); });
+  // The send button keeps the caret in the box.
+  $('send').addEventListener('pointerdown', (e) => e.preventDefault());
+  $('send').addEventListener('click', draft);
+  msg.addEventListener('input', syncPrompt);
+  document.addEventListener('pointerdown', (e) => { if (typing && !$('pbox').contains(e.target)) stopTyping(); }, true);
+  document.addEventListener('keydown', (e) => {
+    if (!typing) return;
+    if (e.key === 'Escape') { e.preventDefault(); stopTyping(); }
+    else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); draft(); }
+  });
 
   // Ends the pending change, if any, and shows the latest media the app sent.
   function settle() {
@@ -1032,6 +1109,7 @@
   const tauri = window.__TAURI__;
   tauri.event.listen('layout', (e) => applyLayout(e.payload));
   tauri.event.listen('hover', (e) => {
+    hovered = !!e.payload;
     if (e.payload) onEnter();
     else {
       onLeave();
@@ -1046,6 +1124,7 @@
   tauri.core.invoke('mood').then((p) => { if (p && !moodEvent) { pose = p; showPose(); } });
   tauri.event.listen('sessions', (e) => { sessionsEvent = true; onSessions(e.payload); });
   tauri.event.listen('records', () => refreshDetail());
+  tauri.event.listen('key', (e) => { if (e.payload === false && focusing === 0) stopTyping(); });
   tauri.event.listen('media', (e) => { mediaEvent = true; onMedia(e.payload); });
   tauri.core.invoke('layout').then((l) => { if (l && !L) applyLayout(l); });
   tauri.core.invoke('media').then((m) => { if (m && !mediaEvent) onMedia(m); });
