@@ -379,6 +379,7 @@
   let play = null; // avatar-core playback state
   let painted = null; // { state, at }: the playback state and time of the frame on screen, which a new pose eases out of
   let avatarTimer = null;
+  let avatarDue = 0; // when the change avatarTimer waits for is due, on performance.now()
   let avatarPaths = null;
 
   function placeEar(where, dur = 0, ease = 'linear') {
@@ -446,6 +447,8 @@
   function avatarFrame() {
     avatarTimer = null;
     const now = performance.now();
+    // A timer can fire up to a millisecond early. Nothing is due yet, so wait out the rest without a frame.
+    if (now < avatarDue) { avatarTimer = setTimeout(avatarFrame, avatarDue - now); return; }
     try {
       play = AvatarCore.advanceAvatarPlayback(avatarDef, play, now, AVATAR_ENV);
       paintScene(AvatarCore.renderAvatarFrame(avatarDef, play, now, AVATAR_ENV));
@@ -454,7 +457,7 @@
       return avatarFail(String(e && e.message));
     }
     const wait = avatarWait(now);
-    if (wait !== null) avatarTimer = setTimeout(avatarFrame, wait);
+    if (wait !== null) { avatarDue = now + wait; avatarTimer = setTimeout(avatarFrame, wait); }
   }
   // Plays the pose's first animation the avatar has; a still pose, reduced motion or no such animation holds the
   // first step's expression.
@@ -480,6 +483,7 @@
     } catch (e) {
       return avatarFail(String(e && e.message));
     }
+    avatarDue = 0;
     avatarFrame();
   }
   function onAvatar(a) {
