@@ -137,25 +137,32 @@ front_is_textedit "while typing"
 # close or quit it (CONTRACT.md section 11, "Menu"), and must type nothing. Only when the keys above reached the box,
 # since otherwise they would go to TextEdit; Command-Q only when this test started TextEdit, for the same reason. Each
 # key goes only while the panel still has the keyboard and TextEdit is still in front, and Command-H, which would put
-# another app in front, goes last.
-still_ours() { ! since "$applog" "$km" | grep -qF 'key: off' && [ "$("$drive" front | cut -d' ' -f2)" = "com.apple.TextEdit" ]; }
-if since "$applog" "$pm" | grep -qF 'prompt: draft 18 chars' && still_ours; then
-  cm="$(lines "$applog")"
-  keys="w"
-  if [ "$te_started" -eq 1 ]; then keys="$keys q"; else echo "INFO Command-Q skipped: TextEdit was already running"; fi
-  for k in $keys h; do
-    still_ours || { flunk "the panel lost the keyboard before Command-$k; the menu keys stopped there"; break; }
-    "$drive" cmd "$k"
-  done
-  sleep 0.5
-  if kill -0 "$app" 2>/dev/null; then pass "notch-hud is still running after the menu keys"; else flunk "notch-hud quit on a menu key while typing"; app=""; exit 1; fi
-  b="$("$drive" bounds "$app")"
-  case "$b" in *" 452 396") pass "the panel is still on screen and open after Command-H and Command-W: $b";; *) flunk "the panel is [$b] after Command-H and Command-W, want w=452 h=396";; esac
-  "$drive" key return
-  if wait_for "$applog" 3 'prompt: draft 18 chars' "$cm"; then pass "the menu keys typed nothing: prompt: draft 18 chars again"; else flunk "no 'prompt: draft 18 chars' after the menu keys; got: $(since "$applog" "$cm" | grep -F 'prompt:' | tr '\n' ' ')"; fi
-else
-  flunk "menu keys not tried: the keys above did not reach the box"
+# another app in front, goes last. Once the keyboard is not the panel's, the test posts no more keys and stops: they
+# would land in whatever app is in front.
+not_ours() {
+  since "$applog" "$km" | grep -qF 'key: off' && { echo "the panel gave up the keyboard (key: off)"; return 0; }
+  local f; f="$("$drive" front)"
+  [ "${f#* }" = "com.apple.TextEdit" ] || { echo "TextEdit is no longer in front ($f)"; return 0; }
+  return 1
+}
+if ! since "$applog" "$pm" | grep -qF 'prompt: draft 18 chars'; then
+  flunk "menu keys not tried and the test stops: the keys above did not reach the box"; exit 1
 fi
+if why="$(not_ours)"; then flunk "menu keys not tried and the test stops: $why"; exit 1; fi
+cm="$(lines "$applog")"
+keys="w"
+if [ "$te_started" -eq 1 ]; then keys="$keys q"; else echo "INFO Command-Q skipped: TextEdit was already running"; fi
+for k in $keys h; do
+  if why="$(not_ours)"; then flunk "stopped before Command-$k: $why"; exit 1; fi
+  "$drive" cmd "$k"
+done
+sleep 0.5
+if kill -0 "$app" 2>/dev/null; then pass "notch-hud is still running after Command-$(echo $keys h | tr ' ' '/')"; else flunk "notch-hud quit on a menu key while typing"; app=""; exit 1; fi
+if why="$(not_ours)"; then flunk "stopped after the menu keys: $why"; exit 1; fi
+b="$("$drive" bounds "$app")"
+case "$b" in *" 452 396") pass "the panel is still on screen and open after the menu keys: $b";; *) flunk "the panel is [$b] after the menu keys, want w=452 h=396";; esac
+"$drive" key return
+if wait_for "$applog" 3 'prompt: draft 18 chars' "$cm"; then pass "the menu keys typed nothing: prompt: draft 18 chars again"; else flunk "no 'prompt: draft 18 chars' after the menu keys; got: $(since "$applog" "$cm" | grep -F 'prompt:' | tr '\n' ' ')"; fi
 
 em="$(lines "$applog")"
 "$drive" key escape
