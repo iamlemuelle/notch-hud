@@ -73,8 +73,11 @@ const J = (v) => JSON.stringify(v);
 const pageErrors = [];
 
 // Installed before any page script: the fake bridge and the recorder of mutations inside #avatar.
-function installBridge({ layout, windows, avatar, mood, holdMood, noCore }) {
+function installBridge({ layout, windows, avatar, mood, holdMood, noCore, earlyTimers }) {
   const handlers = {};
+  // Chromium can fire a timer up to about 1 ms before its delay is up. `earlyTimers` makes every timer fire 3 ms early,
+  // so that happens on every wake rather than now and then.
+  if (earlyTimers) { const st = window.setTimeout; window.setTimeout = (fn, ms, ...a) => st(fn, Math.max(0, (Number(ms) || 0) - 3), ...a); }
   const now = () => performance.now();
   const rec = (window.__rec = { invokes: [], surfaces: [] });
   window.__fire = (name, payload) => { (handlers[name] || []).forEach((h) => h({ payload })); };
@@ -159,7 +162,7 @@ async function openPage(opts = {}) {
   await page.addInitScript(installBridge, {
     layout: LAYOUT, windows: WINDOW,
     avatar: opts.avatar === 'reject' ? 'reject' : { source: 'default', definition: opts.def || BALL },
-    mood: opts.pose || POSE.idle, holdMood: !!opts.holdMood, noCore: !!opts.noCore,
+    mood: opts.pose || POSE.idle, holdMood: !!opts.holdMood, noCore: !!opts.noCore, earlyTimers: !!opts.earlyTimers,
   });
   await page.goto('file://' + PAGE_FILE);
   await page.waitForFunction(() => document.body && document.body.dataset.phase, null, { timeout: 1500 }).catch(() => {});
@@ -367,8 +370,9 @@ async function scenarioStillAndReduced() {
 }
 
 async function scenarioBudget() {
+  // Timers fire early here, so a frame drawn when a timer wakes before its change is due shows up.
   // holds with no blink and no ambient motion: paints only during a transition
-  let page = await openPage({ tag: 'budget' });
+  let page = await openPage({ tag: 'budget', earlyTimers: true });
   await painted(page);
   await sleep(1200);
   const paints = await observePaints(page, 4000);
@@ -389,7 +393,7 @@ async function scenarioBudget() {
 
   // ambient motion: frames continue through a hold, still at most 20/s
   const drift = fixture('drift');
-  page = await openPage({ tag: 'drift', def: drift });
+  page = await openPage({ tag: 'drift', def: drift, earlyTimers: true });
   await painted(page);
   await sleep(500);
   let drawn = await observePaints(page, 1500);
@@ -401,7 +405,7 @@ async function scenarioBudget() {
 
   // blink
   const blinkDef = fixture('blink');
-  page = await openPage({ tag: 'blink', def: blinkDef });
+  page = await openPage({ tag: 'blink', def: blinkDef, earlyTimers: true });
   await painted(page);
   await sleep(600);
   drawn = await observePaints(page, 3500);
@@ -422,7 +426,7 @@ async function scenarioBudget() {
   await page.close();
 
   // a once animation that ended keeps its last frame and no timer
-  page = await openPage({ tag: 'once', pose: POSE.celebrate });
+  page = await openPage({ tag: 'once', pose: POSE.celebrate, earlyTimers: true });
   await painted(page);
   await sleep(2200);
   const b = await observe(page, 2500);
