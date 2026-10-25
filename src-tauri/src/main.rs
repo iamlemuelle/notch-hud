@@ -613,6 +613,7 @@ fn main() {
         check_avatar(args.next());
     }
     tauri::Builder::default()
+        .menu(panel::edit_menu)
         .invoke_handler(tauri::generate_handler![sessions, session_detail, prompt_draft, media, act, layout, surface, panel::focus, avatar, mood])
         .setup(|app| {
             let mtm = MainThreadMarker::new().expect("main thread");
