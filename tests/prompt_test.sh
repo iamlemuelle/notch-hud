@@ -3,9 +3,9 @@
 # (CONTRACT.md section 3 "Key focus" and section 11). TextEdit is frontmost with an empty document as a decoy. A real
 # click opens a session's card and another clicks the box; posted keys `hello` and Return reach the page (the app logs
 # `prompt: draft 5 chars`); the pointer leaves and the panel stays open; Command-V pastes a test string into the box,
-# then two more letters and Return (`prompt: draft 18 chars`); Esc gives the keyboard back (`key: off`) and the panel
-# collapses; posted keys `xyz` then land in the decoy document, which shows focus came back. TextEdit stays the
-# frontmost app throughout and notch-hud is never activated.
+# then two more letters and Return (`prompt: draft 18 chars`); Command-H, -W and -Q leave the panel alone; Esc gives
+# the keyboard back (`key: off`) and the panel collapses; posted keys `xyz` then land in the decoy document, which
+# shows focus came back. TextEdit stays the frontmost app throughout and notch-hud is never activated.
 #
 # The paste puts the test string on the general pasteboard for half a second, marked transient and concealed so
 # clipboard managers skip it, then puts back exactly what was there (Command-V reads only the general pasteboard).
@@ -132,6 +132,23 @@ if [ "$rc" -eq 0 ]; then pass "drive paste: $paste_out"; else flunk "drive paste
 "$drive" key return
 if wait_for "$applog" 3 'prompt: draft 18 chars' "$pm"; then pass "Command-V pasted into the box: prompt: draft 18 chars"; else flunk "no 'prompt: draft 18 chars' after Command-V, ok and Return; got: $(since "$applog" "$pm" | grep -F 'prompt:' | tr '\n' ' ')"; fi
 front_is_textedit "while typing"
+
+# Menu key equivalents reach notch-hud while its panel is key: Command-H, Command-W and Command-Q must not hide,
+# close or quit it (CONTRACT.md section 11, "Menu"), and must type nothing. Only when the keys above reached the box,
+# since otherwise they would go to TextEdit; Command-Q only when this test started TextEdit, for the same reason.
+if since "$applog" "$pm" | grep -qF 'prompt: draft 18 chars' && ! since "$applog" "$km" | grep -qF 'key: off'; then
+  cm="$(lines "$applog")"
+  "$drive" cmd h; "$drive" cmd w
+  if [ "$te_started" -eq 1 ]; then "$drive" cmd q; else echo "INFO Command-Q skipped: TextEdit was already running"; fi
+  sleep 0.5
+  if kill -0 "$app" 2>/dev/null; then pass "notch-hud is still running after the menu keys"; else flunk "notch-hud quit on a menu key while typing"; app=""; exit 1; fi
+  b="$("$drive" bounds "$app")"
+  case "$b" in *" 452 396") pass "the panel is still on screen and open after Command-H and Command-W: $b";; *) flunk "the panel is [$b] after Command-H and Command-W, want w=452 h=396";; esac
+  "$drive" key return
+  if wait_for "$applog" 3 'prompt: draft 18 chars' "$cm"; then pass "the menu keys typed nothing: prompt: draft 18 chars again"; else flunk "no 'prompt: draft 18 chars' after the menu keys; got: $(since "$applog" "$cm" | grep -F 'prompt:' | tr '\n' ' ')"; fi
+else
+  flunk "menu keys not tried: the keys above did not reach the box"
+fi
 
 em="$(lines "$applog")"
 "$drive" key escape

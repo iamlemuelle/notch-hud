@@ -18,6 +18,7 @@
 //   drive drag <pid> <x0> <x1> <y> <steps>   press at x0, drag in <steps> moves to x1, release
 //   drive type <text>               posts a key down and up per character (a-z and space only), to whatever has the keyboard
 //   drive key <return|escape>       posts that key
+//   drive cmd <letter>              posts Command and that letter (a-z)
 //   drive paste <text>              puts <text> on the general pasteboard, posts Command-V, then puts back what the
 //                                   pasteboard held before; exit 1 when it could not put it back exactly
 //   drive axtext <pid> <name>       prints the text of the app's window whose document file is named <name>
@@ -31,7 +32,23 @@ import CoreGraphics
 setvbuf(stdout, nil, _IOLBF, 0)
 
 func out(_ s: String) { FileHandle.standardOutput.write((s + "\n").data(using: .utf8)!) }
-func die(_ code: Int32, _ s: String) -> Never { FileHandle.standardError.write((s + "\n").data(using: .utf8)!); exit(code) }
+// What `paste` took off the general pasteboard, until it is put back. Every way out of this process puts it back.
+var pasteboardToRestore: [[NSPasteboard.PasteboardType: Data]]? = nil
+func restorePasteboard() {
+    guard let saved = pasteboardToRestore else { return }
+    pasteboardToRestore = nil
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.writeObjects(saved.map { m in
+        let it = NSPasteboardItem()
+        for (t, d) in m { it.setData(d, forType: t) }
+        return it
+    })
+}
+func die(_ code: Int32, _ s: String) -> Never {
+    restorePasteboard()
+    FileHandle.standardError.write((s + "\n").data(using: .utf8)!)
+    exit(code)
+}
 
 struct Win { let pid: Int32; let bounds: CGRect; let layer: Int }
 
@@ -78,7 +95,7 @@ func notched() -> NSScreen? { NSScreen.screens.first { $0.safeAreaInsets.top > 0
 func pump(_ s: Double) { RunLoop.current.run(until: Date().addingTimeInterval(s)) }
 
 let a = CommandLine.arguments
-guard a.count >= 2 else { die(2, "usage: drive <access|cursor|warp|move|front|watch|hover|bounds|notch|screen|click|drag|type|key|paste|axtext|axclose|quit> ...") }
+guard a.count >= 2 else { die(2, "usage: drive <access|cursor|warp|move|front|watch|hover|bounds|notch|screen|click|drag|type|key|cmd|paste|axtext|axclose|quit> ...") }
 
 func num(_ i: Int) -> Double {
     guard a.count > i else { die(2, "missing argument \(i)") }
@@ -244,10 +261,24 @@ case "key":
     postKey(code)
     pump(0.1)
 
+case "cmd":
+    guard a.count > 2, a[2].count == 1, let c = a[2].first, let code = KEYS[c], c != " " else { die(2, "cmd: one letter a-z") }
+    postKey(code, c, flags: .maskCommand)
+    pump(0.1)
+
 case "paste":
     guard a.count > 2 else { die(2, "missing text") }
     let pb = NSPasteboard.general
     let saved = pasteboardItems()
+    var signals: [DispatchSourceSignal] = []
+    for sig in [SIGINT, SIGTERM, SIGHUP] {
+        signal(sig, SIG_IGN)
+        let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+        src.setEventHandler { restorePasteboard(); exit(128 + sig) }
+        src.resume()
+        signals.append(src)
+    }
+    pasteboardToRestore = saved
     pb.clearContents()
     // nspasteboard.org markers: clipboard managers skip transient and concealed items, so the test string is not kept.
     let item = NSPasteboardItem()
@@ -257,12 +288,7 @@ case "paste":
     pb.writeObjects([item])
     postKey(9, "v", flags: .maskCommand)
     pump(0.5)
-    pb.clearContents()
-    pb.writeObjects(saved.map { m in
-        let it = NSPasteboardItem()
-        for (t, d) in m { it.setData(d, forType: t) }
-        return it
-    })
+    restorePasteboard()
     if pasteboardItems() != saved { die(1, "the pasteboard did not come back as it was: \(saved.count) item(s) saved") }
     out("pasted, pasteboard restored (\(saved.count) item(s))")
 
