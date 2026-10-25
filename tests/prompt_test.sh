@@ -135,11 +135,18 @@ front_is_textedit "while typing"
 
 # Menu key equivalents reach notch-hud while its panel is key: Command-H, Command-W and Command-Q must not hide,
 # close or quit it (CONTRACT.md section 11, "Menu"), and must type nothing. Only when the keys above reached the box,
-# since otherwise they would go to TextEdit; Command-Q only when this test started TextEdit, for the same reason.
-if since "$applog" "$pm" | grep -qF 'prompt: draft 18 chars' && ! since "$applog" "$km" | grep -qF 'key: off'; then
+# since otherwise they would go to TextEdit; Command-Q only when this test started TextEdit, for the same reason. Each
+# key goes only while the panel still has the keyboard and TextEdit is still in front, and Command-H, which would put
+# another app in front, goes last.
+still_ours() { ! since "$applog" "$km" | grep -qF 'key: off' && [ "$("$drive" front | cut -d' ' -f2)" = "com.apple.TextEdit" ]; }
+if since "$applog" "$pm" | grep -qF 'prompt: draft 18 chars' && still_ours; then
   cm="$(lines "$applog")"
-  "$drive" cmd h; "$drive" cmd w
-  if [ "$te_started" -eq 1 ]; then "$drive" cmd q; else echo "INFO Command-Q skipped: TextEdit was already running"; fi
+  keys="w"
+  if [ "$te_started" -eq 1 ]; then keys="$keys q"; else echo "INFO Command-Q skipped: TextEdit was already running"; fi
+  for k in $keys h; do
+    still_ours || { flunk "the panel lost the keyboard before Command-$k; the menu keys stopped there"; break; }
+    "$drive" cmd "$k"
+  done
   sleep 0.5
   if kill -0 "$app" 2>/dev/null; then pass "notch-hud is still running after the menu keys"; else flunk "notch-hud quit on a menu key while typing"; app=""; exit 1; fi
   b="$("$drive" bounds "$app")"

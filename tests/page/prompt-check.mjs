@@ -219,11 +219,14 @@ async function scenarioHoverOut() {
   check('H6 collapsing after typing calls focus(false) no second time', J(await invokes(page, 'focus')) === J([{ on: true }, { on: false }]), J(await invokes(page, 'focus')));
   await page.close();
 
-  // A click on the box inside the 250 ms after a hover out cancels that pending collapse.
+  // A press on the box inside the 250 ms after a hover out cancels that pending collapse. Both happen in one task, so
+  // no round trip of the test falls inside the grace.
   const page2 = await openPage({ tag: 'hover-out-pending' });
   await openCard(page2);
-  await fire(page2, 'hover', false);
-  await clickBox(page2);
+  await page2.evaluate(() => {
+    window.__fire('hover', false);
+    document.querySelector('#pbox').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+  });
   await sleep(700);
   check('H7 typing started inside the hover-out grace cancels the pending collapse', await page2.evaluate(() => document.body.dataset.phase) === 'expanded' && (await box(page2)).typing, J({ phase: await page2.evaluate(() => document.body.dataset.phase), b: await box(page2) }));
   await page2.close();
@@ -304,12 +307,15 @@ async function scenarioKeyFalse() {
   await page2.close();
 
   // focus(true) that leaves the panel not key (false), or fails: no keys and no `key` event can come, so typing ends.
+  // The reply is held until the pointer has left, so the hover-out grace never races the click.
   for (const [how, reply] of [['returns false', 'false'], ['rejects', 'reject']]) {
     const p = await openPage({ tag: `focus-${reply}` });
     await openCard(p);
-    await p.evaluate((r) => { window.__focusReply = (a) => a.on ? (r === 'false' ? Promise.resolve(false) : Promise.reject(new Error('no'))) : Promise.resolve(false); }, reply);
-    await fire(p, 'hover', false);
+    await p.evaluate(() => { window.__focusReply = (a) => a.on ? new Promise((ok, no) => { window.__settleFocus = { ok, no }; }) : Promise.resolve(false); });
     await clickBox(p);
+    await fire(p, 'hover', false);
+    await p.evaluate((r) => r === 'false' ? window.__settleFocus.ok(false) : window.__settleFocus.no(new Error('no')), reply);
+    await sleep(100);
     const b = await box(p);
     check(`K8 focus(true) ${how}: typing ends with no ring and an empty hint, and focus({on: false}) follows`, !b.typing && b.hint === '' && J(await invokes(p, 'focus')) === J([{ on: true }, { on: false }]), J({ b, f: await invokes(p, 'focus') }));
     check(`K9 focus(true) ${how} with the pointer gone: the panel collapses as usual`, await waitPhase(p, 'collapsed', 2000), await p.evaluate(() => document.body.dataset.phase));
