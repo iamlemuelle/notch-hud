@@ -1,7 +1,7 @@
 // Loads dist/index.html in headless Chromium with a fake Tauri bridge and checks CONTRACT.md section 10 "Page": the
-// #avatar box and #total places, the amber total, which animation plays, the paint budget (a MutationObserver on
-// #avatar counts every paint), the mood event, and the fallback to the dot. Real time, no retries. Every number comes
-// from the contract text. What a given expression looks like is read from the page's own
+// #avatar box and #total places, the amber total, which animation plays, the paint budget (each frame the page renders,
+// on the page's clock, and a MutationObserver on #avatar), the mood event, and the fallback to the dot. Real time, no
+// retries. Every number comes from the contract text. What a given expression looks like is read from the page's own
 // `AvatarCore.renderAvatarDefinition(definition, key)`: the svg shows `key` when its path `d` attributes include the
 // scene's head and eye paths.
 //
@@ -97,8 +97,9 @@ function installBridge({ layout, windows, avatar, mood, holdMood, noCore }) {
     },
   };
   if (noCore) Object.defineProperty(window, 'AvatarCore', { configurable: false, get() { return undefined; }, set() {} });
-  // Each frame the page renders, with the playback state it rendered: the step, its phase and when that phase started
-  // on the page's playback clock, which keeps to the definition's schedule even when a timer fires late.
+  // Each frame the page renders: the page's own time for that frame (`at`), and the playback state it rendered: the
+  // step, its phase and when that phase started, and when the latest blink started. Phases and blinks keep to the
+  // definition's schedule on the page's playback clock even when a timer fires late.
   const renders = (window.__renders = []);
   if (!noCore) {
     let core;
@@ -107,7 +108,7 @@ function installBridge({ layout, windows, avatar, mood, holdMood, noCore }) {
       get() { return core; },
       set(v) {
         core = v && { ...v, renderAvatarFrame: (def, play, at, env) => {
-          renders.push({ t: now(), step: play.stepIndex, phase: play.phase, phaseStartedAt: play.phaseStartedAt });
+          renders.push({ at, step: play.stepIndex, phase: play.phase, phaseStartedAt: play.phaseStartedAt, blinkStartedAt: play.blinkStartedAt });
           return v.renderAvatarFrame(def, play, at, env);
         } };
       },
@@ -190,8 +191,31 @@ async function observePaints(page, ms) {
   await sleep(ms);
   return page.evaluate((t) => ({
     batches: window.__mut.batches.map((b, i) => ({ t: b, rendered: window.__mut.rendered[i] })).filter((b) => b.t >= t),
-    renders: window.__renders.filter((r) => r.t >= t),
+    renders: window.__renders.filter((r) => r.at >= t),
   }), t0);
+}
+// Frame timing is read per rendered frame, with the page's own time for that frame and the playback state it rendered,
+// never from gaps between mutation times: a frame whose timer fires late lands later in wall time, and the next phase
+// or blink still starts on schedule. A mutation with no rendered frame would hide a paint from this, so none may come.
+const unrendered = (batches) => batches.slice(1).filter((x, i) => x.rendered <= batches[i].rendered);
+// The frames of a loop, split into bursts: each ends with the one frame of the hold the transition leads into. Frames
+// after the last hold frame are an unfinished burst and left out.
+function holdBursts(renders) {
+  const out = [];
+  let cur = [];
+  for (const r of renders) { cur.push(r); if (r.phase === 'hold') { out.push(cur); cur = []; } }
+  return out;
+}
+// The frames of a hold that blinks, by the blink they follow: frames inside the blink's `durationMs` on the page's
+// clock, and frames after it. `start` undefined collects frames from before the first blink.
+function blinkBursts(renders, durationMs) {
+  const out = [];
+  for (const r of renders) {
+    let b = out.find((x) => x.start === r.blinkStartedAt);
+    if (!b) out.push((b = { start: r.blinkStartedAt, during: [], after: [] }));
+    (b.start !== undefined && r.at < b.start + durationMs ? b.during : b.after).push(r.at);
+  }
+  return out;
 }
 // The keys seen, sampling every 40 ms for `ms`.
 async function seen(page, def, keys, ms) {
@@ -205,15 +229,6 @@ async function waitShown(page, def, keys, ms) {
   const end = Date.now() + ms;
   while (Date.now() < end) { const s = await shown(page, def, keys); if (s.length) return s[0]; await sleep(30); }
   return null;
-}
-// Groups batch times into clusters separated by more than `gap` ms.
-function clusters(times, gap) {
-  const out = [];
-  for (const t of times) {
-    const c = out[out.length - 1];
-    if (c && t - c.end <= gap) { c.end = t; c.n += 1; } else out.push({ start: t, end: t, n: 1 });
-  }
-  return out;
 }
 const minGap = (times) => times.slice(1).reduce((m, t, i) => Math.min(m, t - times[i]), Infinity);
 const all = Object.values(KEYS).flat().filter((k, i, a) => a.indexOf(k) === i);
@@ -357,19 +372,19 @@ async function scenarioBudget() {
   await painted(page);
   await sleep(1200);
   const paints = await observePaints(page, 4000);
-  let b = paints.batches.map((x) => x.t);
-  const cs = clusters(b, 150);
-  const tooLong = cs.filter((c) => c.end - c.start > 250 || c.n > 6);
-  // A hold is read on the page's playback clock, not from gaps in wall time: a transition frame whose timer fired late
-  // lands in the hold's wall time, and the next transition still starts on schedule.
+  let frames = paints.renders.map((r) => r.at);
+  // A burst is the transition's frames, each inside the step's transitionMs on the page's clock, then the hold's frame.
+  const transitionMs = (r) => BALL.animations.idle.steps[r.step].transitionMs;
+  const bursts = holdBursts(paints.renders);
+  const badBursts = bursts.filter((c) => c.length > 6 || c.slice(0, -1).some((r) => r.phase !== 'transition' || r.at >= r.phaseStartedAt + transitionMs(r)));
   const sameHold = (x, y) => x.phase === 'hold' && y.phase === 'hold' && x.step === y.step && x.phaseStartedAt === y.phaseStartedAt;
   const holdTwice = paints.renders.slice(1).filter((r, i) => sameHold(paints.renders[i], r));
-  const unrendered = paints.batches.slice(1).filter((x, i) => x.rendered <= paints.batches[i].rendered);
-  check('B1 a loop of 400 ms holds with 100 ms transitions: frames come in bursts (6 or more over 4 s), each at most 250 ms long',
-    cs.length >= 6 && tooLong.length === 0, J({ bursts: cs.length, tooLong, total: b.length }));
+  const stray = unrendered(paints.batches);
+  check('B1 a loop of 400 ms holds with 100 ms transitions: frames come in bursts (6 or more over 4 s), each the transition\'s frames inside its 100 ms on the page\'s clock, then the hold\'s frame (at most 6 frames)',
+    bursts.length >= 6 && badBursts.length === 0, J({ bursts: bursts.length, badBursts, total: frames.length }));
   check('B2 ... and nothing mutates during a hold: no hold is painted twice, and every mutation comes with a rendered frame',
-    paints.renders.some((r) => r.phase === 'hold') && holdTwice.length === 0 && unrendered.length === 0, J({ renders: paints.renders.length, holdTwice, unrendered }));
-  check('B3 ... never more than one frame per 50 ms (gaps of at least 45 ms)', b.length > 0 && minGap(b) >= 45, `min gap ${minGap(b)} over ${b.length}`);
+    paints.renders.some((r) => r.phase === 'hold') && holdTwice.length === 0 && stray.length === 0, J({ renders: paints.renders.length, holdTwice, unrendered: stray }));
+  check('B3 ... never more than one frame per 50 ms (frames at least 45 ms apart on the page\'s clock)', frames.length > 0 && minGap(frames) >= 45, `min gap ${minGap(frames)} over ${frames.length}`);
   await page.close();
 
   // ambient motion: frames continue through a hold, still at most 20/s
@@ -377,28 +392,40 @@ async function scenarioBudget() {
   page = await openPage({ tag: 'drift', def: drift });
   await painted(page);
   await sleep(500);
-  b = await observe(page, 1500);
-  check('B4 ambient motion (microSaccades, slowDrift) in a 2 s hold: frames keep coming (at least 8 in 1.5 s)', b.length >= 8, `${b.length} in 1.5 s`);
-  check('B5 ... at most 20 per second (30 in 1.5 s, gaps of at least 45 ms)', b.length <= 31 && minGap(b) >= 45, `${b.length} in 1.5 s, min gap ${minGap(b)}`);
+  let drawn = await observePaints(page, 1500);
+  frames = drawn.renders.map((r) => r.at);
+  check('B4 ambient motion (microSaccades, slowDrift) in a 2 s hold: frames keep coming (at least 8 in 1.5 s)', drawn.batches.length >= 8, `${drawn.batches.length} in 1.5 s`);
+  check('B5 ... at most 20 per second (30 in 1.5 s, frames at least 45 ms apart on the page\'s clock, every mutation with a rendered frame)',
+    frames.length <= 31 && minGap(frames) >= 45 && unrendered(drawn.batches).length === 0, J({ frames: frames.length, minGap: minGap(frames), unrendered: unrendered(drawn.batches) }));
   await page.close();
 
   // blink
-  page = await openPage({ tag: 'blink', def: fixture('blink') });
+  const blinkDef = fixture('blink');
+  page = await openPage({ tag: 'blink', def: blinkDef });
   await painted(page);
   await sleep(600);
-  b = await observe(page, 3500);
-  // 300 ms sits between any plausible frame spacing inside a 200 ms blink (50 ms, or 130 ms on a slow runner) and the 700 ms quiet interval.
-  const bc = clusters(b, 300);
-  const gaps = bc.slice(1).map((c, i) => c.start - bc[i].end);
-  check('B6 blinking in a 5 s hold: frames come in bursts (at least 3 blinks in 3.5 s), each at most 350 ms long (the 200 ms blink plus a frame)', bc.length >= 3 && bc.every((c) => c.end - c.start <= 350), J({ bursts: bc.length, long: bc.filter((c) => c.end - c.start > 350) }));
-  check('B7 ... with no frames between blinks (bursts at least 500 ms apart, the quiet interval is 700) and at most one per 50 ms', gaps.length > 0 && gaps.every((g) => g >= 500) && minGap(b) >= 45, J({ gaps, minGap: minGap(b) }));
+  drawn = await observePaints(page, 3500);
+  frames = drawn.renders.map((r) => r.at);
+  // Each blink is a burst: frames inside its 200 ms on the page's clock, then the one frame that opens the eyes. The
+  // last blink in the window may not have reached that frame yet.
+  const blinks = blinkBursts(drawn.renders, blinkDef.animations.idle.blink.durationMs).filter((x) => x.start !== undefined);
+  const seenBlinks = blinks.filter((x) => x.during.length > 0);
+  const unclosed = blinks.slice(0, -1).filter((x) => x.after.length !== 1);
+  check('B6 blinking in a 5 s hold: frames come in bursts (at least 3 blinks in 3.5 s), each the 200 ms blink on the page\'s clock plus a frame',
+    seenBlinks.length >= 3 && unclosed.length === 0, J({ blinks: seenBlinks.length, unclosed }));
+  // A frame between blinks: any frame after the one that closed its blink, or from before the first blink.
+  const between = blinkBursts(drawn.renders, blinkDef.animations.idle.blink.durationMs).flatMap((x) => (x.start === undefined ? x.after : x.after.slice(1)));
+  const notHold = drawn.renders.filter((r) => r.phase !== 'hold');
+  check('B7 ... with no frames between blinks, every mutation with a rendered frame, and at most one per 50 ms (frames at least 45 ms apart on the page\'s clock)',
+    frames.length > 0 && between.length === 0 && notHold.length === 0 && unrendered(drawn.batches).length === 0 && minGap(frames) >= 45,
+    J({ between, notHold, unrendered: unrendered(drawn.batches), minGap: minGap(frames) }));
   await page.close();
 
   // a once animation that ended keeps its last frame and no timer
   page = await openPage({ tag: 'once', pose: POSE.celebrate });
   await painted(page);
   await sleep(2200);
-  b = await observe(page, 2500);
+  const b = await observe(page, 2500);
   const s = await shown(page, BALL, all);
   check('B8 a once animation (celebrate) that ended keeps its last frame (peek) and sets no timer', b.length === 0 && J(s) === J(['peek']), J({ mutations: b.length, shown: s }));
   await page.close();
