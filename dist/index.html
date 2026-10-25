@@ -610,7 +610,6 @@
     phase = p;
     epoch++;
     document.body.dataset.phase = p;
-    if (p !== 'expanded') stopTyping();
     if (p === 'collapsed') closeCard(true);
     settleWindow();
     syncClock();
@@ -933,7 +932,6 @@
       if (!r) return;
       openingId = null;
       if (!r.d) return;
-      if (detailId !== id) clearDraft();
       detailId = id;
       drawDetail(r.d);
       showCard(true);
@@ -986,8 +984,9 @@
     cancelTimer();
     syncPrompt();
     focusing++;
-    const done = () => { focusing--; if (typing) msg.focus(); };
-    window.__TAURI__.core.invoke('focus', { on: true }).then(done, done);
+    // A panel that did not become key gets no keys and sends no `key` false, so typing ends here.
+    const done = (key) => { focusing--; if (key === true) { if (typing) msg.focus(); } else stopTyping(); };
+    window.__TAURI__.core.invoke('focus', { on: true }).then(done, () => done(false));
   }
   // Gives the keyboard back; the panel then collapses as usual if the pointer is gone.
   function stopTyping() {
@@ -996,20 +995,23 @@
     msg.blur();
     syncPrompt();
     window.__TAURI__.core.invoke('focus', { on: false }).catch(() => {});
-    if (phase === 'expanded' && !hovered) later(250, collapse);
+    if (phase === 'expanded' && !hovered) onLeave();
   }
   function draft() {
     const text = draftText();
     if (text) window.__TAURI__.core.invoke('prompt_draft', { text }).catch(() => {});
   }
-  $('pbox').addEventListener('pointerdown', (e) => { if (!e.target.closest('#send')) startTyping(); });
-  // The send button keeps the caret in the box.
-  $('send').addEventListener('pointerdown', (e) => e.preventDefault());
+  $('pbox').addEventListener('pointerdown', (e) => {
+    // A press on the box outside the text area, the send button included, leaves DOM focus where it is.
+    if (e.target !== msg) e.preventDefault();
+    if (!e.target.closest('#send')) startTyping();
+  });
   $('send').addEventListener('click', draft);
   msg.addEventListener('input', syncPrompt);
   document.addEventListener('pointerdown', (e) => { if (typing && !$('pbox').contains(e.target)) stopTyping(); }, true);
   document.addEventListener('keydown', (e) => {
-    if (!typing) return;
+    // WebKit ends a composition before the keydown that commits it, so that keydown has isComposing false and code 229.
+    if (!typing || e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Escape') { e.preventDefault(); stopTyping(); }
     else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); draft(); }
   });

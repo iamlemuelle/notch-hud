@@ -1,8 +1,9 @@
 // Loads dist/index.html in headless Chromium with a fake Tauri bridge and checks CONTRACT.md section 11 "Prompt box"
 // (typing only) and section 8 "Typing (amendment)": a click on the box calls focus(true) and enters typing, the hint
 // line, hover-out during typing keeps the panel open, Esc, a `key` false event and leaving the card call focus(false)
-// and end typing, the panel then collapses when the pointer is gone, and Return calls prompt_draft with the draft and
-// nothing else. Every expected value is a literal written from the contract text. Real time, no retries.
+// and end typing, the panel then collapses when the pointer is gone, Return calls prompt_draft with the draft and
+// nothing else, a focus(true) that does not take ends typing, and keys of an input method composition do nothing. Every
+// expected value is a literal written from the contract text. Real time, no retries.
 //
 // Env: PLAYWRIGHT_CORE, CHROMIUM, NOTCH_PAGE, PAGE_CPU_THROTTLE as in tests/page_test.sh. Exit 0 when every check
 // passes, 1 when one fails, 2 when the browser cannot start.
@@ -47,12 +48,12 @@ const J = (v) => JSON.stringify(v);
 const pageErrors = [];
 
 // Installed before any page script: the fake bridge. `session_detail` answers with window.__reply(id); `focus` with
-// window.__focusReply() (resolved at once by default).
+// window.__focusReply(args), by default at once with whether the panel is key afterwards: `on`.
 function installBridge({ layout, windows }) {
   const handlers = {};
   const rec = (window.__rec = { invokes: [] });
   window.__reply = () => null;
-  window.__focusReply = () => Promise.resolve(null);
+  window.__focusReply = (a) => Promise.resolve(!!(a && a.on));
   window.__fire = (name, payload) => { (handlers[name] || []).forEach((h) => h({ payload })); };
   window.__TAURI__ = {
     event: { listen: (name, h) => { (handlers[name] = handlers[name] || []).push(h); return Promise.resolve(() => {}); } },
@@ -190,6 +191,17 @@ async function scenarioType() {
   await page.close();
 }
 
+async function scenarioPadding() {
+  const page = await openPage({ tag: 'padding' });
+  await openCard(page);
+  const r = await page.evaluate(() => { const e = document.querySelector('#pbox').getBoundingClientRect(); return { x: e.left, y: e.top + e.height / 2 }; });
+  await page.mouse.click(r.x + 4, r.y);
+  await sleep(150);
+  const b = await box(page);
+  check('T12 a click on the box\'s left padding starts typing and, once focus returns, puts the caret in the box', b.typing && b.focused && J(await invokes(page, 'focus')) === J([{ on: true }]), J({ b, f: await invokes(page, 'focus') }));
+  await page.close();
+}
+
 async function scenarioHoverOut() {
   const page = await openPage({ tag: 'hover-out' });
   await openCard(page);
@@ -205,6 +217,35 @@ async function scenarioHoverOut() {
   check('H3 Esc calls focus({on: false}) and ends typing: no ring, an empty hint, no DOM focus', J(await invokes(page, 'focus')) === J([{ on: true }, { on: false }]) && !b.typing && b.hint === '' && !b.focused, J({ f: await invokes(page, 'focus'), b }));
   check('H5 with the pointer gone, the panel then collapses as usual', await waitPhase(page, 'collapsed', 2000), await page.evaluate(() => document.body.dataset.phase));
   check('H6 collapsing after typing calls focus(false) no second time', J(await invokes(page, 'focus')) === J([{ on: true }, { on: false }]), J(await invokes(page, 'focus')));
+  await page.close();
+
+  // A click on the box inside the 250 ms after a hover out cancels that pending collapse.
+  const page2 = await openPage({ tag: 'hover-out-pending' });
+  await openCard(page2);
+  await fire(page2, 'hover', false);
+  await clickBox(page2);
+  await sleep(700);
+  check('H7 typing started inside the hover-out grace cancels the pending collapse', await page2.evaluate(() => document.body.dataset.phase) === 'expanded' && (await box(page2)).typing, J({ phase: await page2.evaluate(() => document.body.dataset.phase), b: await box(page2) }));
+  await page2.close();
+}
+
+async function scenarioIme() {
+  const page = await openPage({ tag: 'ime' });
+  await openCard(page);
+  await clickBox(page);
+  await page.keyboard.type('nihon');
+  // WebKit: the keydown that commits a candidate has isComposing false and keyCode 229; while composing, isComposing.
+  const key = (init, keyCode) => page.evaluate(([i, k]) => {
+    const e = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...i });
+    if (k !== undefined) Object.defineProperty(e, 'keyCode', { get: () => k });
+    document.querySelector('#msg').dispatchEvent(e);
+  }, [init, keyCode]);
+  await key({ key: 'Enter', isComposing: true });
+  await key({ key: 'Enter' }, 229);
+  await key({ key: 'Escape', isComposing: true });
+  await key({ key: 'Escape' }, 229);
+  await sleep(100);
+  check('I1 Return and Esc that belong to an input method composition do nothing: no draft, typing goes on', (await invokes(page, 'prompt_draft')).length === 0 && (await box(page)).typing && J(await invokes(page, 'focus')) === J([{ on: true }]), J({ d: await invokes(page, 'prompt_draft'), b: await box(page), f: await invokes(page, 'focus') }));
   await page.close();
 }
 
@@ -253,7 +294,7 @@ async function scenarioKeyFalse() {
   await fire(page2, 'key', false);
   await sleep(100);
   check('K5 key false while focus(true) is pending does not end typing', (await box(page2)).typing && J(await invokes(page2, 'focus')) === J([{ on: true }]), J({ b: await box(page2), f: await invokes(page2, 'focus') }));
-  await page2.evaluate(() => window.__releaseFocus(null));
+  await page2.evaluate(() => window.__releaseFocus(true));
   await sleep(100);
   check('K6 once focus(true) returns the box has DOM focus', (await box(page2)).focused && (await box(page2)).typing, J(await box(page2)));
   await fire(page2, 'key', false);
@@ -261,6 +302,19 @@ async function scenarioKeyFalse() {
   check('K7 a key false after it returns ends typing', !(await box(page2)).typing, J(await box(page2)));
   await page.close();
   await page2.close();
+
+  // focus(true) that leaves the panel not key (false), or fails: no keys and no `key` event can come, so typing ends.
+  for (const [how, reply] of [['returns false', 'false'], ['rejects', 'reject']]) {
+    const p = await openPage({ tag: `focus-${reply}` });
+    await openCard(p);
+    await p.evaluate((r) => { window.__focusReply = (a) => a.on ? (r === 'false' ? Promise.resolve(false) : Promise.reject(new Error('no'))) : Promise.resolve(false); }, reply);
+    await fire(p, 'hover', false);
+    await clickBox(p);
+    const b = await box(p);
+    check(`K8 focus(true) ${how}: typing ends with no ring and an empty hint, and focus({on: false}) follows`, !b.typing && b.hint === '' && J(await invokes(p, 'focus')) === J([{ on: true }, { on: false }]), J({ b, f: await invokes(p, 'focus') }));
+    check(`K9 focus(true) ${how} with the pointer gone: the panel collapses as usual`, await waitPhase(p, 'collapsed', 2000), await p.evaluate(() => document.body.dataset.phase));
+    await p.close();
+  }
 }
 
 async function scenarioLeaveCard() {
@@ -314,9 +368,18 @@ async function scenarioNoCard() {
   await page.keyboard.press('Enter');
   check('N2 Esc and Return outside typing call nothing', (await invokes(page, 'focus')).length === 0 && (await invokes(page, 'prompt_draft')).length === 0, J({ f: await invokes(page, 'focus'), d: await invokes(page, 'prompt_draft') }));
   await page.close();
+
+  const page2 = await openPage({ tag: 'collapsing' });
+  await openCard(page2);
+  await fire(page2, 'hover', false);
+  const collapsing = await waitPhase(page2, 'collapsing', 1500);
+  await page2.evaluate(() => document.querySelector('#pbox').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })));
+  await sleep(100);
+  check('N3 a press on the box while collapsing does not start typing', collapsing && (await invokes(page2, 'focus')).length === 0 && !(await box(page2)).typing, J({ collapsing, f: await invokes(page2, 'focus') }));
+  await page2.close();
 }
 
-for (const s of [scenarioLook, scenarioType, scenarioHoverOut, scenarioEscStays, scenarioKeyFalse, scenarioLeaveCard, scenarioNoCard]) {
+for (const s of [scenarioLook, scenarioType, scenarioPadding, scenarioHoverOut, scenarioIme, scenarioEscStays, scenarioKeyFalse, scenarioLeaveCard, scenarioNoCard]) {
   try { await s(); } catch (e) { check(`${s.name} ran`, false, e.stack || String(e)); }
 }
 await browser.close();

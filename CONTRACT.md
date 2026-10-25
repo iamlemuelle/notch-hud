@@ -871,10 +871,11 @@ This amends the phases above for the prompt box (section 11); where it differs, 
   `expanded`, the hit shape stays `detail` and the window mode stays `open`.
 - While typing, hover out sets no timer, so the panel stays expanded with the pointer gone. Hover in still cancels a
   pending collapse.
-- Typing ends on Esc, on a `key` event with `false`, on a pointer press in the page outside the box, when the card
-  closes (back), when a null reply hides the box and when the phase leaves `expanded`. Ending calls `focus(false)`
-  once. When the phase is still `expanded` and the latest `hover` event was `false`, it then collapses after 250 ms,
-  as hover out does.
+- Typing ends on Esc, on a `key` event with `false`, on a pointer press in the page outside the box, when
+  `focus(true)` returns anything but `true` or fails, when a null reply hides the box, and when the card closes (back,
+  or the reset when the phase becomes `collapsed`). Ending calls `focus(false)` once. When the phase is still
+  `expanded` and the latest `hover` event was `false`, it then collapses after 250 ms, as hover out does.
+- Starting to type cancels a pending hover-out collapse.
 
 ## 9. App bundle (`scripts/build-app.sh`)
 
@@ -1140,16 +1141,29 @@ focus" waits for.
 ### Typing
 
 - A pointer press on the box (not on the send button) while the card shows a session and the phase is `expanded`
-  starts typing: `invoke('focus', { on: true })`, then, once it returns, DOM focus moves to `#msg`.
-- While typing, keys go to the page: Return (no Shift, not composing) is the send key; Shift+Return inserts a newline;
-  Esc ends typing. Section 8 "Typing" lists every way typing ends.
+  starts typing: `invoke('focus', { on: true })`, then, once it returns `true`, DOM focus moves to `#msg`. When it
+  returns `false` or fails, the panel is not key, so no key and no `key` event can reach the page: typing ends at once.
+  A press on the box outside `#msg` leaves DOM focus where it is.
+- While typing, keys go to the page: Return (no Shift) is the send key; Shift+Return inserts a newline; Esc ends
+  typing. A keydown with `isComposing` or `keyCode` 229 belongs to an input method composition and does nothing
+  (WebKit sends the Return that commits a candidate with `isComposing` false and `keyCode` 229). Section 8 "Typing"
+  lists every way typing ends.
 - A `key` event with `false` that arrives while a `focus(true)` call has not returned is the previous give-back's and
   is ignored. A second `false` after typing ended does nothing.
 - The send key and a click on the send button do the same: when the trimmed draft is not empty, call
   `invoke('prompt_draft', { text })` with it. Typing goes on and the draft stays. A press on the send button keeps DOM
   focus in the box.
 
+### Menu
+
+The app's menu holds one submenu, `Edit`: Undo, Redo, a separator, Cut, Copy, Paste, Select All (Tauri's predefined
+items). While the panel is key, menu key equivalents reach notch-hud, not the frontmost app: Command-V and the other
+edit keys need these items, and Tauri's default menu would make Command-Q quit notch-hud, Command-H hide it and
+Command-W close the panel.
+
 ### Bridge
 
+- `focus(on: bool) -> bool` (amends section 3 "Key focus"): `on` returns whether the panel is key after the call;
+  off returns `false`.
 - Command `prompt_draft(text: String)`: sends nothing. Under `$NOTCH_TRACE` it logs `prompt: draft <n> chars` to
   stderr, `n` being the number of Unicode scalar values in `text` trimmed.
