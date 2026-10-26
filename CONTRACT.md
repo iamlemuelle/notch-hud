@@ -1249,7 +1249,7 @@ pub fn send(path: &Path, line: &str) -> Result<(), SendError>;
   once. `tests/give_back_test.sh` checks it: type, Esc, a click on the card's Folder row, then a letter that must land
   in a TextEdit decoy; then the same after a press on the Folder row that ends typing, after a click on Back that ends
   typing (the card still closes, so the press's `click` reaches the page though the panel was ordered out and in
-  between its down and up), and after a switch to Finder and back that resigns the panel. Measured: with the plain
+  during the press), and after a switch to Finder and back that resigns the panel. Measured: with the plain
   deactivate the letter after the Folder row click was lost in every run (two spike runs and the check); with the
   fix it landed in every round. Not fixed here: in some runs, with and without the fix, `hover: out` arrives while
   the pointer is on the card (once right after the box took the keyboard), so the panel collapses when typing ends.

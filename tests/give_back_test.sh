@@ -6,13 +6,13 @@
 # the keyboard back (`key: off`) with the pointer still on the panel, and posted key `a` lands in the decoy. A click on
 # the card's Folder row, not the box, then logs neither `key: on` nor `key: off`, the panel stays open, and posted key
 # `z` lands in the decoy too (`az`): before the fix the click made the panel key and `z` was lost. Then the box is
-# clicked again, `hi` typed, and a press on the Folder row ends typing within that click (`key: off`, no `key: on`, the
-# panel stays open); posted key `q` lands in the decoy (`azq`). A click on Back while typing ends typing and still
-# closes the card, and `w` after a row click lands (`azqw`). A switch to Finder and back while typing resigns the
-# panel, and `e` after a Folder row click lands (`azqwe`). The pointer leaving still collapses the panel. Nothing
-# reaches the fake inbox, and no app other than TextEdit and Finder (the switch) is activated. When the panel has
-# collapsed before a round with the pointer on it (a stray `hover: out`, seen with and without the fix), the round
-# opens the card again first and an INFO line says so.
+# clicked again, `hi` typed, and a press on the Folder row ends typing during that press (`key: off`, no `key: on`);
+# posted key `q` lands in the decoy (`azq`). A click on Back while typing ends typing and still closes the card, and
+# `w` after a row click lands (`azqw`). A switch to Finder and back while typing resigns the panel, and `e` after a
+# Folder row click lands (`azqwe`). The pointer leaving still collapses the panel. Nothing reaches the fake inbox, no
+# app but TextEdit is activated, and Finder only during the switch. When the panel has collapsed with the pointer on
+# it (a stray `hover: out`, seen with and without the fix), the next round opens the card again first and an INFO
+# line says so; the Back round is tried a second time then, and fails when it cannot be judged twice.
 #
 # It posts mouse and key events, so the terminal running it needs Accessibility. Exit 0 when every check passes, 1 when
 # one fails, 2 when the environment cannot run it. Do not touch the mouse or the keyboard or switch apps while it runs.
@@ -115,23 +115,27 @@ pass "panel expanded with its left edge at x=$x0"
 am="$(lines "$applog")"
 "$drive" click "$app" $((x0 + 120)) 229 >/dev/null 2>&1 || flunk "click row 1"
 if wait_for "$applog" 5 'page: detail sess-type found' "$am"; then pass "a click on row 1 opened the card: page: detail sess-type found"; else flunk "no 'page: detail sess-type found' after the row click"; exit 1; fi
+card_at="$(lines "$applog")"
 sleep 0.8
 
 # A `hover: out` while the pointer is on the card (seen with and without the fix; not what this test checks) can
 # collapse the panel when typing ends, and collapsing resets it to the list. Every round needs the card, so it is
 # opened again then, and the count is reported.
+# card_at, set when the card opens, is the log's line count then: a `window: pill` after it means the card is gone,
+# even when the panel has expanded again (on the list).
 collapses=0
+collapsed_since() { since "$applog" "$1" | grep -qF 'window: pill'; }
 need_card() {
-  local b line am
-  b="$("$drive" bounds "$app")"
-  case "$b" in *" 452 396") return 0;; esac
+  local line am
+  collapsed_since "$card_at" || return 0
   collapses=$((collapses + 1))
-  echo "INFO the panel had collapsed ($b) $1 with the pointer on it; opening the card again"
+  echo "INFO the panel had collapsed $1 with the pointer on it; opening the card again"
   line="$("$drive" hover "$app" 2>&1)" || { flunk "panel expands on hover again: $line"; exit 1; }
   x0="${line#x0=}"
   am="$(lines "$applog")"
   "$drive" click "$app" $((x0 + 120)) 229 >/dev/null 2>&1
   wait_for "$applog" 5 'page: detail sess-type found' "$am" || { flunk "row 1 did not open the card again"; exit 1; }
+  card_at="$(lines "$applog")"
   sleep 0.8
 }
 
@@ -190,28 +194,32 @@ sleep 0.5
 text3="$("$drive" axtext "$te" "$decoy_name" 2>&1)"
 if [ "$text3" = "azq" ]; then pass "a key after the press that ended typing landed in TextEdit: the decoy reads azq"; else flunk "the decoy reads [$text3] after the press that ended typing, want azq"; fi
 
-# A click on Back while typing: the give-back runs between its down and its up, and Back acts on `click`, so the card
-# closing shows the up still reached the page. Back spans 196..214 pt below the panel top, from x 14 of the panel.
-need_card "before the Back round"
-km="$(lines "$applog")"
-"$drive" click "$app" $((x0 + 120)) 333 >/dev/null 2>&1 || flunk "click the box a third time"
-if wait_for "$applog" 3 'key: on' "$km"; then pass "a third click on the box made the panel key: key: on"; else
-  flunk "no 'key: on' after the third click on the box; the test stops before posting keys"; exit 1
-fi
-"$drive" type hi
-pm="$(lines "$applog")"
-"$drive" click "$app" $((x0 + 40)) 205 >/dev/null 2>&1 || flunk "click Back while typing"
-if wait_for "$applog" 3 'key: off' "$pm"; then pass "a click on Back while typing gave the keyboard back: key: off"; else flunk "no 'key: off' after the click on Back; the test stops"; exit 1; fi
-sleep 0.8
-# A collapse also shows the list, so Back is judged only while the panel stayed open.
-b="$("$drive" bounds "$app")"
-case "$b" in *" 452 396")
+# A click on Back while typing: the give-back runs during the press, and Back acts on `click`, so the card closing
+# shows the click still reached the page. Back spans 196..214 pt below the panel top, from x 14 of the panel. A
+# collapse also leaves the list showing, so Back is judged only when the panel did not collapse after the click.
+judged=0
+for attempt in 1 2; do
+  need_card "before the Back round"
+  km="$(lines "$applog")"
+  "$drive" click "$app" $((x0 + 120)) 333 >/dev/null 2>&1 || flunk "click the box for the Back round"
+  if wait_for "$applog" 3 'key: on' "$km"; then pass "a click on the box for the Back round made the panel key: key: on"; else
+    flunk "no 'key: on' after the click on the box for the Back round; the test stops before posting keys"; exit 1
+  fi
+  "$drive" type hi
+  pm="$(lines "$applog")"
+  "$drive" click "$app" $((x0 + 40)) 205 >/dev/null 2>&1 || flunk "click Back while typing"
+  if wait_for "$applog" 3 'key: off' "$pm"; then pass "a click on Back while typing gave the keyboard back: key: off"; else flunk "no 'key: off' after the click on Back; the test stops"; exit 1; fi
+  sleep 0.8
+  if collapsed_since "$pm"; then echo "INFO Back not judged (try $attempt): the panel collapsed after the click"; continue; fi
   am="$(lines "$applog")"
   "$drive" click "$app" $((x0 + 120)) 229 >/dev/null 2>&1 || flunk "click row 1 after Back"
   if wait_for "$applog" 5 'page: detail sess-type found' "$am"; then pass "Back closed the card, so its click landed: row 1 opened it again"; else flunk "no 'page: detail sess-type found' after Back and a row 1 click: the click on Back did not close the card"; fi
-  sleep 0.8;;
-*) echo "INFO Back not judged: the panel collapsed ($b) after the click"; need_card "after Back";;
-esac
+  card_at="$(lines "$applog")"
+  judged=1
+  sleep 0.8
+  break
+done
+[ "$judged" -eq 1 ] || flunk "Back was not judged: the panel collapsed after the click on both tries"
 if since "$applog" "$pm" | grep -qF 'key: on'; then flunk "a click after Back made the panel key: key: on"; fi
 "$drive" type w
 sleep 0.5
@@ -228,9 +236,11 @@ if wait_for "$applog" 3 'key: on' "$km"; then pass "a fourth click on the box ma
 fi
 "$drive" type hi
 sm="$(lines "$applog")"
+w0="$(lines "$watchlog")"
 osascript -e 'tell application "Finder" to activate' >/dev/null && sleep 0.5 && osascript -e 'tell application "TextEdit" to activate' >/dev/null
 if wait_for "$applog" 8 'key: off' "$sm"; then pass "the switch to Finder and back resigned the panel: key: off"; else flunk "no 'key: off' after the switch to Finder and back; the test stops"; exit 1; fi
 sleep 0.8
+w1="$(lines "$watchlog")"
 front_is_textedit "after the switch back"
 need_card "after the switch back"
 cm="$(lines "$applog")"
@@ -249,7 +259,9 @@ hm="$(lines "$applog")"
 if wait_for "$applog" 3 'window: pill' "$hm"; then pass "the pointer left and the panel collapsed: window: pill"; else flunk "no 'window: pill' within 3 s of the pointer leaving"; fi
 
 if [ -s "$received" ]; then flunk "the fake inbox received [$(cat "$received")], want nothing"; else pass "nothing reached the fake inbox"; fi
-if grep '^activated' "$watchlog" | grep -v ' com.apple.TextEdit$' | grep -qv ' com.apple.finder$'; then flunk "an app other than TextEdit and Finder was activated"; grep '^activated' "$watchlog"; else pass "no app other than TextEdit and Finder (the switch) was activated"; fi
+others="$({ head -n "$w0" "$watchlog"; tail -n +$((w1 + 1)) "$watchlog"; } | grep '^activated' | grep -v ' com.apple.TextEdit$')"
+switch="$(sed -n "$((w0 + 1)),${w1}p" "$watchlog" | grep '^activated' | grep -v ' com.apple.TextEdit$' | grep -v ' com.apple.finder$')"
+if [ -n "$others$switch" ]; then flunk "an app other than TextEdit (and Finder during the switch) was activated: $(echo $others $switch)"; else pass "no app other than TextEdit was activated, and Finder only during the switch"; fi
 echo "INFO collapses with the pointer on the panel: $collapses"
 echo "INFO key: on lines: $(grep -c '^key: on' "$applog"), key: off lines: $(grep -c '^key: off' "$applog")"
 
