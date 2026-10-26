@@ -1245,11 +1245,14 @@ pub fn send(path: &Path, line: &str) -> Result<(), SendError>;
   lost to notch-hud until a click elsewhere resigns it (measured with a TextEdit decoy).
 - Fixed (amendment, 2026-10-26): `focus(false)` orders the panel out and back in after the deactivate (section 3
   "Key focus"), so a click after a give-back, by Esc, a send or a resign, leaves the panel not key, logs neither
-  `key: on` nor `key: off`, and keys typed afterwards reach the frontmost app. `tests/give_back_test.sh` checks it:
-  type, Esc, a click on the card's Folder row, then a letter that must land in a TextEdit decoy. Measured in the
-  spike: with the plain deactivate the letter was lost after Esc in both runs, and after a switch to another app
-  the click made the panel key through `_NSShowNonActivatingKeyWindow`; with the fix the letter landed after Esc
-  and after the switch.
+  `key: on` nor `key: off`, and keys typed afterwards reach the frontmost app. Each give-back still logs `key: off`
+  once. `tests/give_back_test.sh` checks it: type, Esc, a click on the card's Folder row, then a letter that must land
+  in a TextEdit decoy; then the same after a press on the Folder row that ends typing, after a click on Back that ends
+  typing (the card still closes, so the press's `click` reaches the page though the panel was ordered out and in
+  between its down and up), and after a switch to Finder and back that resigns the panel. Measured: with the plain
+  deactivate the letter after the Folder row click was lost in every run (two spike runs and the check); with the
+  fix it landed in every round. Not fixed here: in some runs, with and without the fix, `hover: out` arrives while
+  the pointer is on the card (once right after the box took the keyboard), so the panel collapses when typing ends.
 
 #### Page
 

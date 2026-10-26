@@ -1,5 +1,5 @@
-# Sourced by tests/inbox_test.sh and tests/prompt_test.sh: the fake Claude Code inbox, kept in one place because it
-# is the part that must never reach a real session. The caller has already run
+# Sourced by tests/inbox_test.sh, tests/prompt_test.sh and tests/give_back_test.sh: the fake Claude Code inbox, kept
+# in one place because it is the part that must never reach a real session. The caller has already run
 # `unset CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN`, and the socket lives in its own temp dir.
 # Needs $root, $tmp, $sock, $received, $inboxlog and a wait_for function (log, seconds, fixed string).
 

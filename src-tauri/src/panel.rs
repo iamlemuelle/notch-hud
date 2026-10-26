@@ -142,8 +142,8 @@ pub(crate) fn focus(on: bool) -> bool {
         panel.orderFrontRegardless();
         return false;
     }
-    // A click on the panel after a give-back can make it key before this runs (measured), so `key: on` keys off the
-    // flag, which is off whenever the keyboard was given back.
+    // `key: on` keys off the flag, which is off whenever the keyboard was given back, not off `isKeyWindow`: before
+    // the give-back ordered the panel out and in, a click could make it key before this ran (measured).
     let was_wanted = KEY_WANTED.replace(true);
     panel.makeKeyWindow();
     // wry's parent view holds one subview, the WKWebView.
