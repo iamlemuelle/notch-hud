@@ -1,14 +1,14 @@
 // Tests for CONTRACT.md section 8, "Geometry". Expected values are written out from the contract's formulas for a
-// 185 x 32 notch on a 982 pt tall screen; none are computed with the code under test.
+// 185 x 32 notch on a 1512 x 982 pt screen; none are computed with the code under test.
 use super::*;
 
 fn size(width: f64, height: f64) -> Size {
     Size { width, height }
 }
 
-/// The notch used throughout: 185 x 32 on a 982 pt tall screen.
+/// The notch used throughout: 185 x 32 on a 1512 x 982 pt screen.
 fn sample(rows: usize, total: usize) -> Layout {
-    layout(185.0, 32.0, 982.0, rows, total)
+    layout(185.0, 32.0, 1512.0, 982.0, rows, total)
 }
 
 #[test]
@@ -16,7 +16,8 @@ fn layout_with_one_row() {
     assert_eq!(
         sample(1, 1),
         Layout {
-            stage: size(452.0, 982.0),
+            stage: size(640.0, 982.0),
+            theater: size(608.0, 420.0),
             pill: size(305.0, 32.0),
             peek: size(309.0, 36.0),
             banner: size(380.0, 78.0),
@@ -54,11 +55,12 @@ fn only_open_depends_on_rows_and_total() {
 
 #[test]
 fn pill_and_banner_follow_the_notch_and_stage_follows_the_screen() {
-    let l = layout(200.0, 38.0, 1117.0, 1, 1);
+    let l = layout(200.0, 38.0, 1512.0, 1117.0, 1, 1);
     assert_eq!(l.pill, size(320.0, 38.0));
     assert_eq!(l.peek, size(324.0, 42.0));
     assert_eq!(l.banner, size(380.0, 84.0));
-    assert_eq!(l.stage, size(452.0, 1117.0));
+    assert_eq!(l.stage, size(640.0, 1117.0));
+    assert_eq!(l.theater, size(608.0, 426.0));
     assert_eq!(l.open, size(420.0, 254.0));
     assert_eq!(l.detail, size(420.0, 380.0));
     assert_eq!(l.ear, 60.0);
@@ -68,6 +70,7 @@ fn pill_and_banner_follow_the_notch_and_stage_follows_the_screen() {
 fn constants() {
     assert_eq!(EAR, 60.0);
     assert_eq!(EXPANDED_WIDTH, 420.0);
+    assert_eq!(THEATER_WIDTH, 608.0);
     assert_eq!(BANNER_WIDTH, 380.0);
     assert_eq!(MARGIN, 16.0);
     assert_eq!(DETAIL_HEIGHT, 380.0);
@@ -79,8 +82,8 @@ fn detail_is_420_by_380_whatever_the_rows_total_and_notch() {
     assert_eq!(sample(0, 0).detail, size(420.0, 380.0));
     assert_eq!(sample(4, 4).detail, size(420.0, 380.0));
     assert_eq!(sample(4, 50).detail, size(420.0, 380.0));
-    assert_eq!(layout(200.0, 38.0, 1117.0, 3, 3).detail, size(420.0, 380.0));
-    assert_eq!(layout(150.0, 30.0, 800.0, 2, 9).detail, size(420.0, 380.0));
+    assert_eq!(layout(200.0, 38.0, 1512.0, 1117.0, 3, 3).detail, size(420.0, 380.0));
+    assert_eq!(layout(150.0, 30.0, 1512.0, 800.0, 2, 9).detail, size(420.0, 380.0));
 }
 
 #[test]
@@ -91,6 +94,7 @@ fn shape_size_returns_the_matching_field() {
     assert_eq!(shape_size(&l, Shape::Banner), size(380.0, 78.0));
     assert_eq!(shape_size(&l, Shape::Open), size(420.0, 254.0));
     assert_eq!(shape_size(&l, Shape::Detail), size(420.0, 380.0));
+    assert_eq!(shape_size(&l, Shape::Theater), size(608.0, 420.0));
 }
 
 #[test]
@@ -99,6 +103,7 @@ fn window_size_per_mode() {
     assert_eq!(window_size(&l, WindowMode::Pill), size(305.0, 32.0));
     assert_eq!(window_size(&l, WindowMode::Banner), size(412.0, 94.0));
     assert_eq!(window_size(&l, WindowMode::Open), size(452.0, 396.0));
+    assert_eq!(window_size(&l, WindowMode::Theater), size(640.0, 436.0));
 }
 
 #[test]
@@ -108,15 +113,16 @@ fn window_size_follows_the_layout() {
     assert_eq!(window_size(&sample(1, 1), WindowMode::Open), size(452.0, 396.0));
     assert_eq!(window_size(&sample(4, 4), WindowMode::Open), size(452.0, 396.0));
     assert_eq!(window_size(&sample(4, 50), WindowMode::Open), size(452.0, 396.0));
-    let tall = layout(200.0, 38.0, 1117.0, 1, 1);
+    let tall = layout(200.0, 38.0, 1512.0, 1117.0, 1, 1);
     assert_eq!(window_size(&tall, WindowMode::Pill), size(320.0, 38.0));
     assert_eq!(window_size(&tall, WindowMode::Banner), size(412.0, 100.0));
 }
 
 #[test]
-fn the_open_window_is_never_narrower_than_the_stage() {
+fn the_open_window_is_open_width_plus_margins_and_the_stage_is_wider() {
     let l = sample(1, 1);
-    assert_eq!(window_size(&l, WindowMode::Open).width, l.stage.width);
+    assert_eq!(window_size(&l, WindowMode::Open).width, 452.0);
+    assert_eq!(l.stage.width, 640.0);
 }
 
 #[test]
@@ -127,10 +133,12 @@ fn shape_and_window_mode_parse_lowercase_names() {
     assert_eq!(shape("\"banner\"").unwrap(), Shape::Banner);
     assert_eq!(shape("\"open\"").unwrap(), Shape::Open);
     assert_eq!(shape("\"detail\"").unwrap(), Shape::Detail);
+    assert_eq!(shape("\"theater\"").unwrap(), Shape::Theater);
     let mode = |s: &str| serde_json::from_str::<WindowMode>(s);
     assert_eq!(mode("\"pill\"").unwrap(), WindowMode::Pill);
     assert_eq!(mode("\"banner\"").unwrap(), WindowMode::Banner);
     assert_eq!(mode("\"open\"").unwrap(), WindowMode::Open);
+    assert_eq!(mode("\"theater\"").unwrap(), WindowMode::Theater);
 }
 
 #[test]
@@ -151,12 +159,13 @@ fn layout_serializes_with_the_contract_field_names() {
     assert_eq!(
         value,
         serde_json::json!({
-            "stage": { "width": 452.0, "height": 982.0 },
+            "stage": { "width": 640.0, "height": 982.0 },
             "pill": { "width": 305.0, "height": 32.0 },
             "peek": { "width": 309.0, "height": 36.0 },
             "banner": { "width": 380.0, "height": 78.0 },
             "open": { "width": 420.0, "height": 254.0 },
             "detail": { "width": 420.0, "height": 380.0 },
+            "theater": { "width": 608.0, "height": 420.0 },
             "ear": 60.0,
         })
     );
@@ -350,4 +359,56 @@ fn expanded_height_follows_shown_rows() {
     assert_eq!(expanded_height(4, 4), 320.0);
     assert_eq!(expanded_height(4, 5), 342.0);
     assert_eq!(expanded_height(4, 50), 342.0);
+}
+
+// The video stage (CONTRACT.md section 8, "Theater"): 608 wide, 16:9 picture inset 16, notch + 388 tall; half the
+// screen's width when that is narrower.
+
+/// A 185 x 32 notch on a 1100 x 982 pt screen: half the width is 550.
+fn narrow() -> Layout {
+    layout(185.0, 32.0, 1100.0, 982.0, 1, 1)
+}
+
+#[test]
+fn theater_is_608_by_420_on_a_32_pt_notch_and_426_on_a_38_pt_notch() {
+    assert_eq!(sample(1, 1).theater, size(608.0, 420.0));
+    assert_eq!(layout(200.0, 38.0, 1512.0, 1117.0, 1, 1).theater, size(608.0, 426.0));
+}
+
+#[test]
+fn theater_is_half_the_screen_width_on_a_narrow_screen() {
+    assert_eq!(narrow().theater, size(550.0, 387.375));
+}
+
+#[test]
+fn theater_width_clamps_exactly_at_a_1216_pt_screen() {
+    assert_eq!(layout(185.0, 32.0, 1216.0, 982.0, 1, 1).theater, size(608.0, 420.0));
+}
+
+#[test]
+fn the_stage_does_not_follow_the_screen_width() {
+    assert_eq!(narrow().stage, size(640.0, 982.0));
+}
+
+#[test]
+fn theater_window_is_the_theater_plus_margins() {
+    assert_eq!(window_size(&sample(1, 1), WindowMode::Theater), size(640.0, 436.0));
+    assert_eq!(window_size(&narrow(), WindowMode::Theater), size(582.0, 403.375));
+}
+
+#[test]
+fn the_open_window_is_452_wide_on_both_screens() {
+    assert_eq!(window_size(&sample(1, 1), WindowMode::Open).width, 452.0);
+    assert_eq!(window_size(&narrow(), WindowMode::Open).width, 452.0);
+}
+
+#[test]
+fn the_open_floor_does_not_apply_to_theater() {
+    let mut s = surface(WindowMode::Open, Shape::Open);
+    assert_eq!(s.window_size(&tall(500.0)), size(452.0, 516.0));
+    s.set(WindowMode::Theater, Shape::Theater);
+    assert_eq!(s.window_size(&sample(1, 1)), size(640.0, 436.0));
+    // Back to open: the floor starts again.
+    s.set(WindowMode::Open, Shape::Open);
+    assert_eq!(s.window_size(&sample(1, 1)), size(452.0, 396.0));
 }
