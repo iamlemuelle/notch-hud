@@ -142,6 +142,7 @@ x0="${x0_line#x0=}"
 pass "panel expanded with its left edge at x=$x0"
 
 # Row 1 spans 218..240 pt below the panel top (CONTRACT.md section 4).
+if pgrep -xq TextEdit; then echo "SKIP TextEdit started running during the run, so the not-running case cannot be checked (this test never quits a TextEdit it did not start)"; exit 2; fi
 panel_open "before the row click" || finish 1
 am="$(lines "$applog")"
 click $((x0 + 120)) 229 "click row 1"
@@ -152,7 +153,6 @@ sleep 0.8
 
 # Case not running. The button: 316..350 pt below the panel top (section 11).
 panel_open "before the first button click" || finish 1
-if pgrep -xq TextEdit; then echo "SKIP TextEdit started running during the run, so the not-running case cannot be checked (this test never quits a TextEdit it did not start)"; exit 2; fi
 w0="$(lines "$watchlog")"
 bm="$(lines "$applog")"
 click $((x0 + 120)) 333 "click the button"
