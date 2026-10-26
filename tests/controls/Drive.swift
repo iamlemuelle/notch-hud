@@ -70,7 +70,10 @@ func panel(of pid: Int32) -> CGRect? {
 
 // The test is only valid when the click lands on the test app's own window.
 func requireTopmost(_ pid: Int32, at p: CGPoint) {
-    guard let top = windows().first(where: { $0.bounds.contains(p) }) else { die(2, "no window under (\(p.x), \(p.y))") }
+    // The cursor can be a small WindowServer window at the cursor level (seen while a full-screen screencaptureui
+    // overlay was up); a click goes through it.
+    let cursorLevel = Int(CGWindowLevelForKey(.cursorWindow))
+    guard let top = windows().first(where: { $0.bounds.contains(p) && $0.layer != cursorLevel }) else { die(2, "no window under (\(p.x), \(p.y))") }
     if top.pid != pid {
         let cursor = CGEvent(source: nil)?.location ?? .zero
         die(2, "the window under (\(Int(p.x)), \(Int(p.y))) belongs to pid \(top.pid), not the test app \(pid) (its panel: \(panel(of: pid).map { "\($0)" } ?? "none"), cursor at \(cursor)): another notch-hud on top, or the panel collapsed?")
