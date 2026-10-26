@@ -882,6 +882,54 @@ This amends the phases above for the prompt box (section 11); where it differs, 
   `expanded` and the latest `hover` event was `false`, it then collapses after 250 ms, as hover out does.
 - Starting to type cancels a pending hover-out collapse.
 
+### Theater (amendment, 2026-10-26)
+
+This amends the geometry, phases and window rules above for the video stage (`docs/PLAN-video-sessions.md` section
+3.4, Phase 7; section 12 opens it); where it differs, it wins.
+
+```rust
+pub struct Layout { pub stage: Size, pub pill: Size, pub peek: Size, pub banner: Size, pub open: Size, pub detail: Size, pub theater: Size, pub ear: f64 }
+pub enum Shape { Pill, Peek, Banner, Open, Detail, Theater }   // "theater" on the wire
+pub enum WindowMode { Pill, Banner, Open, Theater }            // "theater" on the wire
+pub const THEATER_WIDTH: f64 = 608.0;
+
+pub fn layout(notch_width: f64, notch_height: f64, screen_width: f64, screen_height: f64, rows: usize, total: usize) -> Layout;
+```
+
+- `layout` takes the notched screen's width. `theater` = (`w`, `notch_height + 8 + (w - 32) * 9 / 16 + 8 + 36 + 12`)
+  with `w = min(THEATER_WIDTH, screen_width / 2)`: a 16:9 picture inset 16 pt at each side and 8 pt below the notch,
+  8 pt, a 36 pt control row, 12 pt. Unclamped it is 608 x (`notch_height + 388`), 608 x 420 on a 32 pt notch; on a
+  1100 pt wide screen it is 550 x (`notch_height + 355.375`). It depends on nothing else.
+- `stage` = (`THEATER_WIDTH + 2 * MARGIN`, `screen_height`), replacing (`EXPANDED_WIDTH + 2 * MARGIN`, ...): 640 wide.
+- `shape_size(layout, Theater)` is `theater`.
+- `window_size(layout, Open)` is (`open.width + 2 * MARGIN`, `max(open.height, detail.height) + MARGIN`), replacing
+  `stage.width` for the width, so the open window stays 452 x 396. `window_size(layout, Theater)` is
+  (`theater.width + 2 * MARGIN`, `theater.height + MARGIN`): 640 x 436 on a 32 pt notch. `Surface::window_size`'s
+  floor applies to `Open` only.
+- Trace: `window: theater <width>x<height>` like the other modes.
+- Page: `#theater` is a child of `#panel` at x `(stage.width - theater.width) / 2`, `theater.width` x
+  `theater.height`. In it, `#tv` (radius 12, `#0a0a0a`, a 1 px `rgba(255,255,255,0.08)` inner hairline) at
+  (16, `pill.height + 8`), `theater.width - 32` wide and 9/16 of that tall, shows the file's name (`#tvName`, 600
+  14/18 px, ellipsis); `#tctl`, 36 pt tall at (16, `pill.height + 16 +` the picture's height) and as wide as the
+  picture, is a grid of 34, 46, the rest, 46 and 34 pt with 8 pt gaps: a play button (`#vPlay`, disabled until
+  Phase 8 plays the file), the elapsed time `0:00`, the seek line, the remaining time (empty), and the close
+  button (`#vClose`, an x glyph, `aria-label` `Close video`). Clip radius 22.
+- Phase `theater`, hit shape `theater`, window mode `theater`, `body.dataset.phase` `theater`.
+
+| Phase | Event | Next | What happens |
+|---|---|---|---|
+| any | `video` | theater | window `theater` first (the grow rule of "Window"); then ears brighten, the clip springs to `theater`, `#content` and `#banner` fade out (80 ms, as collapse does), `#theater` fades in like `#content` (140 ms `ease-out`, 80 ms delay), and the art goes to the card's place at opacity 0 while the avatar and count go to the ear, both with the spring. Typing ends; a pending phase timer is cancelled |
+| theater | hover in, hover out, `drag` | theater | nothing: the stage is pinned (decision D7) |
+| theater | close click, or Esc while the panel is key | expanded | `#theater` fades out (80 ms), the clip springs to the open shape (`detail` when the card is shown, else `open`), art to the card and `#content` in, both as in Expand |
+| expanded, after closing the stage | the clip's `transitionend` | expanded | window `open`; then, when the latest `hover` was `false`, hover out as usual (collapse after 250 ms) |
+
+- Shrink: the window stays `theater` while the clip goes back, and becomes `open` once no `clip-path` transition is
+  running on `#panel` and the phase is not `theater` (on `transitionend`, or at once when the clip changed without
+  one). Hover out does not start the collapse until then. Collapsing while the window is `theater` still shrinks to
+  the pill as before.
+- The close button keeps DOM focus where it is and never calls `focus`.
+- Reduced motion: as for the other phases (the clip jumps, layers fade 120 ms linear, the art fades out and in).
+
 ## 9. App bundle (`scripts/build-app.sh`)
 
 The login item runs a signed `.app`, so macOS permission grants (Automation for Music and Spotify) belong to a stable
@@ -1362,3 +1410,54 @@ pub fn open(bundle_id: &str) -> Result<HostOpen, String>;
   A reply that arrives after the card closed or shows another session changes nothing. The result hint stays while
   the card shows the same session with `reach` `host_only` and the same host; closing the card, showing another
   session, or a redraw with another `reach` or host clears it.
+
+## 12. Video (`src-tauri/src/video.rs`, amendment, 2026-10-26)
+
+A file dropped on the notch opens the video stage of section 8 "Theater" (`docs/PLAN-video-sessions.md` section 3.4,
+Phase 7). Phase 7 shows the file's name; Phase 8 plays it.
+
+### Model
+
+```rust
+pub const EXTENSIONS: [&str; 3] = ["mp4", "m4v", "mov"];
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Video { pub path: PathBuf, pub name: String }   // {"path":"/Users/…/clip.mp4","name":"clip.mp4"}
+
+pub fn parse_path(path: &Path) -> Result<Video, String>;
+```
+
+- `parse_path(path)`, in order: `Err("not an absolute path")` for a relative path; the path is canonicalized
+  (`std::fs::canonicalize`: absolute, `.` and `..` removed, every symlink resolved), `Err("cannot resolve: <io
+  error>")` when that fails; `Err("not a regular file")` unless the canonical path is a regular file;
+  `Err("not an mp4, m4v or mov file")` unless its extension, compared without case, is in `EXTENSIONS`;
+  `Err("empty file")` when it has no bytes; `Err("file name is not UTF-8")`. Otherwise `Video { path: <canonical
+  path>, name: <its file name> }`. A symlink is judged, named and returned by its target.
+
+### Drop route
+
+The panel's webview gets a drop as Tauri's `DragDropEvent` with file paths, never as an HTML5 `File`: Tauri's handler
+returns `true`, so WebKit's own drop never runs (`tauri-runtime-wry-2.12.2/src/lib.rs:4786-4817`). The app handles
+the window's `WindowEvent::DragDrop`:
+
+- `Enter` with at least one path: emit `drag` `true`. `Leave`: emit `drag` `false`. Each only when it changes the
+  dragging state, with the trace `drag: in` / `drag: out`. A drag that carries no file paths is ignored.
+- `Drop` with at least one path: the dragging state ends with no `drag` event. One path is passed to `parse_path`;
+  two or more give `Err("more than one file")`. `Ok(video)`: emit `video` with it, trace `video: opened <name>`.
+  `Err(reason)`: emit `video-rejected` with the reason, trace `video: rejected <reason>`.
+- `Over` changes nothing.
+
+### Page
+
+- `#drop`, inside `#content` over the music block: 388 x 144 at (16, 40), radius 13, black with a 1 px
+  `rgba(245,245,245,0.26)` inner line, `Drop to play in the notch` (600 14/18 px) over `MP4, M4V or MOV` (500
+  11.5/15 px, muted), centered. It fades in and out in 120 ms linear (at once with reduced motion). While it shows,
+  the art in the card is at opacity 0.
+- `drag` `true`, outside `theater`: the drop target shows and the page acts as on hover in. `drag` `false`: the drop
+  target hides (unless a rejection shows) and, when the latest `hover` was `false`, the page acts as on hover out.
+- While files are dragged, and while a rejection shows, hover out does nothing in any phase.
+- `video-rejected`, outside `theater`: the drop target shows with the subtitle `That isn't a video. Drop an MP4, M4V or
+  MOV.` in amber for 2200 ms, then hides; then, when the latest `hover` was `false`, the page acts as on hover out.
+- `video` with a string `name`: the drop target hides, `#tvName` shows the name, and the phase becomes `theater`
+  (section 8). In `theater`, `drag` and `video-rejected` change nothing, and a new `video` replaces the name.
+
