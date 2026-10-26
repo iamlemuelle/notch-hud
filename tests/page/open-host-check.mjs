@@ -228,6 +228,23 @@ async function scenarioInFlight() {
   const l = await look(late);
   check('P4 a reply that arrives after Back changes nothing: the reopened card shows the initial hint', l.btnShown && l.hint === INITIAL && l.hintColor === MUTED, J(l));
   await late.close();
+
+  // Back while the call is still pending, reopen the same card: the old call no longer blocks a click, and its reply,
+  // when it lands, changes nothing.
+  const reopen = await openPage({ tag: 'reopen-pending' });
+  await openCard(reopen);
+  await reopen.evaluate(() => { window.__releases = []; window.__hostReply = () => new Promise((r) => { window.__releases.push(r); }); });
+  await clickButton(reopen);
+  await reopen.locator('#back').click({ timeout: 2000 });
+  await sleep(500);
+  await showCard(reopen);
+  await clickButton(reopen);
+  check('P5 a click on the reopened card sends a second open_host while the first reply is still pending', (await invokes(reopen, 'open_host')).length === 2, J(await invokes(reopen, 'open_host')));
+  await reopen.evaluate(() => { window.__hostReply = () => Promise.resolve({ kind: 'not_running' }); window.__releases[0]({ kind: 'opened', name: 'TextEdit' }); });
+  await sleep(150);
+  const r = await look(reopen);
+  check('P6 the stale reply to the first call leaves the reopened card showing the initial hint', r.btnShown && r.hint === INITIAL && r.hintColor === MUTED, J(r));
+  await reopen.close();
 }
 
 async function scenarioRedraw() {
