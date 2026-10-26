@@ -10,6 +10,7 @@
 # Exit 0 when every verdict agrees, 1 when one differs, 2 when the environment cannot run it (no node or npm, the
 # install failed, the build failed).
 set -u
+unset CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN  # never let a test reach a real session's inbox
 root="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
 

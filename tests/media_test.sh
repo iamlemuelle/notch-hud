@@ -2,6 +2,7 @@
 # End to end: the real app reads a fixture player through the real adapter, notices when it stops, and falls back to
 # AppleScript when the adapter is missing. Asserts on the app's NOTCH_TRACE lines (CONTRACT.md section 7).
 set -u
+unset CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN  # never let a test reach a real session's inbox
 root="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
 fail=0

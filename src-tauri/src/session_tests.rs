@@ -946,8 +946,16 @@ fn detail_of_a_plain_session() {
             event_ts: NOW - 5,
             tool_name: Some("Bash".into()),
             agents: 0,
+            reach: crate::prompt::Reach::None,
         })
     );
+}
+
+#[test]
+fn detail_of_a_session_with_an_inbox_reaches_it() {
+    let r = Record { inbox: Some("/tmp/claude-1/501/7.sock".into()), ..rec("sid1", "/Users/lem/proj", "PreToolUse", NOW - 5) };
+    let d = detail(&[r], "sid1", NOW).unwrap();
+    assert_eq!(d.reach, crate::prompt::Reach::Inbox);
 }
 
 #[test]

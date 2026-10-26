@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::prompt::{reach, Reach};
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Record {
     pub session_id: String,
@@ -73,6 +75,7 @@ pub struct Detail {
     pub event_ts: u64,
     pub tool_name: Option<String>,
     pub agents: usize,
+    pub reach: Reach,
 }
 
 pub const TTL_SECS: u64 = 3 * 3600;
@@ -261,6 +264,7 @@ pub fn detail(records: &[Record], id: &str, now: u64) -> Option<Detail> {
         event_ts: s.ts,
         tool_name: s.tool_name,
         agents: s.agents,
+        reach: reach(records, id),
     })
 }
 

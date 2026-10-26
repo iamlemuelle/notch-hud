@@ -1,6 +1,7 @@
 #!/bin/bash
 # Builds and launches the spike, then asserts the brief's criteria against the live window server.
 set -u
+unset CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN  # never let a test reach a real session's inbox
 cd "$(dirname "$0")"
 export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
 (cd src-tauri && cargo build --release -q) || exit 2

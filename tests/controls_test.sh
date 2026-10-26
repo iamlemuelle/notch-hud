@@ -5,6 +5,7 @@
 # It posts mouse events, so the terminal running it needs Accessibility. Exit 0 when every check passes, 1 when one
 # fails, 2 when the environment cannot run it. Do not move the mouse or switch apps while it runs.
 set -u
+unset CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN  # never let a test reach a real session's inbox
 root="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
 fail=0
