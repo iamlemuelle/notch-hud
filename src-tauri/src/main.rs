@@ -428,7 +428,11 @@ fn session_detail(id: String) -> Option<Detail> {
         }
     }
     if trace_on() {
-        eprintln!("page: detail {id} {}", if detail.is_some() { "found" } else { "none" });
+        match &detail {
+            Some(Detail { app: Some(app), .. }) => eprintln!("page: detail {id} found app={app}"),
+            Some(_) => eprintln!("page: detail {id} found"),
+            None => eprintln!("page: detail {id} none"),
+        }
     }
     detail
 }
@@ -464,29 +468,39 @@ async fn prompt(id: String, text: String) -> Result<(), String> {
 /// session's app").
 #[tauri::command]
 async fn open_host(id: String) -> Result<prompt::HostOpen, String> {
-    let host = if session::valid_id(&id) {
-        let records = RECORDS.lock().unwrap_or_else(|e| e.into_inner());
-        match prompt::reach(&records.0, &id) {
-            prompt::Reach::HostOnly(host) => Ok(host),
-            _ => Err("no app to open for this session".to_string()),
-        }
-    } else {
-        Err("bad session id".to_string())
-    };
-    let result = match host {
-        Ok(host) => tauri::async_runtime::spawn_blocking(move || host::open(&host).map(|done| (done, host)))
-            .await
-            .unwrap_or_else(|e| Err(format!("open task: {e}"))),
-        Err(reason) => Err(reason),
-    };
-    if trace_on() {
-        match &result {
-            Ok((prompt::HostOpen::Opened(_), host)) => eprintln!("host: opened {host}"),
-            Ok((prompt::HostOpen::NotRunning, host)) => eprintln!("host: not running {host}"),
-            Err(reason) => eprintln!("host: failed: {reason}"),
-        }
+    if !session::valid_id(&id) {
+        return host_failed("bad session id".into());
     }
-    result.map(|(done, _)| done)
+    let reach = {
+        let records = RECORDS.lock().unwrap_or_else(|e| e.into_inner());
+        prompt::reach(&records.0, &id)
+    };
+    let prompt::Reach::HostOnly(host) = reach else {
+        return host_failed("no app to open for this session".into());
+    };
+    let target = host.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || host::open(&target))
+        .await
+        .unwrap_or_else(|e| Err(format!("open task: {e}")));
+    match result {
+        Ok(done) => {
+            if trace_on() {
+                match done {
+                    prompt::HostOpen::Opened(_) => eprintln!("host: opened {host}"),
+                    prompt::HostOpen::NotRunning => eprintln!("host: not running {host}"),
+                }
+            }
+            Ok(done)
+        }
+        Err(reason) => host_failed(reason),
+    }
+}
+
+fn host_failed(reason: String) -> Result<prompt::HostOpen, String> {
+    if trace_on() {
+        eprintln!("host: failed: {reason}");
+    }
+    Err(reason)
 }
 
 fn prompt_refused(how: &str, reason: String) -> Result<(), String> {

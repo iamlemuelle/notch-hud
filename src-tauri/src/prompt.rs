@@ -106,10 +106,11 @@ pub fn reach(records: &[Record], id: &str) -> Reach {
     }
 }
 
-/// Apple's `CFBundleIdentifier` characters: ASCII letters, digits, `-` and `.`.
+/// Apple's `CFBundleIdentifier` characters (ASCII letters, digits, `-` and `.`), plus `_`, which some shipped bundles
+/// use: the id is only a lookup key, so a stricter rule would just hide the button.
 pub fn valid_bundle_id(s: &str) -> bool {
     (1..=BUNDLE_ID_MAX).contains(&s.len())
-        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.' || b == b'_')
         && !s.starts_with('.')
         && !s.ends_with('.')
         && !s.contains("..")

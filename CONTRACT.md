@@ -1307,8 +1307,9 @@ pub fn app_name(bundle_id: &str) -> Option<String>;
 pub fn open(bundle_id: &str) -> Result<HostOpen, String>;
 ```
 
-- `valid_bundle_id(s)`: `true` when `s` is 1 to `BUNDLE_ID_MAX` bytes of ASCII letters, digits, `-` and `.`, does not
-  start or end with `.`, and has no `..`. Apple's rule for `CFBundleIdentifier` allows only those characters.
+- `valid_bundle_id(s)`: `true` when `s` is 1 to `BUNDLE_ID_MAX` bytes of ASCII letters, digits, `-`, `.` and `_`, does
+  not start or end with `.`, and has no `..`. Apple's rule for `CFBundleIdentifier` allows letters, digits, `-` and
+  `.`; `_` is allowed too because some shipped bundles use it, and the id is only a lookup key.
 - `reach(records, id)`: `HostOnly(host)` only when the main-thread record's `host` passes `valid_bundle_id`; any other
   non-null `host` gives `None` (it can't name an app to bring forward).
 - `Detail` gains `pub app: Option<String>`, serialized as `"app"`: the `localizedName` of the first running
@@ -1318,7 +1319,8 @@ pub fn open(bundle_id: &str) -> Result<HostOpen, String>;
 - `host::app_name(bundle_id)`: that `localizedName`, or `None` when no such app runs or it has no name.
 - `host::open(bundle_id)`: `NotRunning` when no application with that bundle id is running (terminated ones don't
   count): nothing is launched. Otherwise it asks the first one to come forward and returns `Opened(name)`, `name`
-  its `localizedName` or the bundle id; `Err` with the reason when the system refuses the request.
+  its `localizedName` or the bundle id; `Err` with the reason when the system refuses the request. `Opened` means
+  the request was accepted (`activateWithOptions` returned `YES`), not that the app was seen frontmost.
 - How it asks: `activateWithOptions` with no options, on the calling (blocking) thread; `NSRunningApplication` is
   thread safe. Measured on macOS 27.0.1 from a background-launched accessory process with a non-activating panel
   shown, never active itself, with Finder frontmost and no hardware input for over 160 s: TextEdit was frontmost
@@ -1335,6 +1337,8 @@ pub fn open(bundle_id: &str) -> Result<HostOpen, String>;
   session`); else `host::open(host)`. Under `$NOTCH_TRACE` it logs one line to stderr: `host: opened <bundle id>`,
   `host: not running <bundle id>`, or `host: failed: <reason>`.
 - It never calls `focus` and never makes the panel key.
+- `session_detail`'s trace (section 3) becomes `page: detail <id> found app=<app>` when the reply's `app` is set;
+  otherwise it is unchanged.
 
 #### Page
 

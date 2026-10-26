@@ -904,7 +904,7 @@
     if (hostResult && !showsHost(hostResult)) hostResult = null;
     $('dRows').hidden = !d;
     $('dEnded').hidden = !!d;
-    $('pbox').hidden = $('phint').hidden = !d;
+    $('phint').hidden = !d;
     if (!canSend()) stopTyping();
     if (d) {
       $('dLabel').textContent = d.label;
@@ -1015,7 +1015,7 @@
   }
   function syncPrompt() {
     const open = canSend();
-    if (detailShown) $('pbox').hidden = hostOnly();
+    $('pbox').hidden = !detailShown || hostOnly();
     $('openApp').hidden = !hostOnly();
     if (hostOnly()) $('openApp').textContent = 'Open ' + appName();
     msg.disabled = !open;
