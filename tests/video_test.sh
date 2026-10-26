@@ -43,14 +43,15 @@ read -r screen_x screen_y screen_w screen_h < <("$drive" screen) || { echo "SKIP
 
 # Window sizes of CONTRACT.md section 8 for this notch and screen. pill = notch + 2 * 60 ears. The stage is
 # w = min(608, screen width / 2) wide, with a 16:9 picture (w - 32) wide: its window is w + 32 wide and
-# notch + 8 + picture + 8 + 36 + 12 + 16 tall, 640 x (notch + 404) unless the screen is narrower than 1216. The open
-# window is 452 x 396.
+# max(notch + 8 + picture + 8 + 36 + 12, 380, the open height for the seeded sessions) + 16 tall: 640 x (notch + 404)
+# unless the screen is narrower than 1216, floored at 396. The script seeds one session, whose open height is 254, so
+# the floor is 380. The open window is 452 x 396.
 pill_w=$((notch_w + 120)); pill_h=$notch_h
 open_w=452; open_h=396
 theater_w="$(awk -v s="$screen_w" 'BEGIN { w = s / 2; if (w > 608) w = 608; printf "%.10g", w }')"
 picture_h="$(awk -v w="$theater_w" 'BEGIN { printf "%.10g", (w - 32) * 9 / 16 }')"
 win_w="$(awk -v w="$theater_w" 'BEGIN { printf "%d", w + 32 + 0.5 }')"
-win_h="$(awk -v n="$notch_h" -v p="$picture_h" 'BEGIN { printf "%d", n + 8 + p + 8 + 36 + 12 + 16 + 0.5 }')"
+win_h="$(awk -v n="$notch_h" -v p="$picture_h" 'BEGIN { h = n + 8 + p + 8 + 36 + 12; if (h < 380) h = 380; printf "%d", h + 16 + 0.5 }')"
 if [ "$theater_w" = 608 ]; then theater_log="window: theater 640(\.0+)?x$((notch_h + 404))(\.0+)?"; else theater_log="window: theater [0-9.]+x[0-9.]+"; fi
 
 (cd "$root/src-tauri" && cargo build --release -q) || { echo "FAIL app build"; exit 2; }

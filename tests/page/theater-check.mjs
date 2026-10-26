@@ -476,6 +476,41 @@ async function scenarioIgnored() {
   await page.close();
 }
 
+// A track is playing, so the collapsed ear shows #earBars; a video then takes them away with the art, not after it.
+const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+const PLAYING = { via: 'adapter', health: 'ok', track: { title: 'Low Tide Static', artist: 'Mara Venn', album: 'Fixture Album', app: 'Apple Music', bundle_id: 'com.apple.Music', playing: true, duration_ms: 223000, elapsed_ms: 74000, elapsed_at_ms: Date.now(), artwork: PIXEL } };
+async function scenarioEarGlyphs() {
+  const page = await openPage({ tag: 'ear-glyphs' });
+  await fire(page, 'media', PLAYING);
+  await sleep(700);
+  const bars = () => page.evaluate(() => Number(getComputedStyle(document.getElementById('earBars')).opacity));
+  const before = await bars();
+  check('G0 collapsed with a playing track: #earBars shows in the ear (opacity 1)', (await phase(page)) === 'collapsed' && before === 1, J({ phase: await phase(page), before }));
+  await page.evaluate(() => {
+    window.__surfaceDelay = 50;
+    window.__ear = [];
+    window.__earOn = true;
+    const tick = () => {
+      window.__ear.push({ t: performance.now(), bars: Number(getComputedStyle(document.getElementById('earBars')).opacity), art: Number(getComputedStyle(document.getElementById('art')).opacity) });
+      if (window.__earOn) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  const ends = (await recording(page)).clipEnds.length;
+  const tv = await fire(page, 'video', VIDEO);
+  check('G1 video while collapsed opens the stage', await waitPhase(page, 'theater', 1000), `phase ${await phase(page)}`);
+  await waitClipEnd(page, ends, 2000);
+  await waitTransitionsDone(page, 2000);
+  await sleep(250);
+  const samples = await page.evaluate(() => { window.__earOn = false; return window.__ear; });
+  const late = samples.filter((x) => x.t - tv >= 200);
+  check('G2 from 200 ms after the video event #earBars has opacity 0 in every frame', samples.length > 10 && late.length > 5 && late.every((x) => x.bars === 0), J({ n: samples.length, late: late.filter((x) => x.bars !== 0).slice(0, 5) }));
+  let run = 0, worst = 0;
+  for (const x of samples) { run = x.bars === 1 && x.art < 0.1 ? run + 1 : 0; worst = Math.max(worst, run); }
+  check('G3 #earBars never sits at opacity 1 for more than 2 frames while #art is below 0.1', worst <= 2, J({ worst }));
+  await page.close();
+}
+
 async function scenarioReduced() {
   const page = await openPage({ tag: 'reduced', reduced: true });
   check('M0 opens the panel', await openPanel(page), `phase ${await phase(page)}`);
@@ -498,7 +533,7 @@ async function scenarioReduced() {
   await page.close();
 }
 
-for (const s of [scenarioDrag, scenarioRejected, scenarioStage, scenarioCloseHovered, scenarioEscape, scenarioArt, scenarioCardClose, scenarioFromPhases, scenarioReopen, scenarioTyping, scenarioIgnored, scenarioReduced]) {
+for (const s of [scenarioDrag, scenarioRejected, scenarioStage, scenarioCloseHovered, scenarioEscape, scenarioArt, scenarioCardClose, scenarioFromPhases, scenarioReopen, scenarioTyping, scenarioIgnored, scenarioEarGlyphs, scenarioReduced]) {
   try { await s(); } catch (e) { check(`${s.name} ran`, false, e.stack || String(e)); }
 }
 await browser.close();

@@ -427,3 +427,8 @@ fn theater_window_on_a_1024_pt_screen_is_floored_at_the_open_window_height() {
     assert_eq!(window_size(&layout(185.0, 32.0, 1024.0, 768.0, 1, 1), WindowMode::Theater), size(544.0, 396.0));
     assert_eq!(window_size(&layout(200.0, 38.0, 1024.0, 768.0, 1, 1), WindowMode::Theater), size(544.0, 396.0));
 }
+
+#[test]
+fn theater_window_is_floored_at_the_open_list_height_when_that_list_is_the_tallest() {
+    assert_eq!(window_size(&tall(500.0), WindowMode::Theater), size(640.0, 516.0));
+}
