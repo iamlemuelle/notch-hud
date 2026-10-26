@@ -137,3 +137,7 @@ fn connect(path: &Path) -> Result<UnixStream, SendError> {
         Err(_) => Err(SendError::Failed("connect timed out".into())),
     }
 }
+
+#[cfg(test)]
+#[path = "prompt_tests.rs"]
+mod tests;

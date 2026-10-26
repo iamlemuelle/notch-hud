@@ -1,6 +1,7 @@
 #!/bin/bash
 # Behavior tests for scripts/install-login.sh and uninstall-login.sh (CONTRACT.md section 6).
 # Uses a fake launchctl first on PATH, a temp HOME and a temp plist path. Never touches the real login item.
+unset CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN  # never let a test reach a real session's inbox
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 INSTALL="$REPO/scripts/install-login.sh"

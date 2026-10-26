@@ -1,6 +1,7 @@
 #!/bin/bash
 # Behavior tests for scripts/install-hooks.sh and uninstall-hooks.sh (CONTRACT.md sections 1 and 5).
 # Only ever touches a temp settings.json.
+unset CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN  # never let a test reach a real session's inbox
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 INSTALL="$REPO/scripts/install-hooks.sh"

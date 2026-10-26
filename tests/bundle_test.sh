@@ -3,6 +3,7 @@
 # Writes src-tauri/target/notch-hud.app, the bundle the login item runs. Uses the signing identity from
 # NOTCH_HUD_SIGN_IDENTITY, or the script's default.
 set -u
+unset CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN  # never let a test reach a real session's inbox
 root="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH"
 app="$root/src-tauri/target/notch-hud.app"

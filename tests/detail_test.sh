@@ -8,6 +8,7 @@
 # fails, 2 when the environment cannot run it. Do not move the mouse or switch apps while it runs. It runs its own app
 # process with a temp NOTCH_DIR and kills only that process; it never touches the installed app.
 set -u
+unset CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN  # never let a test reach a real session's inbox
 root="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
 fail=0

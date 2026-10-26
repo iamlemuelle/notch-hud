@@ -952,6 +952,13 @@ fn detail_of_a_plain_session() {
 }
 
 #[test]
+fn detail_of_a_session_with_an_inbox_reaches_it() {
+    let r = Record { inbox: Some("/tmp/claude-1/501/7.sock".into()), ..rec("sid1", "/Users/lem/proj", "PreToolUse", NOW - 5) };
+    let d = detail(&[r], "sid1", NOW).unwrap();
+    assert_eq!(d.reach, crate::prompt::Reach::Inbox);
+}
+
+#[test]
 fn detail_unknown_id_is_none() {
     let recs = [rec("sid1", "/p/proj", "Stop", NOW)];
     assert_eq!(detail(&recs, "nope", NOW), None);

@@ -1,9 +1,12 @@
 // Loads dist/index.html in headless Chromium with a fake Tauri bridge and checks CONTRACT.md section 11 "Prompt box"
-// (typing only) and section 8 "Typing (amendment)": a click on the box calls focus(true) and enters typing, the hint
-// line, hover-out during typing keeps the panel open, Esc, a `key` false event and leaving the card call focus(false)
-// and end typing, the panel then collapses when the pointer is gone, Return calls prompt_draft with the draft and
-// nothing else, a focus(true) that does not take ends typing, and keys of an input method composition do nothing. Every
-// expected value is a literal written from the contract text. Real time, no retries.
+// with its "Sending" amendment and section 8 "Typing (amendment)": a click on the box calls focus(true) and enters
+// typing, the hint line, hover-out during typing keeps the panel open, Esc, a `key` false event and leaving the card
+// call focus(false) and end typing, the panel then collapses when the pointer is gone, Return and the send button call
+// prompt({id, text}) with the card's id and the trimmed draft and end typing, every delivery state (sending, sent,
+// picked up by a records event or by status, no reply after 10 s, failed) with its hint and colour, the disabled box
+// for a session with no inbox (reach none or host_only), a reach that changes away from inbox ending typing, a
+// focus(true) that does not take ending typing, and keys of an input method composition doing nothing. Every expected
+// value is a literal written from the contract text. Real time, no retries.
 //
 // Env: PLAYWRIGHT_CORE, CHROMIUM, NOTCH_PAGE, PAGE_CPU_THROTTLE as in tests/page_test.sh. Exit 0 when every check
 // passes, 1 when one fails, 2 when the browser cannot start.
@@ -39,6 +42,10 @@ const LAYOUT = {
   ear: 60,
 };
 const WINDOW = { pill: { w: 305, h: 32 }, banner: { w: 412, h: 94 }, open: { w: 452, h: 396 } };
+const MUTED = 'rgb(139, 139, 139)', WHITE = 'rgb(245, 245, 245)', AMBER = 'rgb(245, 166, 35)';
+const SENT = 'Sent. Waiting for bravo to pick it up.';
+const NO_REPLY = 'No reply yet. It may be waiting for approval in that session.';
+const NO_INBOX = 'It has no inbox notch-hud can send to.';
 const HINT = 'Return to send, Shift+Return for a new line, Esc to stop typing';
 
 const results = [];
@@ -48,12 +55,13 @@ const J = (v) => JSON.stringify(v);
 const pageErrors = [];
 
 // Installed before any page script: the fake bridge. `session_detail` answers with window.__reply(id); `focus` with
-// window.__focusReply(args), by default at once with whether the panel is key afterwards: `on`.
+// window.__focusReply(args), `prompt` with window.__promptReply(args) (resolve null by default), by default at once with whether the panel is key afterwards: `on`.
 function installBridge({ layout, windows }) {
   const handlers = {};
   const rec = (window.__rec = { invokes: [] });
   window.__reply = () => null;
   window.__focusReply = (a) => Promise.resolve(!!(a && a.on));
+  window.__promptReply = () => Promise.resolve(null);
   window.__fire = (name, payload) => { (handlers[name] || []).forEach((h) => h({ payload })); };
   window.__TAURI__ = {
     event: { listen: (name, h) => { (handlers[name] = handlers[name] || []).push(h); return Promise.resolve(() => {}); } },
@@ -63,6 +71,7 @@ function installBridge({ layout, windows }) {
         if (cmd === 'layout') return Promise.resolve(layout);
         if (cmd === 'session_detail') return Promise.resolve(window.__reply(args && args.id));
         if (cmd === 'focus') return window.__focusReply(args);
+        if (cmd === 'prompt') return window.__promptReply(args);
         if (cmd === 'surface') {
           const w = args && windows[args.window];
           return new Promise((resolve) => setTimeout(async () => { if (w) await window.__setWindow(w.w, w.h); resolve(null); }, 0));
@@ -97,7 +106,7 @@ const row = (id, label, status, detail = null) => ({ id, label, status, detail }
 const SUMMARY = { rows: [row('id-one', 'alpha', 'needs_permission', 'Bash'), row('id-two', 'bravo', 'working')], total: 2, attention: 1, working: 1 };
 const card = (over = {}) => ({
   id: 'id-two', label: 'bravo', cwd: '/Users/lem/dev/bravo', status: 'working', event: 'PreToolUse',
-  event_ts: nowSec() - 4, tool_name: 'Bash', agents: 0, ...over,
+  event_ts: nowSec() - 4, tool_name: 'Bash', agents: 0, reach: { kind: 'inbox' }, ...over,
 });
 
 // What the box shows: the typing ring, the hint text, the send button, the draft, DOM focus and visibility.
@@ -108,6 +117,8 @@ const box = (page) => page.evaluate(() => {
     typing: !!b && b.classList.contains('typing'), hint: h ? h.textContent : null, send: s ? !s.disabled : null,
     value: m ? m.value : null, focused: document.activeElement === m, placeholder: m ? m.placeholder : null,
     boxShown: shown(b), hintShown: shown(h),
+    color: h ? getComputedStyle(h).color : null, disabled: m ? m.disabled : null,
+    phColor: m ? getComputedStyle(m, '::placeholder').color : null,
   };
 });
 
@@ -149,6 +160,8 @@ async function scenarioLook() {
   await page.close();
 }
 
+const typeAndSend = async (page, text) => { await clickBox(page); await page.keyboard.type(text); await page.keyboard.press('Enter'); await sleep(100); };
+
 async function scenarioType() {
   const page = await openPage({ tag: 'type' });
   await openCard(page);
@@ -158,36 +171,42 @@ async function scenarioType() {
   const b = await box(page);
   check('T2 typing: the ring is on, the hint reads the typing line, the box has DOM focus', b.typing && b.hint === HINT && b.focused, J(b));
 
-  await page.keyboard.type('hello');
+  await page.keyboard.type('  hello  ');
   await page.keyboard.press('Enter');
   await sleep(100);
-  const drafts = await invokes(page, 'prompt_draft');
-  check('T3 Return calls prompt_draft({text: "hello"}) once', J(drafts) === J([{ text: 'hello' }]), J(drafts));
+  const sends = await invokes(page, 'prompt');
+  check('T3 Return calls prompt({id: "id-two", text: "hello"}) once, with the draft trimmed', J(sends) === J([{ id: 'id-two', text: 'hello' }]), J(sends));
   const after = await box(page);
-  check('T4 Return keeps typing and the draft, and adds no newline', after.typing && after.value === 'hello' && after.hint === HINT, J(after));
-  check('T5 Return sends nothing: no command other than prompt_draft, focus, surface and session_detail', J((await page.evaluate(() => window.__rec.invokes.map((i) => i.cmd))).filter((c) => !['layout', 'media', 'sessions', 'avatar', 'mood', 'surface', 'session_detail', 'focus', 'prompt_draft'].includes(c))) === '[]', J(await page.evaluate(() => window.__rec.invokes.map((i) => i.cmd))));
+  check('T4 Return ends typing (focus({on: false})), clears the draft once sent and adds no newline', !after.typing && after.value === '' && J(await invokes(page, 'focus')) === J([{ on: true }, { on: false }]), J({ after, f: await invokes(page, 'focus') }));
+  check('T4b the hint then reads the sent state', after.hint === SENT, J(after));
+  const cmds = await page.evaluate(() => window.__rec.invokes.map((i) => i.cmd));
+  check('T5 no command other than prompt, focus, surface and the page\'s own reads was called', J(cmds.filter((c) => !['layout', 'media', 'sessions', 'avatar', 'mood', 'surface', 'session_detail', 'focus', 'prompt'].includes(c))) === '[]', J(cmds));
 
+  await clickBox(page);
+  await page.keyboard.type('hello');
   await page.keyboard.press('Shift+Enter');
   await page.keyboard.type('x');
   await sleep(100);
-  check('T6 Shift+Return adds a newline and calls nothing', (await box(page)).value === 'hello\nx' && (await invokes(page, 'prompt_draft')).length === 1, J({ b: await box(page), d: await invokes(page, 'prompt_draft') }));
+  check('T6 Shift+Return adds a newline and sends nothing', (await box(page)).value === 'hello\nx' && (await box(page)).typing && (await invokes(page, 'prompt')).length === 1, J({ b: await box(page), d: await invokes(page, 'prompt') }));
   await page.keyboard.press('Enter');
   await sleep(100);
-  check('T7 Return sends the whole draft, newline included', J((await invokes(page, 'prompt_draft')).pop()) === J({ text: 'hello\nx' }), J(await invokes(page, 'prompt_draft')));
+  check('T7 Return sends the whole draft, newline included', J((await invokes(page, 'prompt')).pop()) === J({ id: 'id-two', text: 'hello\nx' }), J(await invokes(page, 'prompt')));
 
+  await clickBox(page);
   await page.evaluate(() => { const m = document.querySelector('#msg'); m.value = '   \n  '; m.dispatchEvent(new Event('input')); });
-  const n = (await invokes(page, 'prompt_draft')).length;
+  const n = (await invokes(page, 'prompt')).length;
   await page.keyboard.press('Enter');
   await sleep(100);
-  check('T8 Return with only whitespace calls nothing, and the send button is disabled', (await invokes(page, 'prompt_draft')).length === n && (await box(page)).send === false, J({ d: await invokes(page, 'prompt_draft'), b: await box(page) }));
+  check('T8 Return with only whitespace calls nothing, typing goes on, and the send button is disabled', (await invokes(page, 'prompt')).length === n && (await box(page)).send === false && (await box(page)).typing, J({ d: await invokes(page, 'prompt'), b: await box(page) }));
 
-  await page.evaluate(() => { const m = document.querySelector('#msg'); m.value = 'sent by button'; m.dispatchEvent(new Event('input')); });
+  await page.evaluate(() => { const m = document.querySelector('#msg'); m.value = ' sent by button '; m.dispatchEvent(new Event('input')); });
   check('T9 the send button is enabled with a draft', (await box(page)).send === true, J(await box(page)));
+  const focusBefore = (await invokes(page, 'focus')).length;
   await page.locator('#send').click({ timeout: 2000 });
   await sleep(100);
   const b9 = await box(page);
-  check('T10 the send button calls prompt_draft with the draft and typing goes on', J((await invokes(page, 'prompt_draft')).pop()) === J({ text: 'sent by button' }) && b9.typing && b9.focused, J({ d: await invokes(page, 'prompt_draft'), b9 }));
-  check('T11 typing called focus(true) once in all', J(await invokes(page, 'focus')) === J([{ on: true }]), J(await invokes(page, 'focus')));
+  check('T10 the send button calls prompt with the card\'s id and the trimmed draft and ends typing', J((await invokes(page, 'prompt')).pop()) === J({ id: 'id-two', text: 'sent by button' }) && !b9.typing && b9.value === '', J({ d: await invokes(page, 'prompt'), b9 }));
+  check('T11 each send called focus({on: false}) once', J((await invokes(page, 'focus')).slice(focusBefore)) === J([{ on: false }]), J(await invokes(page, 'focus')));
   await page.close();
 }
 
@@ -248,7 +267,7 @@ async function scenarioIme() {
   await key({ key: 'Escape', isComposing: true });
   await key({ key: 'Escape' }, 229);
   await sleep(100);
-  check('I1 Return and Esc that belong to an input method composition do nothing: no draft, typing goes on', (await invokes(page, 'prompt_draft')).length === 0 && (await box(page)).typing && J(await invokes(page, 'focus')) === J([{ on: true }]), J({ d: await invokes(page, 'prompt_draft'), b: await box(page), f: await invokes(page, 'focus') }));
+  check('I1 Return and Esc that belong to an input method composition do nothing: nothing is sent, typing goes on', (await invokes(page, 'prompt')).length === 0 && (await box(page)).typing && J(await invokes(page, 'focus')) === J([{ on: true }]), J({ d: await invokes(page, 'prompt'), b: await box(page), f: await invokes(page, 'focus') }));
   await page.close();
 }
 
@@ -264,7 +283,7 @@ async function scenarioEscStays() {
   check('E2 Esc keeps the draft', b.value === 'keep me', J(b));
   await page.keyboard.press('Enter');
   await sleep(100);
-  check('E3 Return after Esc calls nothing: the keyboard is no longer the box\'s', (await invokes(page, 'prompt_draft')).length === 0, J(await invokes(page, 'prompt_draft')));
+  check('E3 Return after Esc calls nothing: the keyboard is no longer the box\'s', (await invokes(page, 'prompt')).length === 0, J(await invokes(page, 'prompt')));
   await clickBox(page);
   check('E4 a second click on the box types again: focus(true) once more', J(await invokes(page, 'focus')) === J([{ on: true }, { on: false }, { on: true }]) && (await box(page)).typing, J(await invokes(page, 'focus')));
   await page.close();
@@ -372,7 +391,7 @@ async function scenarioNoCard() {
   check('N1 the box cannot start typing while the list shows', (await invokes(page, 'focus')).length === 0 && !(await box(page)).typing, J(await invokes(page, 'focus')));
   await page.keyboard.press('Escape');
   await page.keyboard.press('Enter');
-  check('N2 Esc and Return outside typing call nothing', (await invokes(page, 'focus')).length === 0 && (await invokes(page, 'prompt_draft')).length === 0, J({ f: await invokes(page, 'focus'), d: await invokes(page, 'prompt_draft') }));
+  check('N2 Esc and Return outside typing call nothing', (await invokes(page, 'focus')).length === 0 && (await invokes(page, 'prompt')).length === 0, J({ f: await invokes(page, 'focus'), d: await invokes(page, 'prompt') }));
   await page.close();
 
   const page2 = await openPage({ tag: 'collapsing' });
@@ -385,7 +404,172 @@ async function scenarioNoCard() {
   await page2.close();
 }
 
-for (const s of [scenarioLook, scenarioType, scenarioPadding, scenarioHoverOut, scenarioIme, scenarioEscStays, scenarioKeyFalse, scenarioLeaveCard, scenarioNoCard]) {
+// Holds the next prompt call until released; returns the page's settle functions.
+const holdPrompt = (page) => page.evaluate(() => { window.__promptReply = () => new Promise((ok, no) => { window.__promptSettle = { ok, no }; }); });
+const hintOf = async (page) => { const b = await box(page); return { hint: b.hint, color: b.color }; };
+
+async function scenarioDelivery() {
+  // sending, then sent, with the draft cleared
+  const page = await openPage({ tag: 'delivery-sent' });
+  await openCard(page, card({ status: 'done' }));
+  await holdPrompt(page);
+  await clickBox(page);
+  await page.keyboard.type('hi there');
+  await page.keyboard.press('Enter');
+  await sleep(150);
+  let b = await box(page);
+  check('D1 while the call is in flight the hint reads "Sending…" in muted, the send button is disabled and the draft stays', b.hint === 'Sending\u2026' && b.color === MUTED && b.send === false && b.value === 'hi there' && !b.typing, J(b));
+  await page.evaluate(() => window.__promptSettle.ok(null));
+  await sleep(150);
+  b = await box(page);
+  check('D2 once the call resolves the hint reads "Sent. Waiting for bravo to pick it up." in muted and the draft is cleared', b.hint === SENT && b.color === MUTED && b.value === '', J(b));
+  await sleep(5000);
+  check('D3 5 s later, with no pickup, the hint still reads the sent state', (await box(page)).hint === SENT, J(await box(page)));
+  await sleep(5600);
+  b = await box(page);
+  check('D4 10 s after sent with no pickup the hint reads "No reply yet. It may be waiting for approval in that session." in amber', b.hint === NO_REPLY && b.color === AMBER, J(b));
+  await clickBox(page);
+  b = await box(page);
+  check('D5 typing again clears the no reply state: the hint reads the typing line', b.hint === HINT && b.color === MUTED, J(b));
+  await page.close();
+
+  // picked up: a records event whose session_detail reply has a new event_ts
+  const p2 = await openPage({ tag: 'delivery-records' });
+  const ts2 = nowSec() - 30;
+  await openCard(p2, card({ status: 'done', event_ts: ts2 }));
+  await typeAndSend(p2, 'go');
+  check('D6 sent first', (await box(p2)).hint === SENT, J(await box(p2)));
+  await setReply(p2, card({ status: 'done', event_ts: ts2 }));
+  await fire(p2, 'records', null);
+  await sleep(250);
+  check('D7 a records event whose card has the same event_ts and status is not a pickup', (await box(p2)).hint === SENT, J(await box(p2)));
+  await setReply(p2, card({ status: 'done', event_ts: nowSec() - 1 }));
+  await fire(p2, 'records', null);
+  await sleep(250);
+  b = await box(p2);
+  check('D8 a records event whose card has a new event_ts shows "bravo picked it up." in #f5f5f5', b.hint === 'bravo picked it up.' && b.color === WHITE, J(b));
+  await sleep(100);
+  check('D9 the picked up state stays until typing starts or the card closes', (await box(p2)).hint === 'bravo picked it up.', J(await box(p2)));
+  await clickBox(p2);
+  check('D10 typing again clears the picked up state', (await box(p2)).hint === HINT, J(await box(p2)));
+  await p2.close();
+
+  // picked up: status turns working
+  const p3 = await openPage({ tag: 'delivery-status' });
+  const ts = nowSec() - 30;
+  await openCard(p3, card({ status: 'done', event_ts: ts }));
+  await typeAndSend(p3, 'go');
+  await setReply(p3, card({ status: 'working', event_ts: ts }));
+  await fire(p3, 'records', null);
+  await sleep(250);
+  b = await box(p3);
+  check('D11 the card turning working, with the same event_ts, is a pickup', b.hint === 'bravo picked it up.' && b.color === WHITE, J(b));
+  await p3.close();
+
+  // a card already working at the send is not a pickup by itself
+  const p4 = await openPage({ tag: 'delivery-already-working' });
+  await openCard(p4, card({ status: 'working', event_ts: ts }));
+  await typeAndSend(p4, 'go');
+  await fire(p4, 'records', null);
+  await sleep(250);
+  check('D12 a card that was working at the send, unchanged, is not a pickup', (await box(p4)).hint === SENT, J(await box(p4)));
+  await p4.close();
+
+  // the pickup check also runs on the card already drawn when the call resolves
+  const p5 = await openPage({ tag: 'delivery-late' });
+  await openCard(p5, card({ status: 'done', event_ts: ts }));
+  await holdPrompt(p5);
+  await clickBox(p5);
+  await p5.keyboard.type('late');
+  await p5.keyboard.press('Enter');
+  await sleep(100);
+  await setReply(p5, card({ status: 'done', event_ts: nowSec() }));
+  await fire(p5, 'records', null);
+  await sleep(250);
+  check('D13 a pickup seen while the call is in flight leaves the hint at "Sending…"', (await box(p5)).hint === 'Sending\u2026', J(await box(p5)));
+  await p5.evaluate(() => window.__promptSettle.ok(null));
+  await sleep(150);
+  b = await box(p5);
+  check('D14 when the call resolves the card already drawn counts: "bravo picked it up."', b.hint === 'bravo picked it up.' && b.color === WHITE, J(b));
+  await p5.close();
+
+  // failed
+  const p6 = await openPage({ tag: 'delivery-failed' });
+  await openCard(p6);
+  await p6.evaluate(() => { window.__promptReply = () => Promise.reject('inbox is not a socket'); });
+  await typeAndSend(p6, 'keep this');
+  b = await box(p6);
+  check('D15 a rejected call shows "This session isn\'t reachable." in amber and keeps the draft', b.hint === 'This session isn\'t reachable.' && b.color === AMBER && b.value === 'keep this' && b.send === true, J(b));
+  await clickBox(p6);
+  b = await box(p6);
+  check('D16 typing again clears the failed state and the draft is still there', b.hint === HINT && b.value === 'keep this', J(b));
+  await p6.keyboard.press('Enter');
+  await sleep(100);
+  check('D17 Return sends the kept draft again', J(await invokes(p6, 'prompt')) === J([{ id: 'id-two', text: 'keep this' }, { id: 'id-two', text: 'keep this' }]), J(await invokes(p6, 'prompt')));
+  await p6.close();
+
+  // a send in flight: the send button cannot send twice
+  const p7 = await openPage({ tag: 'delivery-once' });
+  await openCard(p7);
+  await holdPrompt(p7);
+  await typeAndSend(p7, 'once');
+  await p7.locator('#send').click({ timeout: 2000, force: true });
+  await sleep(100);
+  check('D18 no second prompt call while one is in flight', (await invokes(p7, 'prompt')).length === 1, J(await invokes(p7, 'prompt')));
+  await p7.close();
+
+  // closing the card clears the state
+  const p8 = await openPage({ tag: 'delivery-close' });
+  await openCard(p8);
+  await typeAndSend(p8, 'bye');
+  await p8.locator('#back').click({ timeout: 2000 });
+  await sleep(500);
+  await p8.locator('#rows button.srow').nth(1).click({ timeout: 2000 });
+  await sleep(700);
+  b = await box(p8);
+  check('D19 closing the card and opening it again clears the delivery state and the draft', b.hint === '' && b.value === '', J(b));
+  await p8.close();
+}
+
+async function scenarioReach() {
+  for (const [name, reach, hint] of [
+    ['none', { kind: 'none' }, NO_INBOX],
+    ['host_only', { kind: 'host_only', host: 'com.apple.Terminal' }, NO_INBOX + ' Reply in its own app.'],
+  ]) {
+    const page = await openPage({ tag: `reach-${name}` });
+    await openCard(page, card({ reach }));
+    const b = await box(page);
+    check(`R1 reach ${name}: the textarea is disabled with the placeholder "This session can't take messages" in #6f6f6f`, b.disabled === true && b.placeholder === 'This session can\'t take messages' && b.phColor === 'rgb(111, 111, 111)', J(b));
+    check(`R2 reach ${name}: the send button is disabled and the hint reads the no inbox text`, b.send === false && b.hint === hint && b.boxShown && b.hintShown, J(b));
+    await page.locator('#pbox').click({ timeout: 2000, force: true });
+    await page.mouse.click(...(await page.evaluate(() => { const e = document.querySelector('#pbox').getBoundingClientRect(); return [e.left + 4, e.top + e.height / 2]; })));
+    await sleep(200);
+    const after = await box(page);
+    check(`R3 reach ${name}: a press on the box starts no typing and calls no focus`, !after.typing && (await invokes(page, 'focus')).length === 0 && after.hint === hint, J({ after, f: await invokes(page, 'focus') }));
+    await page.keyboard.press('Enter');
+    await sleep(100);
+    check(`R4 reach ${name}: Return sends nothing`, (await invokes(page, 'prompt')).length === 0, J(await invokes(page, 'prompt')));
+    await page.close();
+  }
+
+  const page = await openPage({ tag: 'reach-change' });
+  await openCard(page);
+  await clickBox(page);
+  await page.keyboard.type('half');
+  await setReply(page, card({ reach: { kind: 'none' } }));
+  await fire(page, 'records', null);
+  await sleep(300);
+  const b = await box(page);
+  check('R5 a reach that changes away from inbox while typing ends typing: focus({on: false}), disabled box, no inbox hint', !b.typing && b.disabled === true && b.hint === NO_INBOX && J(await invokes(page, 'focus')) === J([{ on: true }, { on: false }]), J({ b, f: await invokes(page, 'focus') }));
+  await setReply(page, card());
+  await fire(page, 'records', null);
+  await sleep(300);
+  const c = await box(page);
+  check('R6 a reach that returns to inbox enables the box again', c.disabled === false && c.placeholder === 'Message bravo' && c.hint === '', J(c));
+  await page.close();
+}
+
+for (const s of [scenarioLook, scenarioType, scenarioPadding, scenarioHoverOut, scenarioIme, scenarioEscStays, scenarioKeyFalse, scenarioLeaveCard, scenarioNoCard, scenarioDelivery, scenarioReach]) {
   try { await s(); } catch (e) { check(`${s.name} ran`, false, e.stack || String(e)); }
 }
 await browser.close();

@@ -7,7 +7,7 @@ trap 'chmod -R u+rwx "$ROOT" 2>/dev/null; rm -rf "$ROOT"' EXIT
 
 # The suite may itself run inside a Claude Code session: start every case from an environment without the two
 # variables the hook copies into inbox and host, and set them per case.
-unset CLAUDE_CODE_MESSAGING_SOCKET __CFBundleIdentifier
+unset CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN __CFBundleIdentifier
 
 FAILS=0
 pass() { echo "PASS: $1"; }
