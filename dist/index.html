@@ -892,6 +892,7 @@
     return row;
   }
   function drawDetail(d) {
+    const held = holding();
     detailShown = d;
     $('dRows').hidden = !d;
     $('dEnded').hidden = !!d;
@@ -910,6 +911,7 @@
     checkPickup();
     syncPrompt();
     syncAge();
+    if (held && !holding() && phase === 'expanded' && !hovered) onLeave();
   }
   function drawAge() {
     const age = $('dRows').querySelector('.age');
@@ -981,8 +983,9 @@
   // send. state: sending -> sent -> picked | quiet, or sending -> failed. `seen`: the pointer was on the panel since
   // the failure.
   let delivery = null;
-  // A send in flight, or a failure the pointer has not come back to, keeps the card open: collapsing would drop it.
-  const holding = () => !!delivery && (delivery.state === 'sending' || (delivery.state === 'failed' && !delivery.seen));
+  // A send in flight, or a failure the pointer has not come back to, keeps the card open while the draft can still be
+  // sent: collapsing would drop it.
+  const holding = () => canSend() && !!delivery && (delivery.state === 'sending' || (delivery.state === 'failed' && !delivery.seen));
   const msg = $('msg');
   const draftText = () => msg.value.trim();
   const canSend = () => !!detailShown && !!detailShown.reach && detailShown.reach.kind === 'inbox';

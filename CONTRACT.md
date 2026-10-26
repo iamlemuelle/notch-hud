@@ -1255,8 +1255,11 @@ pub fn send(path: &Path, line: &str) -> Result<(), SendError>;
   `<label>` is the card's label at the send. The pickup check also runs on the card already drawn when the call
   resolves. It is weak for a busy session: any hook event after the send counts, so a session already running tools
   reads as picked up even while it holds the message.
+- Starting to type again clears a picked up, no reply or failed state; a sending or sent state stays until it
+  resolves. Closing the card or showing another session clears the state and its timer.
 - Sending ends typing, but a send in flight keeps the card open: while the state is sending, hover out sets no
   timer. When the call resolves with the latest `hover` `false`: on success the panel collapses after 250 ms, as hover
   out does; on failure it stays open with the draft and the failed hint until the pointer comes back, and a hover out
-  after that collapses it as usual. A failure while the pointer is on the panel holds nothing. Starting to type again clears a picked up, no reply or failed state; a sending or sent state stays until it
-  resolves. Closing the card or showing another session clears the state and its timer.
+  after that collapses it as usual. A failure while the pointer is on the panel holds nothing. The hold lasts only
+  while the draft can be sent: when a redraw shows the session ended or its `reach` no longer `inbox`, the hold ends,
+  and with the latest `hover` `false` the panel collapses after 250 ms.
