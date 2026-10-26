@@ -647,9 +647,8 @@ async function scenarioHold() {
 }
 
 async function scenarioReach() {
-  for (const [name, reach, hint] of [
-    ['none', { kind: 'none' }, NO_INBOX],
-  ]) {
+  {
+    const name = 'none', reach = { kind: 'none' }, hint = NO_INBOX;
     const page = await openPage({ tag: `reach-${name}` });
     await openCard(page, card({ reach }));
     const b = await box(page);
