@@ -31,12 +31,16 @@ flunk() { echo "FAIL $1"; fail=1; }
 if pgrep -xq TextEdit; then echo "SKIP TextEdit is already running; quit it first (this test never quits a TextEdit it did not start)"; exit 2; fi
 
 tmp="$(mktemp -d)"
-app=""; watcher=""; hands=""; cursor_x=""; cursor_y=""; te=""; other_bid=""
+app=""; watcher=""; hands=""; cursor_x=""; cursor_y=""; te=""; te_started=""; other_bid=""
 drive="$tmp/drive"
 decoy_name="notch-open-host-decoy-$$.txt"
 decoy="$tmp/$decoy_name"
 cleanup() {
   [ -n "$cursor_x" ] && "$drive" warp "$cursor_x" "$cursor_y" 2>/dev/null
+  if [ -n "$te_started" ] && [ -z "$te" ]; then
+    local pids; pids="$(pgrep -x TextEdit)"
+    [ -n "$pids" ] && [ "$(echo "$pids" | wc -l | tr -d ' ')" -eq 1 ] && te="$pids"
+  fi
   if [ -n "$te" ]; then
     "$drive" axclose "$te" "$decoy_name" 2>/dev/null
     "$drive" quit "$te" 2>/dev/null
@@ -46,6 +50,7 @@ cleanup() {
   [ -n "$hands" ] && kill "$hands" 2>/dev/null
   [ -n "$app" ] && kill "$app" 2>/dev/null
   wait 2>/dev/null
+  rm -rf "$tmp"
 }
 trap cleanup EXIT
 
@@ -91,6 +96,10 @@ panel_open() {
   flunk "the panel is not the open window ($1): bounds [$b]; the test stops before posting more input"
   return 1
 }
+# Posts a click at ($1, $2) pt from the panel's left edge; a failure ends the run, with the driver's own message.
+click() {
+  local out; out="$("$drive" click "$app" "$1" "$2" 2>&1 >/dev/null)" || { flunk "$3: $out"; finish 1; }
+}
 # Puts the other app in front, up to 5 s.
 bring_other_front() {
   local i=0
@@ -135,15 +144,18 @@ pass "panel expanded with its left edge at x=$x0"
 # Row 1 spans 218..240 pt below the panel top (CONTRACT.md section 4).
 panel_open "before the row click" || finish 1
 am="$(lines "$applog")"
-"$drive" click "$app" $((x0 + 120)) 229 >/dev/null 2>&1 || flunk "click row 1"
+click $((x0 + 120)) 229 "click row 1"
 if wait_for "$applog" 5 'page: detail sess-host found' "$am"; then pass "a click on row 1 opened the card: page: detail sess-host found"; else flunk "no 'page: detail sess-host found' after the row click; the test stops"; finish 1; fi
+line="$(since "$applog" "$am" | grep -F 'page: detail sess-host found' | head -n 1)"
+case "$line" in *' app='*) flunk "TextEdit is not running but the detail has an app: [$line]"; finish 1;; *) pass "the detail has no app while TextEdit is not running: [$line]";; esac
 sleep 0.8
 
 # Case not running. The button: 316..350 pt below the panel top (section 11).
 panel_open "before the first button click" || finish 1
+if pgrep -xq TextEdit; then echo "SKIP TextEdit started running during the run, so the not-running case cannot be checked (this test never quits a TextEdit it did not start)"; exit 2; fi
 w0="$(lines "$watchlog")"
 bm="$(lines "$applog")"
-"$drive" click "$app" $((x0 + 120)) 333 >/dev/null 2>&1 || flunk "click the button"
+click $((x0 + 120)) 333 "click the button"
 if wait_for "$applog" 3 'host: not running com.apple.TextEdit' "$bm"; then pass "TextEdit is not running: host: not running com.apple.TextEdit"; else
   flunk "no 'host: not running com.apple.TextEdit' within 3 s of the click; got: $(since "$applog" "$bm" | grep -F 'host:' | tr '\n' ' ')"; finish 1
 fi
@@ -155,24 +167,31 @@ if [ "$f" = "$other_bid" ]; then pass "the other app ($other_bid) is still front
 
 # Case running: TextEdit in the background with a decoy document (an app with no window is terminated at once).
 : >"$decoy"
+if pgrep -xq TextEdit; then echo "SKIP TextEdit started running during the run (not by this test), so it will not be touched"; exit 2; fi
+te_started=1
 open -g -a TextEdit "$decoy" || { echo "SKIP cannot open TextEdit"; exit 2; }
+pids=""
 for _ in $(seq 1 50); do
-  te="$(pgrep -x TextEdit | head -n 1)"
-  [ -n "$te" ] && break
+  pids="$(pgrep -x TextEdit)"
+  [ -n "$pids" ] && break
   sleep 0.2
 done
-[ -n "$te" ] || { echo "SKIP TextEdit did not start"; exit 2; }
+[ -n "$pids" ] || { echo "SKIP TextEdit did not start"; exit 2; }
+sleep 1
+pids="$(pgrep -x TextEdit)"
+if [ "$(echo "$pids" | wc -l | tr -d ' ')" -ne 1 ]; then echo "SKIP more than one TextEdit is running ($(echo $pids)); none is quit"; exit 2; fi
+te="$pids"
 sleep 1
 if bring_other_front; then pass "the other app is frontmost with TextEdit running in the background"; else flunk "the other app did not come back to the front; frontmost is [$(front_bid)]; the test stops"; finish 1; fi
 
 # Back (196..214 pt below the panel top, from x 14), then row 1 again, so the card is drawn with TextEdit running.
 panel_open "before Back" || finish 1
-"$drive" click "$app" $((x0 + 40)) 205 >/dev/null 2>&1 || flunk "click Back"
+click $((x0 + 40)) 205 "click Back"
 sleep 0.8
 panel_open "before the second row click" || finish 1
 am="$(lines "$applog")"
-"$drive" click "$app" $((x0 + 120)) 229 >/dev/null 2>&1 || flunk "click row 1 again"
-if wait_for "$applog" 5 'page: detail sess-host found' "$am"; then pass "Back and row 1 opened the card again"; else flunk "no 'page: detail sess-host found' after Back and a row click; the test stops"; finish 1; fi
+click $((x0 + 120)) 229 "click row 1 again"
+if wait_for "$applog" 5 'page: detail sess-host found app=TextEdit' "$am"; then pass "Back and row 1 opened the card again with app=TextEdit"; else flunk "no 'page: detail sess-host found app=TextEdit' after Back and a row click; the test stops"; finish 1; fi
 sleep 0.8
 
 panel_open "before the second button click" || finish 1
@@ -180,7 +199,7 @@ if [ "$(front_bid)" != "$other_bid" ]; then flunk "frontmost app is [$(front_bid
 w1="$(lines "$watchlog")"
 bm="$(lines "$applog")"
 t0="$(now)"
-"$drive" click "$app" $((x0 + 120)) 333 >/dev/null 2>&1 || flunk "click the button again"
+click $((x0 + 120)) 333 "click the button again"
 front_ms=""
 for _ in $(seq 1 20); do
   if [ "$(front_bid)" = "com.apple.TextEdit" ]; then front_ms="$(perl -e "printf '%d', ($(now) - $t0) * 1000")"; break; fi
