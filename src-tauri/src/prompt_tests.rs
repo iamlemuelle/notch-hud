@@ -223,8 +223,15 @@ fn bundle_id_accepts_letters_digits_dash_and_dots() {
 }
 
 #[test]
+fn bundle_id_accepts_underscore() {
+    for id in ["com.example.my_app", "_a", "a_", "a_b"] {
+        assert!(valid_bundle_id(id), "{id:?}");
+    }
+}
+
+#[test]
 fn bundle_id_rejects_everything_else() {
-    for id in ["", ".a", "a.", "a..b", "a b", "a/b", "a_b", "com.x\n", "com.x\0y", "c\u{f3}m.x"] {
+    for id in ["", ".a", "a.", "a..b", "a b", "a/b", "com.x\n", "com.x\0y", "c\u{f3}m.x"] {
         assert!(!valid_bundle_id(id), "{id:?}");
     }
     assert!(!valid_bundle_id(&"a".repeat(256)));
