@@ -303,6 +303,11 @@ async function scenarioCloseHovered() {
   const calls = r.surfaces.slice(base.surfaces.length), last = calls[calls.length - 1];
   check('H1 close with hover true: stays expanded after 1000 ms, no collapse started', (await phase(page)) === 'expanded' && !r.phases.slice(base.phases.length).some((p) => p.phase === 'collapsing'), J({ phase: await phase(page), phases: r.phases.slice(base.phases.length) }));
   check('H2 and the window is open', !!last && last.window === 'open' && last.hit === 'open' && viewport(page) === '452x396', J({ last, vp: viewport(page) }));
+  const layers = await page.evaluate(() => {
+    const c = document.getElementById('content'), t = document.getElementById('theater');
+    return { content: getComputedStyle(c).opacity, contentPe: c.style.pointerEvents, theater: getComputedStyle(t).opacity };
+  });
+  check('H3 once settled after the close, #content is back in (opacity 1, pointer-events auto) and #theater is out (opacity 0)', layers.content === '1' && layers.contentPe === 'auto' && layers.theater === '0', J(layers));
   await page.close();
 }
 
