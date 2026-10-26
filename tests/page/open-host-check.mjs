@@ -32,12 +32,13 @@ setTimeout(() => { console.log('FAIL watchdog: the run took longer than 240 s');
 
 // Contract numbers (section 8): as tests/page/prompt-check.mjs.
 const LAYOUT = {
-  stage: { width: 452, height: 982 },
+  stage: { width: 640, height: 982 },
   pill: { width: 305, height: 32 },
   peek: { width: 309, height: 36 },
   banner: { width: 380, height: 78 },
   open: { width: 420, height: 342 },
   detail: { width: 420, height: 380 },
+  theater: { width: 608, height: 420 },
   ear: 60,
 };
 const WINDOW = { pill: { w: 305, h: 32 }, banner: { w: 412, h: 94 }, open: { w: 452, h: 396 } };

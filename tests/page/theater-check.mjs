@@ -2,14 +2,17 @@
 // (amendment, 2026-10-26)", and section 12, "Page": a file dragged over the notch opens the panel and shows the drop
 // target (#drop), a hover out while dragging changes nothing, a drag that ends collapses it; a rejected drop shows
 // its error for 2200 ms; a `video` opens the stage (window theater first, the clip to the theater inset, the file's
-// name in #tv, the control row, pinned against hover out); a click on #vClose or Esc closes it (phase expanded at
-// once, the window stays the stage's until the clip is back, and only then may the panel collapse); `drag` and
-// `video-rejected` in the stage change nothing; reduced motion has no clip transition. Every expected value is a
+// name in #tv, the control row, pinned against hover out); a click on #vClose closes it (phase expanded at
+// once, the window stays the stage's until the clip is back, and only then may the panel collapse), from the detail
+// card back to the detail shape; Esc does nothing in the stage (it never takes the keyboard); the art stays hidden
+// while the stage opens and the avatar and count sit at the ear; `video` from intent, collapsed, a close in flight
+// and while typing; `drag` and `video-rejected` in the stage change nothing; reduced motion has no clip transition. Every expected value is a
 // literal written from the contract text. Real time, no retries.
 //
 // Env: PLAYWRIGHT_CORE, CHROMIUM, NOTCH_PAGE, PAGE_CPU_THROTTLE as in tests/page_test.sh. Exit 0 when every check
 // passes, 1 when one fails, 2 when the browser cannot start.
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -42,6 +45,11 @@ const LAYOUT = {
   ear: 60,
 };
 const WINDOW = { pill: { w: 305, h: 32 }, banner: { w: 412, h: 94 }, open: { w: 452, h: 396 }, theater: { w: 640, h: 436 } };
+const CARD = {
+  id: 'id-two', label: 'bravo', cwd: '/Users/lem/dev/bravo', status: 'working', event: 'PreToolUse',
+  event_ts: Math.floor(Date.now() / 1000) - 4, tool_name: 'Bash', agents: 0, reach: { kind: 'inbox' },
+};
+const BALL = JSON.parse(readFileSync(join(repo, 'tests', 'avatar', 'fixtures', 'ball.json'), 'utf8'));
 const AMBER = 'rgb(245, 166, 35)';
 const VIDEO = { path: '/Users/lem/Movies/clip.mp4', name: 'clip.mp4' };
 const SUMMARY = {
@@ -58,7 +66,7 @@ const pageErrors = [];
 // Installed before any page script: the fake bridge. Besides answering the commands it records, with the page's own
 // clock, every phase change, every change of #drop's class, every surface call (with the inline clip-path at that
 // moment), every clip-path transition start and end on #panel, every click and every event fired.
-function installBridge({ layout, windows }) {
+function installBridge({ layout, windows, avatar, mood }) {
   const handlers = {};
   const now = () => performance.now();
   const rec = (window.__rec = { invokes: [], surfaces: [], phases: [], drop: [], clipRuns: [], clipEnds: [], clicks: [], fired: [] });
@@ -85,11 +93,15 @@ function installBridge({ layout, windows }) {
       invoke: (cmd, args) => {
         rec.invokes.push({ cmd, args: args ? JSON.parse(JSON.stringify(args)) : null });
         if (cmd === 'layout') return Promise.resolve(layout);
+        if (cmd === 'session_detail') return Promise.resolve(window.__reply ? window.__reply(args && args.id) : null);
+        if (cmd === 'focus') return Promise.resolve(!!(args && args.on));
+        if (cmd === 'avatar') return Promise.resolve(avatar);
+        if (cmd === 'mood') return Promise.resolve(mood);
         if (cmd === 'surface') {
           const w = args && windows[args.window];
           const panel = document.getElementById('panel');
           rec.surfaces.push({ window: args.window, hit: args.hit, t: now(), clip: panel ? panel.style.clipPath : '' });
-          return new Promise((resolve) => setTimeout(async () => { if (w) await window.__setWindow(w.w, w.h); resolve(null); }, 0));
+          return new Promise((resolve) => setTimeout(async () => { if (w) await window.__setWindow(w.w, w.h); resolve(null); }, window.__surfaceDelay || 0));
         }
         return Promise.resolve(null);
       },
@@ -105,7 +117,7 @@ async function openPage(opts = {}) {
   if (opts.reduced) await page.emulateMedia({ reducedMotion: 'reduce' });
   if (process.env.PAGE_CPU_THROTTLE) await (await page.context().newCDPSession(page)).send('Emulation.setCPUThrottlingRate', { rate: Number(process.env.PAGE_CPU_THROTTLE) });
   await page.exposeFunction('__setWindow', (w, h) => page.setViewportSize({ width: w, height: h }).catch(() => {}));
-  await page.addInitScript(installBridge, { layout: LAYOUT, windows: WINDOW });
+  await page.addInitScript(installBridge, { layout: LAYOUT, windows: WINDOW, avatar: BALL, mood: { mood: 'idle', animations: ['idle'], still: false } });
   await page.goto('file://' + PAGE_FILE);
   await page.waitForFunction(() => document.body && document.body.dataset.phase, null, { timeout: 1500 }).catch(() => {});
   await fire(page, 'sessions', SUMMARY);
@@ -302,16 +314,9 @@ async function scenarioEscape() {
   await sleep(300);
   const base = await recording(page);
   await page.keyboard.press('Escape');
-  const r1 = await recording(page);
-  const exp = r1.phases.slice(base.phases.length)[0];
-  check('X1 Esc in the stage: the phase is expanded at once', !!exp && exp.phase === 'expanded', J(r1.phases.slice(base.phases.length)));
-  const collapsed = await waitPhase(page, 'collapsed', 4000);
-  await sleep(100);
+  await sleep(1000);
   const r = await recording(page);
-  const calls = r.surfaces.slice(base.surfaces.length), ends = r.clipEnds.slice(base.clipEnds.length);
-  const collapsing = r.phases.slice(base.phases.length).find((x) => x.phase === 'collapsing');
-  check('X2 the surface calls go { theater, open }, then { open, open } after the clip\'s transition ended', calls.length >= 2 && calls[0].window === 'theater' && calls[0].hit === 'open' && calls[1].window === 'open' && ends.length > 0 && calls[1].t >= ends[0], J({ calls, ends }));
-  check('X3 it then collapses to the pill, no collapse before the window was open', collapsed && !!collapsing && !!calls[1] && collapsing.t >= calls[1].t && calls[calls.length - 1].window === 'pill', J({ collapsed, collapsing, calls }));
+  check('X1 Esc in the stage changes nothing: the phase stays theater, no phase change, no surface call other than theater', (await phase(page)) === 'theater' && r.phases.length === base.phases.length && r.surfaces.slice(base.surfaces.length).every((s) => s.window === 'theater'), J({ phase: await phase(page), phases: r.phases.slice(base.phases.length), surfaces: r.surfaces.slice(base.surfaces.length) }));
   await page.close();
 
   // Esc outside the stage does nothing to the panel.
@@ -321,6 +326,130 @@ async function scenarioEscape() {
   await sleep(300);
   check('X4 Esc while expanded (no stage) leaves the panel as it is', (await phase(idle)) === 'expanded', await phase(idle));
   await idle.close();
+}
+
+const earSpots = (page) => page.evaluate(() => ({ avatar: document.getElementById('avatar').style.transform, total: document.getElementById('total').style.transform }));
+const artOpacity = (page) => page.evaluate(() => Number(getComputedStyle(document.getElementById('art')).opacity));
+
+// The art stays hidden for the whole opening, and the avatar and count end at the ear.
+async function scenarioArt() {
+  const page = await openPage({ tag: 'art' });
+  await page.evaluate(() => { window.__surfaceDelay = 50; });
+  await sleep(300);
+  const ears = await earSpots(page);
+  await fire(page, 'drag', true);
+  check('A0 expanded with the drop target', await waitPhase(page, 'expanded', 2500), `phase ${await phase(page)}`);
+  await waitTransitionsDone(page, 1500);
+  await sleep(250);
+  check('A1 while #drop is shown #art has opacity 0', (await look(page)).dropOn && (await artOpacity(page)) === 0, J({ drop: (await look(page)).dropOn, op: await artOpacity(page) }));
+  const atEvent = await artOpacity(page);
+  const ends = (await recording(page)).clipEnds.length;
+  await page.evaluate(() => {
+    window.__samples = [];
+    window.__sampling = true;
+    const tick = () => { window.__samples.push(Number(getComputedStyle(document.getElementById('art')).opacity)); if (window.__sampling) requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  });
+  await fire(page, 'video', VIDEO);
+  await waitPhase(page, 'theater', 1000);
+  await waitClipEnd(page, ends, 2000);
+  await waitTransitionsDone(page, 2000);
+  await sleep(250);
+  const samples = await page.evaluate(() => { window.__sampling = false; return window.__samples; });
+  const peak = Math.max(...samples);
+  check('A2 from the video event to the settled stage #art never rises above its value at the event', samples.length > 10 && peak <= atEvent, J({ atEvent, peak, n: samples.length }));
+  const settled = await artOpacity(page);
+  const after = await earSpots(page);
+  check('A3 settled: #art opacity 0', settled === 0, String(settled));
+  check('A4 settled: #avatar and #total have the transform they had collapsed (the ear)', ears.avatar.startsWith('translate(') && after.avatar === ears.avatar && after.total === ears.total, J({ ears, after }));
+  await page.close();
+}
+
+// The card is shown, a video opens the stage over it, and closing it returns the clip to the detail shape.
+async function scenarioCardClose() {
+  const page = await openPage({ tag: 'card-close' });
+  await page.evaluate((c) => { window.__reply = () => c; }, CARD);
+  await openPanel(page);
+  await page.locator('#rows button.srow').nth(1).click({ timeout: 2000 });
+  await page.waitForFunction(() => { const d = document.querySelector('#detail'); return d && !d.classList.contains('off'); }, null, { timeout: 2000, polling: 20 }).catch(() => {});
+  await waitTransitionsDone(page, 1500);
+  await sleep(700);
+  await dropVideo(page);
+  check('K0 the stage is open over the card', (await phase(page)) === 'theater' && clipIs((await look(page)).clip, ...THEATER_CLIP), J(await look(page)));
+  const base = await recording(page);
+  await page.click('#vClose', { timeout: 2000 });
+  const click = (await recording(page)).clicks[base.clicks.length];
+  await waitPhase(page, 'expanded', 1000);
+  await waitClipEnd(page, base.clipEnds.length, 2000);
+  await waitTransitionsDone(page, 2000);
+  await sleep(300);
+  const r = await recording(page);
+  const l = await look(page);
+  const calls = r.surfaces.slice(base.surfaces.length);
+  const end = r.clipEnds.slice(base.clipEnds.length).find((t) => t > click);
+  check('K1 the clip ends at the detail shape: 420 x 380, radius 22', clipIs(l.clip, 420, 380), l.clip);
+  const open = calls.find((s) => s.window === 'open');
+  check('K2 { window: open, hit: detail } follows the clip\'s transitionend, and no open call came before it', !!open && open.hit === 'detail' && end !== undefined && open.t >= end, J({ calls, end }));
+  check('K3 the window is open, 452 x 396', viewport(page) === '452x396', viewport(page));
+  await page.close();
+}
+
+// A video from any phase reaches the stage and no collapse or peek step follows.
+async function scenarioFromPhases() {
+  for (const how of ['intent', 'collapsed']) {
+    const page = await openPage({ tag: `from-${how}` });
+    await sleep(300);
+    if (how === 'intent') {
+      await fire(page, 'drag', true);
+      check('F0 after drag true the phase is intent', (await phase(page)) === 'intent', await phase(page));
+    }
+    const tv = await fire(page, 'video', VIDEO);
+    await sleep(1000);
+    const r = await recording(page);
+    const after = r.phases.filter((p) => p.t >= tv).map((p) => p.phase);
+    const calls = r.surfaces.filter((s) => s.t >= tv);
+    check(`F1 video from ${how}: the phase reaches theater and the window is theater`, (await phase(page)) === 'theater' && viewport(page) === '640x436' && calls.some((s) => s.window === 'theater' && s.hit === 'theater') && calls[calls.length - 1].window === 'theater', J({ phase: await phase(page), vp: viewport(page), calls }));
+    check(`F2 video from ${how}: no collapse or peek step runs afterwards`, after.every((p) => p === 'theater') && calls.every((s) => s.window === 'theater'), J({ after, calls }));
+    await page.close();
+  }
+}
+
+// Close, then a video within the same frame.
+async function scenarioReopen() {
+  const page = await openPage({ tag: 'reopen' });
+  await openPanel(page);
+  await dropVideo(page);
+  await fire(page, 'hover', false);
+  const tv = await page.evaluate((v) => { document.getElementById('vClose').click(); return window.__fire('video', v); }, VIDEO);
+  await sleep(1500);
+  const r = await recording(page);
+  const after = r.phases.filter((p) => p.t >= tv).map((p) => p.phase);
+  const calls = r.surfaces.filter((s) => s.t >= tv);
+  check('R1 close then video within a frame: ends in theater with the theater window', (await phase(page)) === 'theater' && viewport(page) === '640x436', J({ phase: await phase(page), vp: viewport(page) }));
+  check('R2 no { window: open } surface call after the second video', calls.every((s) => s.window !== 'open'), J(calls));
+  check('R3 no collapse followed', !r.phases.some((p) => p.t >= tv && p.phase === 'collapsing') && !after.includes('collapsed'), J(after));
+  await page.close();
+}
+
+// A video while typing on the card ends typing.
+async function scenarioTyping() {
+  const page = await openPage({ tag: 'typing' });
+  await page.evaluate((c) => { window.__reply = () => c; }, CARD);
+  await openPanel(page);
+  await page.locator('#rows button.srow').nth(1).click({ timeout: 2000 });
+  await page.waitForFunction(() => { const d = document.querySelector('#detail'); return d && !d.classList.contains('off'); }, null, { timeout: 2000, polling: 20 }).catch(() => {});
+  await waitTransitionsDone(page, 1500);
+  await sleep(700);
+  await page.locator('#msg').click({ timeout: 2000 });
+  await sleep(150);
+  const typing = () => page.evaluate(() => document.querySelector('#pbox').classList.contains('typing'));
+  const focusCalls = async () => (await recording(page)).invokes.filter((i) => i.cmd === 'focus').map((i) => i.args);
+  check('Y0 typing started: focus({on: true}) called once', (await typing()) && J(await focusCalls()) === J([{ on: true }]), J(await focusCalls()));
+  await fire(page, 'video', VIDEO);
+  await waitPhase(page, 'theater', 1000);
+  await sleep(500);
+  check('Y1 video ends typing: focus({on: false}) follows and the phase is theater', !(await typing()) && J(await focusCalls()) === J([{ on: true }, { on: false }]) && (await phase(page)) === 'theater', J({ typing: await typing(), f: await focusCalls(), phase: await phase(page) }));
+  await page.close();
 }
 
 async function scenarioIgnored() {
@@ -369,7 +498,7 @@ async function scenarioReduced() {
   await page.close();
 }
 
-for (const s of [scenarioDrag, scenarioRejected, scenarioStage, scenarioCloseHovered, scenarioEscape, scenarioIgnored, scenarioReduced]) {
+for (const s of [scenarioDrag, scenarioRejected, scenarioStage, scenarioCloseHovered, scenarioEscape, scenarioArt, scenarioCardClose, scenarioFromPhases, scenarioReopen, scenarioTyping, scenarioIgnored, scenarioReduced]) {
   try { await s(); } catch (e) { check(`${s.name} ran`, false, e.stack || String(e)); }
 }
 await browser.close();

@@ -412,3 +412,18 @@ fn the_open_floor_does_not_apply_to_theater() {
     s.set(WindowMode::Open, Shape::Open);
     assert_eq!(s.window_size(&sample(1, 1)), size(452.0, 396.0));
 }
+
+// A 1024 pt wide screen halves to a 512 pt stage, shorter than the 380 pt card: the window is floored at the open
+// window's height (CONTRACT.md section 8, "Theater").
+
+#[test]
+fn theater_on_a_1024_pt_screen_is_512_by_366_on_a_32_pt_notch_and_372_on_a_38_pt_notch() {
+    assert_eq!(layout(185.0, 32.0, 1024.0, 768.0, 1, 1).theater, size(512.0, 366.0));
+    assert_eq!(layout(200.0, 38.0, 1024.0, 768.0, 1, 1).theater, size(512.0, 372.0));
+}
+
+#[test]
+fn theater_window_on_a_1024_pt_screen_is_floored_at_the_open_window_height() {
+    assert_eq!(window_size(&layout(185.0, 32.0, 1024.0, 768.0, 1, 1), WindowMode::Theater), size(544.0, 396.0));
+    assert_eq!(window_size(&layout(200.0, 38.0, 1024.0, 768.0, 1, 1), WindowMode::Theater), size(544.0, 396.0));
+}
