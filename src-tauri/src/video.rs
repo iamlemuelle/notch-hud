@@ -33,10 +33,11 @@ pub fn parse_path(path: &Path) -> Result<Video, String> {
         return Err("empty file".into());
     }
     // The page gets the path as a JSON string, which a path that is not UTF-8 can't be.
-    if path.to_str().is_none() {
+    let Some(full) = path.to_str() else {
         return Err("path is not UTF-8".into());
-    }
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+    };
+    // A canonical path to a regular file ends in a file name.
+    let name = full.rsplit('/').next().unwrap_or(full).to_string();
     Ok(Video { path, name })
 }
 

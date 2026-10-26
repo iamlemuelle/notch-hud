@@ -11,7 +11,7 @@ mod video;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::path::Path;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -86,6 +86,8 @@ static AVATAR: OnceLock<Avatar> = OnceLock::new();
 static POSE: Mutex<Option<Pose>> = Mutex::new(None);
 /// A drag that carries files is over the panel.
 static DRAGGING: AtomicBool = AtomicBool::new(false);
+/// Counts drops, so a parse that finishes after a later drop's is dropped: the newest drop wins.
+static DROPS: AtomicU64 = AtomicU64::new(0);
 /// Wakes the mood thread; the value is whether a session just finished.
 static MOOD_TX: OnceLock<mpsc::Sender<bool>> = OnceLock::new();
 
@@ -416,19 +418,26 @@ fn on_drag_drop(app: &AppHandle, event: &DragDropEvent) {
         DragDropEvent::Drop { paths, .. } if !paths.is_empty() => {
             DRAGGING.store(false, Ordering::Relaxed);
             // Off the main thread: resolving a path on a stalled network volume can block.
+            let drop = DROPS.fetch_add(1, Ordering::Relaxed) + 1;
             let paths = paths.clone();
             let app = app.clone();
-            std::thread::spawn(move || dropped(&app, &paths));
+            std::thread::spawn(move || dropped(&app, &paths, drop));
         }
         _ => {}
     }
 }
 
-fn dropped(app: &AppHandle, paths: &[std::path::PathBuf]) {
+fn dropped(app: &AppHandle, paths: &[std::path::PathBuf], drop: u64) {
     let parsed = match paths {
         [path] => video::parse_path(path),
         _ => Err("more than one file".into()),
     };
+    if DROPS.load(Ordering::Relaxed) != drop {
+        if trace_on() {
+            eprintln!("video: superseded");
+        }
+        return;
+    }
     match parsed {
         Ok(v) => {
             if trace_on() {

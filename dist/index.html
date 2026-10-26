@@ -839,6 +839,7 @@
     endDropError();
     // The art leaves with the stage's start; marked gone now, so hiding the drop target does not fade it back in.
     artWhere = 'hidden';
+    syncEarGlyphs();
     showDrop(false);
     $('tvName').textContent = v.name;
     cancelTimer();

@@ -1449,7 +1449,8 @@ the window's `WindowEvent::DragDrop`:
 - `Drop` with at least one path: the dragging state ends with no `drag` event. On a new thread (resolving a path on a
   stalled network volume can block), one path is passed to `parse_path`;
   two or more give `Err("more than one file")`. `Ok(video)`: emit `video` with it, trace `video: opened <name>`.
-  `Err(reason)`: emit `video-rejected` with the reason, trace `video: rejected <reason>`.
+  `Err(reason)`: emit `video-rejected` with the reason, trace `video: rejected <reason>`. The newest drop wins: a
+  parse that finishes after a later drop was made emits nothing and traces `video: superseded`.
 - `Over` changes nothing.
 
 ### Page
