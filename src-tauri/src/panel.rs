@@ -135,6 +135,11 @@ pub(crate) fn focus(on: bool) -> bool {
     if !on {
         KEY_WANTED.set(false);
         NSApplication::sharedApplication(mtm).deactivate();
+        // After a deactivate, AppKit's mouse-down handling makes a panel that was key key again through
+        // `_NSShowNonActivatingKeyWindow`, which never asks `canBecomeKeyWindow` (measured). Ordering the panel out
+        // and back in makes the next click ask again.
+        panel.orderOut(None);
+        panel.orderFrontRegardless();
         return false;
     }
     // A click on the panel after a give-back can make it key before this runs (measured), so `key: on` keys off the
