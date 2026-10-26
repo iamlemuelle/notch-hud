@@ -5,7 +5,7 @@
 // prompt({id, text}) with the card's id and the trimmed draft and end typing, every delivery state (sending, sent,
 // picked up by a records event or by status, no reply after 10 s, failed) with its hint and colour, the disabled box
 // for a session with no inbox (reach none or host_only), a reach that changes away from inbox ending typing, a
-// focus(true) that does not take ending typing, and keys of an input method composition doing nothing. Every expected
+// focus(true) that does not take ending typing, a held failure ending when the session ends or loses its inbox, and keys of an input method composition doing nothing. Every expected
 // value is a literal written from the contract text. Real time, no retries.
 //
 // Env: PLAYWRIGHT_CORE, CHROMIUM, NOTCH_PAGE, PAGE_CPU_THROTTLE as in tests/page_test.sh. Exit 0 when every check
@@ -606,6 +606,44 @@ async function scenarioHold() {
   b = await box(r);
   check('H9 hover true then false while sending, then rejected: it still holds, expanded with the draft and the failed hint', (await phaseOf(r)) === 'expanded' && b.value === 'again' && b.hint === FAILED && b.color === AMBER, J({ phase: await phaseOf(r), b }));
   await r.close();
+  // typing again during the send, pointer away, rejected, Esc: the failed-and-unseen hold survives the typing
+  const t = await openPage({ tag: 'hold-typing' });
+  await openCard(t);
+  await holdPrompt(t);
+  await typeAndSend(t, 'first');
+  await clickBox(t);
+  await t.keyboard.type('more');
+  check('H10 clicking the box during the send takes focus: focus({on: true}) was called twice', J(await invokes(t, 'focus')) === J([{ on: true }, { on: false }, { on: true }]), J(await invokes(t, 'focus')));
+  await fire(t, 'hover', false);
+  await t.evaluate(() => window.__promptSettle.no('inbox is not a socket'));
+  await sleep(100);
+  await t.keyboard.press('Escape');
+  await sleep(800);
+  b = await box(t);
+  check('H11 rejected with the pointer away, then Esc: 800 ms later still expanded, the draft typed during the send is in the box, and the hint reads "This session isn\'t reachable." in amber', (await phaseOf(t)) === 'expanded' && b.value === 'firstmore' && b.hint === FAILED && b.color === AMBER, J({ phase: await phaseOf(t), b }));
+  await fire(t, 'hover', true);
+  await fire(t, 'hover', false);
+  check('H12 hover true then false after that collapses within 1 s', await waitPhase(t, 'collapsed', 1000), J(await phaseOf(t)));
+  await t.close();
+
+  // a held failure ends when the session ends or its reach leaves inbox
+  for (const [name, redraw] of [['session ended', null], ['reach none', card({ reach: { kind: 'none' } })]]) {
+    const e = await openPage({ tag: `hold-end-${name}` });
+    await openCard(e);
+    await holdPrompt(e);
+    await clickBox(e);
+    await e.keyboard.type('gone');
+    await fire(e, 'hover', false);
+    await e.keyboard.press('Enter');
+    await sleep(300);
+    await e.evaluate(() => window.__promptSettle.no('inbox is not a socket'));
+    await sleep(800);
+    check(`H13 held failure, then ${name} is not yet drawn: still expanded`, (await phaseOf(e)) === 'expanded', J(await phaseOf(e)));
+    await setReply(e, redraw);
+    await fire(e, 'records', null);
+    check(`H14 a redraw showing ${name} ends the hold: collapsed within 1 s`, await waitPhase(e, 'collapsed', 1000), J(await phaseOf(e)));
+    await e.close();
+  }
 }
 
 async function scenarioReach() {

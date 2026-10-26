@@ -375,3 +375,31 @@ fn send_gives_up_on_a_listener_that_never_reads_within_one_timeout_for_the_whole
     assert!(took < Duration::from_millis(3500), "{took:?}");
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn send_reports_a_hard_write_error_at_once_instead_of_retrying_to_the_deadline() {
+    let dir = tmp("epipe");
+    let sock = dir.join("i.sock");
+    let listener = UnixListener::bind(&sock).unwrap();
+    // Accepts, lets the sender fill the socket buffer and block inside one write, then drops its end. Rust ignores
+    // SIGPIPE, so the blocked write returns EPIPE.
+    let closer = std::thread::spawn(move || {
+        let (conn, _) = listener.accept().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        drop(conn);
+    });
+    let line = "z".repeat(4_000_000);
+    let start = Instant::now();
+    let result = send(&sock, &line);
+    let took = start.elapsed();
+    closer.join().unwrap();
+    match result {
+        Err(SendError::Failed(why)) => {
+            assert!(why.starts_with("write: "), "{why}");
+            assert!(why.ends_with("of 4000000 bytes"), "{why}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(took < Duration::from_millis(1500), "{took:?}");
+    let _ = fs::remove_dir_all(&dir);
+}
