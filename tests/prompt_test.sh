@@ -16,7 +16,8 @@
 # clipboard managers skip it, then puts back exactly what was there (Command-V reads only the general pasteboard).
 #
 # It posts mouse and key events, so the terminal running it needs Accessibility. Exit 0 when every check passes, 1 when
-# one fails, 2 when the environment cannot run it. Do not touch the mouse or the keyboard or switch apps while it runs.
+# one fails, 2 when the environment cannot run it, including a failure while someone used the trackpad, mouse or
+# keyboard. Do not touch the mouse or the keyboard or switch apps while it runs.
 # It runs its own app process with a temp NOTCH_DIR and kills only that process; it never touches the installed app. It
 # opens its decoy in TextEdit, closes that document at the end, and quits TextEdit only if it was not running before.
 set -u
@@ -28,7 +29,7 @@ pass() { echo "PASS $1"; }
 flunk() { echo "FAIL $1"; fail=1; }
 
 tmp="$(mktemp -d)"
-app=""; watcher=""; inbox_pid=""; cursor_x=""; cursor_y=""; te=""; te_started=0
+app=""; watcher=""; hands=""; inbox_pid=""; cursor_x=""; cursor_y=""; te=""; te_started=0
 drive="$tmp/drive"
 decoy_name="notch-prompt-decoy-$$.txt"
 decoy="$tmp/$decoy_name"
@@ -41,6 +42,7 @@ cleanup() {
     [ "$te_started" -eq 1 ] && "$drive" quit "$te" 2>/dev/null
   fi
   [ -n "$watcher" ] && kill "$watcher" 2>/dev/null
+  [ -n "$hands" ] && kill "$hands" 2>/dev/null
   [ -n "$app" ] && kill "$app" 2>/dev/null
   [ -n "$inbox_pid" ] && kill "$inbox_pid" 2>/dev/null
   wait 2>/dev/null
@@ -60,8 +62,17 @@ swiftc -O "$root/tests/controls/Drive.swift" -o "$drive" 2>"$tmp/swiftc.log" || 
 
 export NOTCH_DIR="$tmp/sessions"
 export NOTCH_TRACE=1
-applog="$tmp/app.log"; watchlog="$tmp/watch.log"; inboxlog="$tmp/inbox.log"
+applog="$tmp/app.log"; watchlog="$tmp/watch.log"; inboxlog="$tmp/inbox.log"; handlog="$tmp/hands.log"
 mkdir -p "$NOTCH_DIR"
+
+# Ends the run with code $1, or with 2 when it failed while the hardware sent input (`drive hands`).
+finish() {
+  if [ "$1" -eq 1 ] && grep -q '^hand ' "$handlog" 2>/dev/null; then
+    echo "SKIP the trackpad, mouse or keyboard was used during the run, so a failure is not the app's: $(grep -c '^hand ' "$handlog") events, first: $(grep -m1 '^hand ' "$handlog")"
+    exit 2
+  fi
+  exit "$1"
+}
 
 # Waits up to $2 seconds for a fixed string in log $1, looking only at lines after line $4.
 wait_for() {
@@ -90,12 +101,14 @@ printf '{"type":"user","message":{"role":"user","content":"pasted-textok"}}\n' >
 printf '%s' '{"session_id":"sess-type","cwd":"/x/typeproj","hook_event_name":"PreToolUse","tool_name":"Read"}' | env -u __CFBundleIdentifier CLAUDE_CODE_MESSAGING_SOCKET="$sock" "$root/hooks/notch-hook.sh"
 
 read -r cursor_x cursor_y < <("$drive" cursor)
+"$drive" hands >"$handlog" 2>&1 & hands=$!
+wait_for "$handlog" 5 watching || { echo "SKIP cannot watch for hardware input: $(cat "$handlog")"; exit 2; }
 
 # The app first, since an unbundled binary comes up frontmost (wry activates it when it builds the webview); TextEdit
 # then takes the front.
 "$root/src-tauri/target/release/notch-hud" 2>"$applog" & app=$!
-if ! wait_for "$applog" 15 'page: loaded'; then flunk "page loads"; echo "--- app.log"; cat "$applog"; exit 1; fi
-if ! wait_for "$applog" 15 '"total":1'; then flunk "the app sees the session"; echo "--- app.log"; cat "$applog"; exit 1; fi
+if ! wait_for "$applog" 15 'page: loaded'; then flunk "page loads"; echo "--- app.log"; cat "$applog"; finish 1; fi
+if ! wait_for "$applog" 15 '"total":1'; then flunk "the app sees the session"; echo "--- app.log"; cat "$applog"; finish 1; fi
 
 pgrep -xq TextEdit || te_started=1
 : >"$decoy"
@@ -106,21 +119,21 @@ for _ in $(seq 1 50); do
   sleep 0.2
 done
 [ -n "$te" ] && text0="$("$drive" axtext "$te" "$decoy_name" 2>&1)" || { echo "SKIP TextEdit did not come up frontmost with the decoy"; exit 2; }
-if [ "$text0" = "" ]; then pass "TextEdit is frontmost (pid $te) with the empty decoy $decoy_name"; else flunk "the decoy is not empty: [$text0]"; exit 1; fi
+if [ "$text0" = "" ]; then pass "TextEdit is frontmost (pid $te) with the empty decoy $decoy_name"; else flunk "the decoy is not empty: [$text0]"; finish 1; fi
 
 "$drive" watch >"$watchlog" 2>&1 & watcher=$!
 wait_for "$watchlog" 5 watching || { echo "FAIL activation watcher did not start"; exit 2; }
 
 x0_line="$("$drive" hover "$app" 2>&1)"; rc=$?
 if [ "$rc" -eq 2 ]; then echo "SKIP $x0_line"; exit 2; fi
-if [ "$rc" -ne 0 ]; then flunk "panel expands on hover"; echo "$x0_line"; exit 1; fi
+if [ "$rc" -ne 0 ]; then flunk "panel expands on hover"; echo "$x0_line"; finish 1; fi
 x0="${x0_line#x0=}"
 pass "panel expanded with its left edge at x=$x0"
 
 # Row 1 spans 218..240 pt below the panel top (CONTRACT.md section 4).
 am="$(lines "$applog")"
 "$drive" click "$app" $((x0 + 120)) 229 >/dev/null 2>&1 || flunk "click row 1"
-if wait_for "$applog" 5 'page: detail sess-type found' "$am"; then pass "a click on row 1 opened the card: page: detail sess-type found"; else flunk "no 'page: detail sess-type found' after the row click"; exit 1; fi
+if wait_for "$applog" 5 'page: detail sess-type found' "$am"; then pass "a click on row 1 opened the card: page: detail sess-type found"; else flunk "no 'page: detail sess-type found' after the row click"; finish 1; fi
 sleep 0.8
 
 # The box: card top 196, header 18, 4 pt, four 22 pt rows, 10 pt, so 316..350 pt below the panel top.
@@ -128,7 +141,7 @@ km="$(lines "$applog")"
 "$drive" click "$app" $((x0 + 120)) 333 >/dev/null 2>&1 || flunk "click the box"
 if wait_for "$applog" 3 'key: on' "$km"; then pass "a click on the box made the panel key: key: on"; else
   # Without the keyboard, the keys below would go to whatever app is in front.
-  flunk "no 'key: on' after the click on the box; the test stops before posting keys"; exit 1
+  flunk "no 'key: on' after the click on the box; the test stops before posting keys"; finish 1
 fi
 front_is_textedit "after the panel took the keyboard"
 
@@ -140,13 +153,13 @@ if wait_for "$applog" 3 'prompt: sent sess-type 5 chars' "$dm"; then pass "poste
 if wait_received 3 "$tmp/want1"; then pass "the fake inbox received exactly the framed hello line"; reached=1; else flunk "the fake inbox received [$(cat "$received")], want the framed hello line"; fi
 if wait_for "$applog" 3 'key: off' "$dm"; then pass "Return ended typing: key: off"; else flunk "no 'key: off' after Return"; fi
 # From here on, keys are posted only when the keys above reached the box: otherwise they would go to TextEdit.
-if [ "$reached" -ne 1 ]; then flunk "no more keys are posted: the keys above did not reach the box"; exit 1; fi
+if [ "$reached" -ne 1 ]; then flunk "no more keys are posted: the keys above did not reach the box"; finish 1; fi
 
 # Return ended typing, so the box is clicked again, and the test goes on only if the panel took the keyboard again.
 km="$(lines "$applog")"
 "$drive" click "$app" $((x0 + 120)) 333 >/dev/null 2>&1 || flunk "click the box again"
 if wait_for "$applog" 3 'key: on' "$km"; then pass "a second click on the box made the panel key again: key: on"; else
-  flunk "no 'key: on' after the second click on the box; the test stops before posting keys"; exit 1
+  flunk "no 'key: on' after the second click on the box; the test stops before posting keys"; finish 1
 fi
 front_is_textedit "after the panel took the keyboard again"
 
@@ -176,17 +189,17 @@ not_ours() {
   [ "${f#* }" = "com.apple.TextEdit" ] || { echo "TextEdit is no longer in front ($f)"; return 0; }
   return 1
 }
-if why="$(not_ours)"; then flunk "menu keys not tried and the test stops: $why"; exit 1; fi
+if why="$(not_ours)"; then flunk "menu keys not tried and the test stops: $why"; finish 1; fi
 cm="$(lines "$applog")"
 keys="w"
 if [ "$te_started" -eq 1 ]; then keys="$keys q"; else echo "INFO Command-Q skipped: TextEdit was already running"; fi
 for k in $keys h; do
-  if why="$(not_ours)"; then flunk "stopped before Command-$k: $why"; exit 1; fi
+  if why="$(not_ours)"; then flunk "stopped before Command-$k: $why"; finish 1; fi
   "$drive" cmd "$k"
 done
 sleep 0.5
-if kill -0 "$app" 2>/dev/null; then pass "notch-hud is still running after Command-$(echo $keys h | tr ' ' '/')"; else flunk "notch-hud quit on a menu key while typing"; app=""; exit 1; fi
-if why="$(not_ours)"; then flunk "stopped after the menu keys: $why"; exit 1; fi
+if kill -0 "$app" 2>/dev/null; then pass "notch-hud is still running after Command-$(echo $keys h | tr ' ' '/')"; else flunk "notch-hud quit on a menu key while typing"; app=""; finish 1; fi
+if why="$(not_ours)"; then flunk "stopped after the menu keys: $why"; finish 1; fi
 b="$("$drive" bounds "$app")"
 case "$b" in *" 452 396") pass "the panel is still on screen and open after the menu keys: $b";; *) flunk "the panel is [$b] after the menu keys, want w=452 h=396";; esac
 "$drive" key return
@@ -198,16 +211,16 @@ if wait_for "$applog" 3 'window: pill' "$cm"; then pass "with the pointer gone t
 
 # Typing again, to end it with Esc: the pointer back on the pill expands the panel, which starts on the list.
 x0_line="$("$drive" hover "$app" 2>&1)"; rc=$?
-if [ "$rc" -ne 0 ]; then flunk "panel expands on hover the second time"; echo "$x0_line"; exit 1; fi
+if [ "$rc" -ne 0 ]; then flunk "panel expands on hover the second time"; echo "$x0_line"; finish 1; fi
 x0="${x0_line#x0=}"
 am="$(lines "$applog")"
 "$drive" click "$app" $((x0 + 120)) 229 >/dev/null 2>&1 || flunk "click row 1 again"
-if wait_for "$applog" 5 'page: detail sess-type found' "$am"; then pass "row 1 opened the card again: page: detail sess-type found"; else flunk "no 'page: detail sess-type found' after the second row click; the test stops"; exit 1; fi
+if wait_for "$applog" 5 'page: detail sess-type found' "$am"; then pass "row 1 opened the card again: page: detail sess-type found"; else flunk "no 'page: detail sess-type found' after the second row click; the test stops"; finish 1; fi
 sleep 0.8
 km="$(lines "$applog")"
 "$drive" click "$app" $((x0 + 120)) 333 >/dev/null 2>&1 || flunk "click the box a third time"
 if wait_for "$applog" 3 'key: on' "$km"; then pass "a third click on the box made the panel key: key: on"; else
-  flunk "no 'key: on' after the third click on the box; the test stops before posting Esc and keys"; exit 1
+  flunk "no 'key: on' after the third click on the box; the test stops before posting Esc and keys"; finish 1
 fi
 front_is_textedit "after the panel took the keyboard a third time"
 "$drive" move $((x0 + 210)) 640
@@ -232,4 +245,4 @@ grep -q '^activated' "$watchlog" && echo "INFO TextEdit activations: $(grep -c '
 echo "INFO key: on lines: $(grep -c '^key: on' "$applog"), key: off lines: $(grep -c '^key: off' "$applog")"
 
 if [ "$fail" -ne 0 ]; then echo "--- app.log"; cat "$applog"; echo "--- watch.log"; cat "$watchlog"; fi
-exit "$fail"
+finish "$fail"
