@@ -1295,6 +1295,7 @@ can't reach but whose app is known (`Reach::HostOnly`) gets an `Open <app>` butt
 
 ```rust
 // src-tauri/src/prompt.rs, pure
+pub const BUNDLE_ID_MAX: usize = 255;
 pub fn valid_bundle_id(s: &str) -> bool;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -1306,8 +1307,8 @@ pub fn app_name(bundle_id: &str) -> Option<String>;
 pub fn open(bundle_id: &str) -> Result<HostOpen, String>;
 ```
 
-- `valid_bundle_id(s)`: `true` when `s` is 1 to 255 bytes of ASCII letters, digits, `-` and `.`, does not start or
-  end with `.`, and has no `..`. Apple's rule for `CFBundleIdentifier` allows only those characters.
+- `valid_bundle_id(s)`: `true` when `s` is 1 to `BUNDLE_ID_MAX` bytes of ASCII letters, digits, `-` and `.`, does not
+  start or end with `.`, and has no `..`. Apple's rule for `CFBundleIdentifier` allows only those characters.
 - `reach(records, id)`: `HostOnly(host)` only when the main-thread record's `host` passes `valid_bundle_id`; any other
   non-null `host` gives `None` (it can't name an app to bring forward).
 - `Detail` gains `pub app: Option<String>`, serialized as `"app"`: the `localizedName` of the first running
