@@ -8,6 +8,8 @@
 //   drive move <x> <y>              posts a real mouseMoved event at the point (needs Accessibility), no warp
 //   drive front                     prints "<pid> <bundle id>" of the frontmost app
 //   drive watch                     prints "watching", then one "activated <pid> <bundle id>" line per app activation
+//   drive hands                     prints "watching", then one "hand <event type> <x> <y>" line per mouse or key event
+//                                   from the hardware (not posted by a process): someone using the machine mid-test
 //   drive hover <pid> [open height] moves onto the app's pill and waits until its window is the open window, 452 wide
 //                                   and <open height> + 16 tall (default 380, the detail height); prints "x0=<n>", the panel's left edge
 //                                   (the window's left edge + 16), once the panel has expanded
@@ -70,7 +72,10 @@ func panel(of pid: Int32) -> CGRect? {
 
 // The test is only valid when the click lands on the test app's own window.
 func requireTopmost(_ pid: Int32, at p: CGPoint) {
-    guard let top = windows().first(where: { $0.bounds.contains(p) }) else { die(2, "no window under (\(p.x), \(p.y))") }
+    // The cursor can be a small WindowServer window at the cursor level (seen while a full-screen screencaptureui
+    // overlay was up); a click goes through it.
+    let cursorLevel = Int(CGWindowLevelForKey(.cursorWindow))
+    guard let top = windows().first(where: { $0.bounds.contains(p) && $0.layer != cursorLevel }) else { die(2, "no window under (\(p.x), \(p.y))") }
     if top.pid != pid {
         let cursor = CGEvent(source: nil)?.location ?? .zero
         die(2, "the window under (\(Int(p.x)), \(Int(p.y))) belongs to pid \(top.pid), not the test app \(pid) (its panel: \(panel(of: pid).map { "\($0)" } ?? "none"), cursor at \(cursor)): another notch-hud on top, or the panel collapsed?")
@@ -186,6 +191,23 @@ case "watch":
         let app = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
         out("activated \(app?.processIdentifier ?? 0) \(app?.bundleIdentifier ?? "?")")
     }
+    out("watching")
+    RunLoop.main.run()
+
+case "hands":
+    let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown, .scrollWheel, .keyDown]
+    let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
+    // A posted event carries its poster's pid; one from the trackpad carries 0 (measured; assumed for keys and mice).
+    let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly, eventsOfInterest: mask,
+                                callback: { _, type, event, _ in
+        if event.getIntegerValueField(.eventSourceUnixProcessID) == 0 {
+            out("hand \(type.rawValue) \(Int(event.location.x)) \(Int(event.location.y))")
+        }
+        return Unmanaged.passUnretained(event)
+    }, userInfo: nil)
+    guard let tap else { die(2, "cannot listen to input events") }
+    CFRunLoopAddSource(CFRunLoopGetCurrent(), CFMachPortCreateRunLoopSource(nil, tap, 0), .commonModes)
+    CGEvent.tapEnable(tap: tap, enable: true)
     out("watching")
     RunLoop.main.run()
 
