@@ -20,6 +20,15 @@ pub enum Reach {
     None,
 }
 
+/// What `open_host` did (CONTRACT.md section 11, "Opening the session's app").
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", content = "name", rename_all = "snake_case")]
+pub enum HostOpen {
+    /// The app's display name.
+    Opened(String),
+    NotRunning,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prompt {
     pub id: String,
@@ -43,6 +52,7 @@ pub const MAX_CHARS: usize = 8000;
 /// `sockaddr_un.sun_path` on macOS: 103 bytes of path and a NUL.
 pub const SUN_PATH_MAX: usize = 104;
 pub const TIMEOUT: Duration = Duration::from_secs(2);
+pub const BUNDLE_ID_MAX: usize = 255;
 
 pub fn parse_prompt(id: &str, text: &str) -> Result<Prompt, String> {
     if !valid_id(id) {
@@ -90,10 +100,19 @@ pub fn reach(records: &[Record], id: &str) -> Reach {
     if route(records, id).is_ok() {
         return Reach::Inbox;
     }
-    match main_record(records, id).and_then(|r| r.host.as_deref()).filter(|h| !h.is_empty()) {
+    match main_record(records, id).and_then(|r| r.host.as_deref()).filter(|h| valid_bundle_id(h)) {
         Some(host) => Reach::HostOnly(host.to_string()),
         None => Reach::None,
     }
+}
+
+/// Apple's `CFBundleIdentifier` characters: ASCII letters, digits, `-` and `.`.
+pub fn valid_bundle_id(s: &str) -> bool {
+    (1..=BUNDLE_ID_MAX).contains(&s.len())
+        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+        && !s.starts_with('.')
+        && !s.ends_with('.')
+        && !s.contains("..")
 }
 
 /// Written by hand so the keys keep this order: a `serde_json` map would sort them.

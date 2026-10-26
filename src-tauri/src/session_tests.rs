@@ -947,6 +947,7 @@ fn detail_of_a_plain_session() {
             tool_name: Some("Bash".into()),
             agents: 0,
             reach: crate::prompt::Reach::None,
+            app: None,
         })
     );
 }

@@ -76,6 +76,8 @@ pub struct Detail {
     pub tool_name: Option<String>,
     pub agents: usize,
     pub reach: Reach,
+    /// The display name of the running `HostOnly` app; filled by the `session_detail` command, never here.
+    pub app: Option<String>,
 }
 
 pub const TTL_SECS: u64 = 3 * 3600;
@@ -265,6 +267,7 @@ pub fn detail(records: &[Record], id: &str, now: u64) -> Option<Detail> {
         tool_name: s.tool_name,
         agents: s.agents,
         reach: reach(records, id),
+        app: None,
     })
 }
 
