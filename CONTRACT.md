@@ -1284,3 +1284,81 @@ pub fn send(path: &Path, line: &str) -> Result<(), SendError>;
   after that collapses it as usual. A failure while the pointer is on the panel holds nothing. The hold lasts only
   while the draft can be sent: when a redraw shows the session ended or its `reach` no longer `inbox`, the hold ends,
   and with the latest `hover` `false` the panel collapses after 250 ms.
+
+### Opening the session's app (amendment, 2026-10-26)
+
+This amends "Sending" above and section 2 "Session ids and `detail`"; where it differs, it wins. A session the box
+can't reach but whose app is known (`Reach::HostOnly`) gets an `Open <app>` button that brings that app forward
+(`docs/PLAN-video-sessions.md` section 3.3, Phase 6). It never launches an app and never types into it.
+
+#### Model
+
+```rust
+// src-tauri/src/prompt.rs, pure
+pub const BUNDLE_ID_MAX: usize = 255;
+pub fn valid_bundle_id(s: &str) -> bool;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", content = "name", rename_all = "snake_case")]
+pub enum HostOpen { Opened(String), NotRunning }  // {"kind":"opened","name":"TextEdit"}, {"kind":"not_running"}
+
+// src-tauri/src/host.rs, AppKit
+pub fn app_name(bundle_id: &str) -> Option<String>;
+pub fn open(bundle_id: &str) -> Result<HostOpen, String>;
+```
+
+- `valid_bundle_id(s)`: `true` when `s` is 1 to `BUNDLE_ID_MAX` bytes of ASCII letters, digits, `-`, `.` and `_`, does
+  not start or end with `.`, and has no `..`. Apple's rule for `CFBundleIdentifier` allows letters, digits, `-` and
+  `.`; `_` is allowed too because some shipped bundles use it, and the id is only a lookup key.
+- `reach(records, id)`: `HostOnly(host)` only when the main-thread record's `host` passes `valid_bundle_id`; any other
+  non-null `host` gives `None` (it can't name an app to bring forward).
+- `Detail` gains `pub app: Option<String>`, serialized as `"app"`: the `localizedName` of the first running
+  application (`NSRunningApplication`, not terminated) whose bundle id is the `HostOnly` host, else `null`; always
+  `null` for `Inbox` and `None`. `session::detail` stays pure and sets `null`; the `session_detail` command fills it
+  with `host::app_name`.
+- `host::app_name(bundle_id)`: that `localizedName`, or `None` when no such app runs or it has no name.
+- `host::open(bundle_id)`: `NotRunning` when no application with that bundle id is running (terminated ones don't
+  count): nothing is launched. Otherwise it asks the first one to come forward and returns `Opened(name)`, `name`
+  its `localizedName` or the bundle id; `Err` with the reason when the system refuses the request. `Opened` means
+  the request was accepted (`activateWithOptions` returned `YES`), not that the app was seen frontmost.
+- How it asks: `activateWithOptions` with no options, on the calling (blocking) thread; `NSRunningApplication` is
+  thread safe. Measured on macOS 27.0.1 from a background-launched accessory process with a non-activating panel
+  shown, never active itself, with Finder frontmost and no hardware input for over 160 s: TextEdit was frontmost
+  21 ms after the call from a background thread (3 of 3 runs), 26 ms from the main thread; `NSWorkspace`
+  `openApplicationAtURL:configuration:` with `activates` also worked (22 ms), and with no call TextEdit never came
+  forward. `activateWithOptions` is used because it can't launch: `openApplicationAtURL` would relaunch an app that
+  quit between the lookup and the call. Not measured: the call right after a click on the panel (the end-to-end
+  check, `tests/open_host_test.sh`, covers it).
+
+#### Bridge
+
+- Command `open_host(id: String) -> Result<HostOpen, String>`, run off the main thread like `prompt`: `Err` when `id`
+  fails `valid_id`, or when `reach` against the last refresh's records is not `HostOnly` (`no app to open for this
+  session`); else `host::open(host)`. Under `$NOTCH_TRACE` it logs one line to stderr: `host: opened <bundle id>`,
+  `host: not running <bundle id>`, or `host: failed: <reason>`.
+- It never calls `focus` and never makes the panel key.
+- `session_detail`'s trace (section 3) becomes `page: detail <id> found app=<app>` when the reply's `app` is set;
+  otherwise it is unchanged.
+
+#### Page
+
+- For a card whose `reach.kind` is `host_only`, `#pbox` is hidden and `<button type="button" class="openapp"
+  id="openApp">` takes its place: 388 x 34 at (16, 316) of `#content`, radius 10, background `#1c1c1c` (`#262626`
+  while hovered), no border, text `Open <app>` centered in 600 12.5/34 px `#f5f5f5`. `<app>` is the detail's `app`
+  when it is a non-empty string, else `reach.host`. For any other `reach` the button is hidden and the box shows as
+  before. A null detail reply (`Session ended`) hides the button too.
+- The hint line below it reads `It has no inbox, so notch-hud can only bring <app> forward.` in muted, replacing
+  `It has no inbox notch-hud can send to. Reply in its own app.`.
+- A press on the button keeps DOM focus where it is and starts no typing; the page never calls `focus` for it. A
+  click calls `invoke('open_host', { id })` with the card's id, unless a call for this card is still in flight. The
+  reply sets the hint:
+
+  | Reply | Hint |
+  |---|---|
+  | `{kind: "opened", name}` | `Brought <name> forward.` in `#f5f5f5` |
+  | `{kind: "not_running"}` | `<app> isn't running.` in amber |
+  | rejected | `Couldn't bring <app> forward.` in amber |
+
+  A reply that arrives after the card closed or shows another session changes nothing. The result hint stays while
+  the card shows the same session with `reach` `host_only` and the same host; closing the card, showing another
+  session, or a redraw with another `reach` or host clears it.

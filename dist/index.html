@@ -150,6 +150,12 @@
     display: grid; place-items: center; cursor: default; }
   .send:disabled { background: #2a2a2a; color: #6f6f6f; }
   .send:not(:disabled):active { transform: scale(0.92); }
+  .openapp { display: block; width: 100%; height: 34px; margin-top: 10px; padding: 0 12px; border: 0; border-radius: 10px; background: #1c1c1c;
+    font: 600 12.5px/34px -apple-system, system-ui, sans-serif; color: #f5f5f5; text-align: center; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; cursor: default; }
+  .openapp:hover { background: #262626; }
+  .openapp:active { transform: scale(0.99); }
+  .openapp[hidden] { display: none; }
   .phint { height: 14px; margin-top: 6px; font: 500 11px/14px -apple-system, system-ui, sans-serif; color: #8b8b8b; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; }
   .phint.ok { color: #f5f5f5; }
@@ -200,6 +206,7 @@
             <textarea id="msg" rows="1" maxlength="8000" aria-label="Message to this session"></textarea>
             <button type="button" class="send" id="send" aria-label="Send" disabled><svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M6 10V2.4M2.7 5.4 6 2.1l3.3 3.3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           </div>
+          <button type="button" class="openapp" id="openApp" hidden></button>
           <div class="phint" id="phint"></div>
         </div>
       </div>
@@ -894,9 +901,9 @@
   function drawDetail(d) {
     const held = holding();
     detailShown = d;
+    if (hostResult && !showsHost(hostResult)) hostResult = null;
     $('dRows').hidden = !d;
     $('dEnded').hidden = !!d;
-    $('pbox').hidden = $('phint').hidden = !d;
     if (!canSend()) stopTyping();
     if (d) {
       $('dLabel').textContent = d.label;
@@ -961,6 +968,7 @@
     detailSeq++;
     openingId = null;
     stopTyping();
+    hostCall = hostResult = null;
     setDelivery(null);
     clearDraft();
     if (detailId === null) return;
@@ -999,14 +1007,17 @@
     failed: () => ['This session isn\'t reachable.', 'att'],
   };
   function hint() {
-    if (detailShown && !canSend()) {
-      return [detailShown.reach && detailShown.reach.kind === 'host_only' ? NO_INBOX + ' Reply in its own app.' : NO_INBOX, ''];
-    }
+    if (hostOnly()) return hostResult ? [hostResult.text, hostResult.tone] : ['It has no inbox, so notch-hud can only bring ' + appName() + ' forward.', ''];
+    if (detailShown && !canSend()) return [NO_INBOX, ''];
     if (delivery) return DELIVERY_HINT[delivery.state](delivery.label);
     return [typing ? TYPING_HINT : '', ''];
   }
   function syncPrompt() {
     const open = canSend();
+    $('pbox').hidden = !detailShown || hostOnly();
+    $('phint').hidden = !detailShown;
+    $('openApp').hidden = !hostOnly();
+    if (hostOnly()) $('openApp').textContent = 'Open ' + appName();
     msg.disabled = !open;
     if (detailShown) msg.placeholder = open ? 'Message ' + detailShown.label : 'This session can\'t take messages';
     $('send').disabled = !open || !draftText() || (!!delivery && delivery.state === 'sending');
@@ -1016,6 +1027,34 @@
     $('phint').textContent = text;
     $('phint').className = 'phint' + (tone ? ' ' + tone : '');
   }
+  // ---- the session's app (CONTRACT.md section 11, "Opening the session's app") ----
+  // hostCall: the open_host call in flight, { id, host, app }. hostResult: its reply's hint, { id, host, text, tone },
+  // kept while the card shows that session with that host.
+  let hostCall = null;
+  let hostResult = null;
+  const hostOnly = () => !!detailShown && !!detailShown.reach && detailShown.reach.kind === 'host_only';
+  const appName = () => (typeof detailShown.app === 'string' && detailShown.app) || detailShown.reach.host;
+  const showsHost = (h) => hostOnly() && detailShown.id === h.id && detailShown.reach.host === h.host;
+  function openHost() {
+    if (!hostOnly() || hostCall) return;
+    const call = { id: detailShown.id, host: detailShown.reach.host, app: appName() };
+    hostCall = call;
+    const done = (text, tone) => {
+      if (hostCall !== call) return;
+      hostCall = null;
+      if (!showsHost(call)) return;
+      hostResult = { id: call.id, host: call.host, text, tone };
+      syncPrompt();
+    };
+    window.__TAURI__.core.invoke('open_host', { id: call.id }).then((r) => {
+      if (r && r.kind === 'opened' && typeof r.name === 'string') done('Brought ' + r.name + ' forward.', 'ok');
+      else if (r && r.kind === 'not_running') done(call.app + ' isn\'t running.', 'att');
+      else done('Couldn\'t bring ' + call.app + ' forward.', 'att');
+    }, () => done('Couldn\'t bring ' + call.app + ' forward.', 'att'));
+  }
+  // The button never takes the keyboard: the press keeps DOM focus where it is and nothing calls `focus`.
+  $('openApp').addEventListener('pointerdown', (e) => e.preventDefault());
+  $('openApp').addEventListener('click', openHost);
   function clearDraft() {
     msg.value = '';
     syncPrompt();

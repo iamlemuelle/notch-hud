@@ -947,6 +947,7 @@ fn detail_of_a_plain_session() {
             tool_name: Some("Bash".into()),
             agents: 0,
             reach: crate::prompt::Reach::None,
+            app: None,
         })
     );
 }
@@ -1119,4 +1120,44 @@ fn row_ids_are_the_session_ids() {
     let recs = [rec("sess-1", "/p/a", "Stop", NOW), rec("sess_2", "/p/b", "PreToolUse", NOW)];
     let ids: Vec<String> = summarize(&recs, NOW).rows.into_iter().map(|r| r.id).collect();
     assert_eq!(ids, vec!["sess_2".to_string(), "sess-1".to_string()]);
+}
+
+#[test]
+fn detail_serializes_with_a_null_app() {
+    let d = Detail {
+        id: "s1".to_string(),
+        label: "proj".to_string(),
+        cwd: "/x/proj".to_string(),
+        status: Status::Working,
+        event: "PreToolUse".to_string(),
+        event_ts: 100,
+        tool_name: Some("Read".to_string()),
+        agents: 2,
+        reach: Reach::Inbox,
+        app: None,
+    };
+    assert_eq!(
+        serde_json::to_string(&d).unwrap(),
+        r#"{"id":"s1","label":"proj","cwd":"/x/proj","status":"working","event":"PreToolUse","event_ts":100,"tool_name":"Read","agents":2,"reach":{"kind":"inbox"},"app":null}"#
+    );
+}
+
+#[test]
+fn detail_serializes_a_host_only_app() {
+    let d = Detail {
+        id: "s1".to_string(),
+        label: "proj".to_string(),
+        cwd: "/x/proj".to_string(),
+        status: Status::Working,
+        event: "PreToolUse".to_string(),
+        event_ts: 100,
+        tool_name: None,
+        agents: 0,
+        reach: Reach::HostOnly("com.apple.TextEdit".to_string()),
+        app: Some("TextEdit".to_string()),
+    };
+    assert_eq!(
+        serde_json::to_string(&d).unwrap(),
+        r#"{"id":"s1","label":"proj","cwd":"/x/proj","status":"working","event":"PreToolUse","event_ts":100,"tool_name":null,"agents":0,"reach":{"kind":"host_only","host":"com.apple.TextEdit"},"app":"TextEdit"}"#
+    );
 }

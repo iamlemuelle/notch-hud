@@ -207,6 +207,60 @@ fn reach_serializes_as_the_contract_writes_it() {
     assert_eq!(serde_json::to_string(&Reach::None).unwrap(), r#"{"kind":"none"}"#);
 }
 
+#[test]
+fn bundle_id_accepts_letters_digits_dash_and_dots() {
+    for id in [
+        "com.apple.TextEdit",
+        "com.anthropic.claudefordesktop",
+        "com.googlecode.iterm2",
+        "com.mitchellh.ghostty",
+        "a",
+        "A-1.b",
+    ] {
+        assert!(valid_bundle_id(id), "{id:?}");
+    }
+    assert!(valid_bundle_id(&"a".repeat(255)));
+}
+
+#[test]
+fn bundle_id_accepts_underscore() {
+    for id in ["com.example.my_app", "_a", "a_", "a_b"] {
+        assert!(valid_bundle_id(id), "{id:?}");
+    }
+}
+
+#[test]
+fn bundle_id_rejects_everything_else() {
+    for id in ["", ".a", "a.", "a..b", "a b", "a/b", "com.x\n", "com.x\0y", "c\u{f3}m.x"] {
+        assert!(!valid_bundle_id(id), "{id:?}");
+    }
+    assert!(!valid_bundle_id(&"a".repeat(256)));
+}
+
+#[test]
+fn reach_host_only_needs_a_valid_bundle_id() {
+    assert_eq!(
+        reach(&[rec("s1", 100, None, Some("com.apple.TextEdit"))], "s1"),
+        Reach::HostOnly("com.apple.TextEdit".to_string())
+    );
+    assert_eq!(reach(&[rec("s1", 100, None, Some("com.apple.Text Edit"))], "s1"), Reach::None);
+    assert_eq!(reach(&[rec("s1", 100, None, Some("../x"))], "s1"), Reach::None);
+}
+
+#[test]
+fn reach_inbox_wins_over_an_invalid_host() {
+    assert_eq!(reach(&[rec("s1", 100, Some(SOCK), Some("../x"))], "s1"), Reach::Inbox);
+}
+
+#[test]
+fn host_open_serializes_as_the_contract_writes_it() {
+    assert_eq!(
+        serde_json::to_string(&HostOpen::Opened("TextEdit".to_string())).unwrap(),
+        r#"{"kind":"opened","name":"TextEdit"}"#
+    );
+    assert_eq!(serde_json::to_string(&HostOpen::NotRunning).unwrap(), r#"{"kind":"not_running"}"#);
+}
+
 // frame ----------------------------------------------------------------------------------------------------------
 
 #[test]

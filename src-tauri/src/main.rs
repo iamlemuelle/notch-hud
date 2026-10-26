@@ -1,4 +1,5 @@
 mod avatar;
+mod host;
 mod hover;
 mod layout;
 mod media;
@@ -417,12 +418,21 @@ fn session_detail(id: String) -> Option<Detail> {
         }
         return None;
     }
-    let detail = {
+    let mut detail = {
         let records = RECORDS.lock().unwrap_or_else(|e| e.into_inner());
         session::detail(&records.0, &id, records.1)
     };
+    if let Some(d) = detail.as_mut() {
+        if let prompt::Reach::HostOnly(host) = &d.reach {
+            d.app = host::app_name(host);
+        }
+    }
     if trace_on() {
-        eprintln!("page: detail {id} {}", if detail.is_some() { "found" } else { "none" });
+        match &detail {
+            Some(Detail { app: Some(app), .. }) => eprintln!("page: detail {id} found app={app}"),
+            Some(_) => eprintln!("page: detail {id} found"),
+            None => eprintln!("page: detail {id} none"),
+        }
     }
     detail
 }
@@ -452,6 +462,45 @@ async fn prompt(id: String, text: String) -> Result<(), String> {
         Err(prompt::SendError::Rejected(reason)) => prompt_refused("rejected", reason),
         Err(prompt::SendError::Failed(reason)) => prompt_refused("failed", reason),
     }
+}
+
+/// Brings the app of a session with no inbox forward, off the main thread (CONTRACT.md section 11, "Opening the
+/// session's app").
+#[tauri::command]
+async fn open_host(id: String) -> Result<prompt::HostOpen, String> {
+    if !session::valid_id(&id) {
+        return host_failed("bad session id".into());
+    }
+    let reach = {
+        let records = RECORDS.lock().unwrap_or_else(|e| e.into_inner());
+        prompt::reach(&records.0, &id)
+    };
+    let prompt::Reach::HostOnly(host) = reach else {
+        return host_failed("no app to open for this session".into());
+    };
+    let target = host.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || host::open(&target))
+        .await
+        .unwrap_or_else(|e| Err(format!("open task: {e}")));
+    match result {
+        Ok(done) => {
+            if trace_on() {
+                match done {
+                    prompt::HostOpen::Opened(_) => eprintln!("host: opened {host}"),
+                    prompt::HostOpen::NotRunning => eprintln!("host: not running {host}"),
+                }
+            }
+            Ok(done)
+        }
+        Err(reason) => host_failed(reason),
+    }
+}
+
+fn host_failed(reason: String) -> Result<prompt::HostOpen, String> {
+    if trace_on() {
+        eprintln!("host: failed: {reason}");
+    }
+    Err(reason)
 }
 
 fn prompt_refused(how: &str, reason: String) -> Result<(), String> {
@@ -641,7 +690,7 @@ fn main() {
     }
     tauri::Builder::default()
         .menu(panel::edit_menu)
-        .invoke_handler(tauri::generate_handler![sessions, session_detail, prompt, media, act, layout, surface, panel::focus, avatar, mood])
+        .invoke_handler(tauri::generate_handler![sessions, session_detail, prompt, open_host, media, act, layout, surface, panel::focus, avatar, mood])
         .setup(|app| {
             let mtm = MainThreadMarker::new().expect("main thread");
             if notched_screen(mtm).is_none() {

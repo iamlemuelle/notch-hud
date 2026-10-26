@@ -647,10 +647,8 @@ async function scenarioHold() {
 }
 
 async function scenarioReach() {
-  for (const [name, reach, hint] of [
-    ['none', { kind: 'none' }, NO_INBOX],
-    ['host_only', { kind: 'host_only', host: 'com.apple.Terminal' }, NO_INBOX + ' Reply in its own app.'],
-  ]) {
+  {
+    const name = 'none', reach = { kind: 'none' }, hint = NO_INBOX;
     const page = await openPage({ tag: `reach-${name}` });
     await openCard(page, card({ reach }));
     const b = await box(page);
@@ -666,6 +664,20 @@ async function scenarioReach() {
     check(`R4 reach ${name}: Return sends nothing`, (await invokes(page, 'prompt')).length === 0, J(await invokes(page, 'prompt')));
     await page.close();
   }
+
+  // host_only (CONTRACT.md "Opening the session's app"): the box is hidden and the Open button takes its place;
+  // tests/page/open-host-check.mjs checks the button in full.
+  const ho = await openPage({ tag: 'reach-host_only' });
+  await openCard(ho, card({ reach: { kind: 'host_only', host: 'com.apple.Terminal' }, app: 'Terminal' }));
+  const hb = await box(ho);
+  const btn = await ho.evaluate(() => { const e = document.querySelector('#openApp'); return e && !e.hidden && getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().height > 0 ? e.textContent : null; });
+  check('R1h reach host_only: #pbox is hidden and #openApp shows "Open Terminal"', !hb.boxShown && btn === 'Open Terminal', J({ hb, btn }));
+  check('R2h reach host_only: the hint reads "It has no inbox, so notch-hud can only bring Terminal forward."', hb.hintShown && hb.hint === 'It has no inbox, so notch-hud can only bring Terminal forward.', J(hb));
+  await sleep(100);
+  await ho.keyboard.press('Enter');
+  await sleep(100);
+  check('R4h reach host_only: Return sends nothing and calls no focus', (await invokes(ho, 'prompt')).length === 0 && (await invokes(ho, 'focus')).length === 0, J({ p: await invokes(ho, 'prompt'), f: await invokes(ho, 'focus') }));
+  await ho.close();
 
   const page = await openPage({ tag: 'reach-change' });
   await openCard(page);
