@@ -39,18 +39,18 @@ const SOCK: &str = "/tmp/claude-501/7.sock";
 
 #[test]
 fn parse_rejects_empty_and_whitespace_text() {
-    assert!(parse_prompt("s1", "").is_err());
-    assert!(parse_prompt("s1", "   ").is_err());
-    assert!(parse_prompt("s1", " \n\t \r\n ").is_err());
+    assert_eq!(parse_prompt("s1", ""), Err("empty text".to_string()));
+    assert_eq!(parse_prompt("s1", "   "), Err("empty text".to_string()));
+    assert_eq!(parse_prompt("s1", " \n\t \r\n "), Err("empty text".to_string()));
 }
 
 #[test]
 fn parse_counts_scalar_values_at_the_limit() {
     assert!(parse_prompt("s1", &"a".repeat(8000)).is_ok());
-    assert!(parse_prompt("s1", &"a".repeat(8001)).is_err());
+    assert_eq!(parse_prompt("s1", &"a".repeat(8001)), Err("text is 8001 chars, over 8000".to_string()));
     // A four-byte scalar counts once: 8000 of them are 32000 bytes and pass; 8001 do not.
     assert!(parse_prompt("s1", &"\u{1F600}".repeat(8000)).is_ok());
-    assert!(parse_prompt("s1", &"\u{1F600}".repeat(8001)).is_err());
+    assert_eq!(parse_prompt("s1", &"\u{1F600}".repeat(8001)), Err("text is 8001 chars, over 8000".to_string()));
 }
 
 #[test]
@@ -61,14 +61,14 @@ fn parse_counts_the_trimmed_text() {
 
 #[test]
 fn parse_rejects_nul() {
-    assert!(parse_prompt("s1", "he\0llo").is_err());
+    assert_eq!(parse_prompt("s1", "he\0llo"), Err("text contains NUL".to_string()));
 }
 
 #[test]
 fn parse_rejects_bad_ids() {
-    assert!(parse_prompt("", "hi").is_err());
-    assert!(parse_prompt("a b", "hi").is_err());
-    assert!(parse_prompt("a\n", "hi").is_err());
+    for id in ["", "a b", "a\n"] {
+        assert_eq!(parse_prompt(id, "hi"), Err("bad session id".to_string()), "{id:?}");
+    }
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn route_goes_to_the_inbox_of_the_main_record() {
 #[test]
 fn route_refuses_a_relative_path() {
     let recs = [rec("s1", 100, Some("claude/7.sock"), None)];
-    assert!(route(&recs, "s1").is_err());
+    assert_eq!(route(&recs, "s1"), Err("inbox path is not absolute".to_string()));
 }
 
 #[test]
@@ -99,21 +99,26 @@ fn route_refuses_a_104_byte_path_and_accepts_103() {
     let ok = absolute(103);
     assert_eq!(long.len(), 104);
     assert_eq!(ok.len(), 103);
-    assert!(route(&[rec("s1", 100, Some(&long), None)], "s1").is_err());
+    assert_eq!(
+        route(&[rec("s1", 100, Some(&long), None)], "s1"),
+        Err("inbox path is 104 bytes, the limit is 103".to_string())
+    );
     assert_eq!(route(&[rec("s1", 100, Some(&ok), None)], "s1"), Ok(Route::Inbox(PathBuf::from(&ok))));
 }
 
 #[test]
 fn route_needs_a_main_thread_record() {
-    assert!(route(&[], "s1").is_err());
-    assert!(route(&[rec("other", 100, Some(SOCK), None)], "s1").is_err());
-    assert!(route(&[agent("s1", 100, Some(SOCK))], "s1").is_err());
+    let none = Err("no record for this session".to_string());
+    assert_eq!(route(&[], "s1"), none);
+    assert_eq!(route(&[rec("other", 100, Some(SOCK), None)], "s1"), none);
+    assert_eq!(route(&[agent("s1", 100, Some(SOCK))], "s1"), none);
 }
 
 #[test]
 fn route_refuses_a_null_and_an_empty_inbox() {
-    assert!(route(&[rec("s1", 100, None, None)], "s1").is_err());
-    assert!(route(&[rec("s1", 100, Some(""), None)], "s1").is_err());
+    let none = Err("no inbox in the record".to_string());
+    assert_eq!(route(&[rec("s1", 100, None, None)], "s1"), none);
+    assert_eq!(route(&[rec("s1", 100, Some(""), None)], "s1"), none);
 }
 
 #[test]
@@ -131,14 +136,14 @@ fn route_a_subagent_of_the_same_session_is_not_sharing() {
 #[test]
 fn route_refuses_a_shared_socket_on_a_tie() {
     let recs = [rec("s1", 100, Some(SOCK), None), rec("s2", 100, Some(SOCK), None)];
-    assert!(route(&recs, "s1").is_err());
-    assert!(route(&recs, "s2").is_err());
+    assert_eq!(route(&recs, "s1"), Err("inbox is shared with a session as new or newer".to_string()));
+    assert_eq!(route(&recs, "s2"), Err("inbox is shared with a session as new or newer".to_string()));
 }
 
 #[test]
 fn route_refuses_a_shared_socket_when_the_other_is_newer() {
     let recs = [rec("s1", 100, Some(SOCK), None), rec("s2", 101, Some(SOCK), None)];
-    assert!(route(&recs, "s1").is_err());
+    assert_eq!(route(&recs, "s1"), Err("inbox is shared with a session as new or newer".to_string()));
 }
 
 #[test]
@@ -151,7 +156,7 @@ fn route_sends_a_shared_socket_to_the_newest_session() {
 fn route_counts_the_sessions_own_newer_subagent_against_the_other() {
     let recs = [rec("s1", 100, Some(SOCK), None), agent("s1", 300, Some(SOCK)), rec("s2", 200, Some(SOCK), None)];
     assert_eq!(route(&recs, "s1"), Ok(Route::Inbox(PathBuf::from(SOCK))));
-    assert!(route(&recs, "s2").is_err());
+    assert_eq!(route(&recs, "s2"), Err("inbox is shared with a session as new or newer".to_string()));
 }
 
 #[test]
@@ -267,7 +272,7 @@ fn send_rejects_a_regular_file() {
     let dir = tmp("regular");
     let file = dir.join("i.sock");
     fs::write(&file, b"not a socket").unwrap();
-    assert!(matches!(send(&file, "x\n"), Err(SendError::Rejected(_))));
+    assert_eq!(send(&file, "x\n"), Err(SendError::Rejected("inbox is not a socket".to_string())));
     assert_eq!(fs::read(&file).unwrap(), b"not a socket");
     let _ = fs::remove_dir_all(&dir);
 }
@@ -280,7 +285,7 @@ fn send_rejects_a_symlink_to_a_live_socket() {
     let listener = UnixListener::bind(&sock).unwrap();
     listener.set_nonblocking(true).unwrap();
     std::os::unix::fs::symlink(&sock, &link).unwrap();
-    assert!(matches!(send(&link, "x\n"), Err(SendError::Rejected(_))));
+    assert_eq!(send(&link, "x\n"), Err(SendError::Rejected("inbox is a symlink".to_string())));
     // Nothing connected: the live listener saw no one.
     assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
     let _ = fs::remove_dir_all(&dir);
@@ -289,7 +294,10 @@ fn send_rejects_a_symlink_to_a_live_socket() {
 #[test]
 fn send_rejects_a_missing_path() {
     let dir = tmp("missing");
-    assert!(matches!(send(&dir.join("none.sock"), "x\n"), Err(SendError::Rejected(_))));
+    match send(&dir.join("none.sock"), "x\n") {
+        Err(SendError::Rejected(why)) => assert!(why.starts_with("lstat: "), "{why}"),
+        other => panic!("{other:?}"),
+    }
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -299,6 +307,71 @@ fn send_fails_when_the_listener_is_gone() {
     let sock = dir.join("i.sock");
     drop(UnixListener::bind(&sock).unwrap());
     assert!(sock.exists());
-    assert!(matches!(send(&sock, "x\n"), Err(SendError::Failed(_))));
+    match send(&sock, "x\n") {
+        Err(SendError::Failed(why)) => assert!(why.starts_with("connect: "), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn check_owner_passes_the_same_uid() {
+    assert_eq!(check_owner("inbox", 501, 501), Ok(()));
+    assert_eq!(check_owner("inbox listener", 0, 0), Ok(()));
+}
+
+#[test]
+fn check_owner_rejects_another_uid_naming_both() {
+    assert_eq!(check_owner("inbox", 0, 501), Err(SendError::Rejected("inbox belongs to uid 0, not 501".to_string())));
+    assert_eq!(
+        check_owner("inbox listener", 502, 501),
+        Err(SendError::Rejected("inbox listener belongs to uid 502, not 501".to_string()))
+    );
+}
+
+#[test]
+fn send_to_a_live_listener_of_our_uid_passes_the_peer_check_and_delivers_a_large_line() {
+    let dir = tmp("peer");
+    let sock = dir.join("i.sock");
+    let listener = UnixListener::bind(&sock).unwrap();
+    let reader = std::thread::spawn(move || {
+        let (mut conn, _) = listener.accept().unwrap();
+        let mut got = Vec::new();
+        conn.read_to_end(&mut got).unwrap();
+        got
+    });
+    let line = format!("{}\n", "x".repeat(300_000));
+    assert_eq!(send(&sock, &line), Ok(()));
+    assert_eq!(reader.join().unwrap(), line.as_bytes());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn send_gives_up_on_a_listener_that_never_reads_within_one_timeout_for_the_whole_line() {
+    let dir = tmp("stall");
+    let sock = dir.join("i.sock");
+    let listener = UnixListener::bind(&sock).unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    // Accepts, never reads, and stays alive until send has returned.
+    let holder = std::thread::spawn(move || {
+        let (conn, _) = listener.accept().unwrap();
+        let _ = done_rx.recv();
+        drop(conn);
+    });
+    let line = "y".repeat(800_000);
+    let start = Instant::now();
+    let result = send(&sock, &line);
+    let took = start.elapsed();
+    done_tx.send(()).unwrap();
+    holder.join().unwrap();
+    match result {
+        Err(SendError::Failed(why)) => {
+            assert!(why.starts_with("write"), "{why}");
+            assert!(why.ends_with("of 800000 bytes"), "{why}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(took >= Duration::from_millis(1500), "{took:?}");
+    assert!(took < Duration::from_millis(3500), "{took:?}");
     let _ = fs::remove_dir_all(&dir);
 }

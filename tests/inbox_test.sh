@@ -46,8 +46,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# A sockaddr_un path holds 103 bytes and a NUL.
-if [ "${#sock}" -ge 104 ]; then echo "SKIP the fake inbox path is ${#sock} bytes, the limit is 103: $sock"; exit 2; fi
+source "$root/tests/lib/fake_inbox.sh"
+fake_inbox_check_path
 
 swiftc -O "$root/tests/controls/Drive.swift" -o "$drive" 2>"$tmp/swiftc.log" || { cat "$tmp/swiftc.log"; echo "FAIL driver build"; exit 2; }
 "$drive" access || {
@@ -77,37 +77,7 @@ front_is_textedit() {
   local f; f="$("$drive" front)"
   if [ "${f#* }" = "com.apple.TextEdit" ]; then pass "frontmost app is TextEdit $1"; else flunk "frontmost app is [$f] $1, want TextEdit"; fi
 }
-# Waits up to $1 seconds for the fake's file to hold exactly the bytes of file $2.
-wait_received() {
-  local i=0
-  while [ "$i" -lt $(($1 * 5)) ]; do
-    cmp -s "$received" "$2" && return 0
-    sleep 0.2; i=$((i + 1))
-  done
-  return 1
-}
-
-# The fake inbox: accepts connections one at a time and appends every byte it gets to $received.
-cat >"$tmp/fake_inbox.py" <<'PY'
-import socket, sys
-path, out = sys.argv[1], sys.argv[2]
-srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-srv.bind(path)
-srv.listen(8)
-open(out, "ab").close()
-print("listening", flush=True)
-while True:
-    conn, _ = srv.accept()
-    with conn:
-        while True:
-            data = conn.recv(65536)
-            if not data:
-                break
-            with open(out, "ab") as f:
-                f.write(data)
-PY
-python3 -I "$tmp/fake_inbox.py" "$sock" "$received" >"$inboxlog" 2>&1 & inbox_pid=$!
-wait_for "$inboxlog" 5 listening || { echo "FAIL the fake inbox did not start"; cat "$inboxlog"; exit 2; }
+start_fake_inbox
 
 # What the fake must have received after the first send: the framed line of CONTRACT.md section 11.
 printf '{"type":"user","message":{"role":"user","content":"hello"}}\n' >"$tmp/want"

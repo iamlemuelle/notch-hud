@@ -531,6 +531,83 @@ async function scenarioDelivery() {
   await p8.close();
 }
 
+const phaseOf = (page) => page.evaluate(() => document.body.dataset.phase);
+const FAILED = 'This session isn\'t reachable.';
+
+// CONTRACT.md section 11 "Sending": a send in flight keeps the card open, and a failure while the pointer is away
+// holds it open until the pointer comes back.
+async function scenarioHold() {
+  // away, held, resolved: stays open while sending, then collapses
+  const a = await openPage({ tag: 'hold-success' });
+  await openCard(a);
+  await holdPrompt(a);
+  await clickBox(a);
+  await a.keyboard.type('away');
+  await fire(a, 'hover', false);
+  await a.keyboard.press('Enter');
+  await sleep(800);
+  let b = await box(a);
+  check('H1 pointer away, send in flight 800 ms: the panel is still expanded and the hint reads "Sending…"', (await phaseOf(a)) === 'expanded' && b.hint === 'Sending\u2026', J({ phase: await phaseOf(a), b }));
+  await a.evaluate(() => window.__promptSettle.ok(null));
+  await sleep(150);
+  b = await box(a);
+  check('H2 resolved with the pointer away: the hint reads "Sent. Waiting for bravo to pick it up."', b.hint === SENT && b.color === MUTED && b.value === '', J(b));
+  check('H3 and the phase reaches collapsed within 1.5 s', await waitPhase(a, 'collapsed', 1500), J(await phaseOf(a)));
+  await a.close();
+
+  // away, held, rejected: stays open until the pointer returns and leaves
+  const f = await openPage({ tag: 'hold-failure' });
+  await openCard(f);
+  await holdPrompt(f);
+  await clickBox(f);
+  await f.keyboard.type('keep me');
+  await fire(f, 'hover', false);
+  await f.keyboard.press('Enter');
+  await sleep(800);
+  await f.evaluate(() => window.__promptSettle.no('inbox is not a socket'));
+  await sleep(1000);
+  b = await box(f);
+  check('H4 pointer away, rejected: 1 s later the panel is still expanded, the draft is kept and the hint reads "This session isn\'t reachable." in amber', (await phaseOf(f)) === 'expanded' && b.value === 'keep me' && b.hint === FAILED && b.color === AMBER, J({ phase: await phaseOf(f), b }));
+  await fire(f, 'hover', true);
+  await sleep(600);
+  check('H5 the pointer coming back keeps it open with the failed hint', (await phaseOf(f)) === 'expanded' && (await box(f)).hint === FAILED, J({ phase: await phaseOf(f), b: await box(f) }));
+  await fire(f, 'hover', false);
+  check('H6 a hover out after that collapses it', await waitPhase(f, 'collapsed', 2000), J(await phaseOf(f)));
+  await f.close();
+
+  // pointer on the panel, rejected: nothing is held
+  const o = await openPage({ tag: 'hold-on-panel' });
+  await openCard(o);
+  await holdPrompt(o);
+  await typeAndSend(o, 'here');
+  await o.evaluate(() => window.__promptSettle.no('inbox is not a socket'));
+  await sleep(300);
+  b = await box(o);
+  check('H7 pointer on the panel, rejected: the panel stays expanded with the failed hint and the draft', (await phaseOf(o)) === 'expanded' && b.hint === FAILED && b.value === 'here', J({ phase: await phaseOf(o), b }));
+  await fire(o, 'hover', false);
+  check('H8 a later hover out collapses it as usual', await waitPhase(o, 'collapsed', 2000), J(await phaseOf(o)));
+  await o.close();
+
+  // pointer leaves, returns, leaves again while sending: the pointer is away at the failure
+  const r = await openPage({ tag: 'hold-reenter' });
+  await openCard(r);
+  await holdPrompt(r);
+  await clickBox(r);
+  await r.keyboard.type('again');
+  await fire(r, 'hover', false);
+  await r.keyboard.press('Enter');
+  await sleep(200);
+  await fire(r, 'hover', true);
+  await sleep(100);
+  await fire(r, 'hover', false);
+  await sleep(500);
+  await r.evaluate(() => window.__promptSettle.no('inbox is not a socket'));
+  await sleep(1000);
+  b = await box(r);
+  check('H9 hover true then false while sending, then rejected: it still holds, expanded with the draft and the failed hint', (await phaseOf(r)) === 'expanded' && b.value === 'again' && b.hint === FAILED && b.color === AMBER, J({ phase: await phaseOf(r), b }));
+  await r.close();
+}
+
 async function scenarioReach() {
   for (const [name, reach, hint] of [
     ['none', { kind: 'none' }, NO_INBOX],
@@ -569,7 +646,7 @@ async function scenarioReach() {
   await page.close();
 }
 
-for (const s of [scenarioLook, scenarioType, scenarioPadding, scenarioHoverOut, scenarioIme, scenarioEscStays, scenarioKeyFalse, scenarioLeaveCard, scenarioNoCard, scenarioDelivery, scenarioReach]) {
+for (const s of [scenarioLook, scenarioType, scenarioPadding, scenarioHoverOut, scenarioIme, scenarioEscStays, scenarioKeyFalse, scenarioLeaveCard, scenarioNoCard, scenarioDelivery, scenarioHold, scenarioReach]) {
   try { await s(); } catch (e) { check(`${s.name} ran`, false, e.stack || String(e)); }
 }
 await browser.close();
