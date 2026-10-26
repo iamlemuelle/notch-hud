@@ -306,7 +306,6 @@
     s.setProperty('--content-l', (L.stage.width - L.open.width) / 2 + 'px');
     s.setProperty('--open-w', L.open.width + 'px');
     s.setProperty('--open-h', L.open.height + 'px');
-    if (!L.theater) return;
     s.setProperty('--theater-l', (L.stage.width - L.theater.width) / 2 + 'px');
     s.setProperty('--theater-w', L.theater.width + 'px');
     s.setProperty('--theater-h', L.theater.height + 'px');
@@ -648,14 +647,11 @@
   // The window shrinks only once the shape is back, so no transparent window is left over the menu bar: to the pill
   // once collapsed, and from the stage to the open window once the stage has closed.
   function settleWindow() {
-    const unpinned = !clipRunning() && winMode === 'theater' && phase !== 'theater';
+    const unpinned = stageClosing() && !clipRunning();
     if (phase === 'collapsed' && winMode !== 'pill' && !clipRunning()) winMode = 'pill';
     else if (unpinned) winMode = 'open';
     sendSurface();
-    if (unpinned && closingStage) {
-      closingStage = false;
-      if (phase === 'expanded' && !hovered) onLeave();
-    }
+    if (unpinned && phase === 'expanded' && !hovered) onLeave();
   }
   panel.addEventListener('transitionend', (e) => { if (e.target === panel && e.propertyName === 'clip-path') settleWindow(); });
 
@@ -704,7 +700,7 @@
       if (shapeAt === 'pill') { layerRest(content); layerRest(banner); setPhase('collapsed'); } else collapse();
     } else if (phase === 'banner') later(250, closeBanner);
     else if (phase === 'peek') later(250, unpeek);
-    else if (phase === 'expanded' && !typing && !holding() && !closingStage) later(250, collapse);
+    else if (phase === 'expanded' && !typing && !holding() && !stageClosing()) later(250, collapse);
     // The stage is pinned: leaving it changes nothing.
   }
   // A start that waited for the window keeps any timer a hover set meanwhile (the leave grace, or the expand).
@@ -807,7 +803,8 @@
   let dragging = false; // files are over the panel (the `drag` event)
   let dropShown = false;
   let dropTimer = null; // shows a rejected drop's error, holding the panel open
-  let closingStage = false; // the stage closed and the clip is on its way back to the open shape
+  // The stage closed and the clip is on its way back: the window is still the stage's.
+  const stageClosing = () => winMode === 'theater' && phase !== 'theater';
   function showDrop(on, bad = false) {
     dropShown = on;
     $('drop').classList.toggle('on', on);
@@ -840,9 +837,10 @@
   function openTheater(v) {
     dragging = false;
     endDropError();
+    // The art leaves with the stage's start; marked gone now, so hiding the drop target does not fade it back in.
+    artWhere = 'hidden';
     showDrop(false);
     $('tvName').textContent = v.name;
-    closingStage = false;
     cancelTimer();
     bannerSong = null;
     enter('theater', 'theater', () => {
@@ -859,17 +857,15 @@
   // only then does a pointer that is away collapse the panel.
   function closeTheater() {
     if (phase !== 'theater') return;
-    closingStage = true;
     layerOut(theater);
     clip(openShape(), SPRING.ms, SPRING.css);
     moveArt('card', SPRING.ms, SPRING.css);
     layerIn(content);
     setPhase('expanded');
   }
-  // The close button never takes the keyboard.
+  // The close button never takes the keyboard: the stage stays pinned while you type elsewhere, so it has no Esc.
   $('vClose').addEventListener('pointerdown', (e) => e.preventDefault());
   $('vClose').addEventListener('click', closeTheater);
-  document.addEventListener('keydown', (e) => { if (phase === 'theater' && e.key === 'Escape') { e.preventDefault(); closeTheater(); } });
 
   // ---- media and sessions ----
   function fmt(sec) {

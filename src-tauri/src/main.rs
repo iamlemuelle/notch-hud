@@ -415,26 +415,33 @@ fn on_drag_drop(app: &AppHandle, event: &DragDropEvent) {
         DragDropEvent::Leave => set_dragging(app, false),
         DragDropEvent::Drop { paths, .. } if !paths.is_empty() => {
             DRAGGING.store(false, Ordering::Relaxed);
-            let parsed = match paths.as_slice() {
-                [path] => video::parse_path(path),
-                _ => Err("more than one file".into()),
-            };
-            match parsed {
-                Ok(v) => {
-                    if trace_on() {
-                        eprintln!("video: opened {}", v.name);
-                    }
-                    let _ = app.emit("video", &v);
-                }
-                Err(reason) => {
-                    if trace_on() {
-                        eprintln!("video: rejected {reason}");
-                    }
-                    let _ = app.emit("video-rejected", reason);
-                }
-            }
+            // Off the main thread: resolving a path on a stalled network volume can block.
+            let paths = paths.clone();
+            let app = app.clone();
+            std::thread::spawn(move || dropped(&app, &paths));
         }
         _ => {}
+    }
+}
+
+fn dropped(app: &AppHandle, paths: &[std::path::PathBuf]) {
+    let parsed = match paths {
+        [path] => video::parse_path(path),
+        _ => Err("more than one file".into()),
+    };
+    match parsed {
+        Ok(v) => {
+            if trace_on() {
+                eprintln!("video: opened {}", v.name);
+            }
+            let _ = app.emit("video", &v);
+        }
+        Err(reason) => {
+            if trace_on() {
+                eprintln!("video: rejected {reason}");
+            }
+            let _ = app.emit("video-rejected", reason);
+        }
     }
 }
 

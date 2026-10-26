@@ -224,8 +224,9 @@ Finder drag ─▶ WryWebView (Tauri DragDrop: paths) ─▶ video::parse_path �
   springs `open` → `theater` (366 ms), the music and session layers fade out in 80 ms, and the video layer fades in
   (140 ms, 80 ms delay). Close reverses it, and the window shrinks to `open` on the clip's `transitionend`, mirroring
   "shrink only after the shape is back" (`CONTRACT.md` section 8 "Window").
-- **Pinned.** In `theater`, hover-out doesn't collapse; close or Esc (while key) leaves it. Close pauses and
-  releases the `src`.
+- **Pinned.** In `theater`, hover-out doesn't collapse; close leaves it. Esc was planned "while key", but the
+  stage never takes the keyboard (it stays pinned while you type elsewhere), so Phase 7 ships without it. Close
+  pauses and releases the `src`.
 - **Now Playing loop.** WebKit may publish the panel's own video to Now Playing [unverified]; then the adapter would
   report notch-hud itself and fire a song banner. `media.rs` drops tracks whose `bundleIdentifier` is the app's own
   (`dev.lem.notchhud`, `tauri.conf.json:4`).

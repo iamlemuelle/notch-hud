@@ -904,7 +904,9 @@ pub fn layout(notch_width: f64, notch_height: f64, screen_width: f64, screen_hei
 - `shape_size(layout, Theater)` is `theater`.
 - `window_size(layout, Open)` is (`open.width + 2 * MARGIN`, `max(open.height, detail.height) + MARGIN`), replacing
   `stage.width` for the width, so the open window stays 452 x 396. `window_size(layout, Theater)` is
-  (`theater.width + 2 * MARGIN`, `theater.height + MARGIN`): 640 x 436 on a 32 pt notch. `Surface::window_size`'s
+  (`theater.width + 2 * MARGIN`, `max(theater.height, open.height, detail.height) + MARGIN`): 640 x 436 on a 32 pt
+  notch. The floor keeps the spring back to the list or the card inside the window when a narrow screen makes the
+  stage shorter than the card (on a 1024 pt screen, 544 x 396 for a 366 pt tall stage). `Surface::window_size`'s
   floor applies to `Open` only.
 - Trace: `window: theater <width>x<height>` like the other modes.
 - Page: `#theater` is a child of `#panel` at x `(stage.width - theater.width) / 2`, `theater.width` x
@@ -920,14 +922,15 @@ pub fn layout(notch_width: f64, notch_height: f64, screen_width: f64, screen_hei
 |---|---|---|---|
 | any | `video` | theater | window `theater` first (the grow rule of "Window"); then ears brighten, the clip springs to `theater`, `#content` and `#banner` fade out (80 ms, as collapse does), `#theater` fades in like `#content` (140 ms `ease-out`, 80 ms delay), and the art goes to the card's place at opacity 0 while the avatar and count go to the ear, both with the spring. Typing ends; a pending phase timer is cancelled |
 | theater | hover in, hover out, `drag` | theater | nothing: the stage is pinned (decision D7) |
-| theater | close click, or Esc while the panel is key | expanded | `#theater` fades out (80 ms), the clip springs to the open shape (`detail` when the card is shown, else `open`), art to the card and `#content` in, both as in Expand |
+| theater | close click | expanded | `#theater` fades out (80 ms), the clip springs to the open shape (`detail` when the card is shown, else `open`), art to the card and `#content` in, both as in Expand |
 | expanded, after closing the stage | the clip's `transitionend` | expanded | window `open`; then, when the latest `hover` was `false`, hover out as usual (collapse after 250 ms) |
 
 - Shrink: the window stays `theater` while the clip goes back, and becomes `open` once no `clip-path` transition is
   running on `#panel` and the phase is not `theater` (on `transitionend`, or at once when the clip changed without
   one). Hover out does not start the collapse until then. Collapsing while the window is `theater` still shrinks to
   the pill as before.
-- The close button keeps DOM focus where it is and never calls `focus`.
+- The close button keeps DOM focus where it is and never calls `focus`. The stage never takes the keyboard (it stays
+  pinned while you type in another app), so there is no Esc: the panel is never key in `theater`.
 - Reduced motion: as for the other phases (the clip jumps, layers fade 120 ms linear, the art fades out and in).
 
 ## 9. App bundle (`scripts/build-app.sh`)
@@ -1429,10 +1432,11 @@ pub fn parse_path(path: &Path) -> Result<Video, String>;
 
 - `parse_path(path)`, in order: `Err("not an absolute path")` for a relative path; the path is canonicalized
   (`std::fs::canonicalize`: absolute, `.` and `..` removed, every symlink resolved), `Err("cannot resolve: <io
-  error>")` when that fails; `Err("not a regular file")` unless the canonical path is a regular file;
-  `Err("not an mp4, m4v or mov file")` unless its extension, compared without case, is in `EXTENSIONS`;
-  `Err("empty file")` when it has no bytes; `Err("file name is not UTF-8")`. Otherwise `Video { path: <canonical
-  path>, name: <its file name> }`. A symlink is judged, named and returned by its target.
+  error>")` when that fails; `Err("cannot read: <io error>")` when its metadata can't be read; `Err("not a
+  regular file")` unless it is a regular file; `Err("not an mp4, m4v or mov file")` unless its extension, compared
+  without case, is in `EXTENSIONS`; `Err("empty file")` when it has no bytes; `Err("path is not UTF-8")` when the
+  canonical path isn't (the page gets it as a JSON string). Otherwise `Video { path: <canonical path>, name: <its file name> }`. A symlink is judged, named
+  and returned by its target.
 
 ### Drop route
 
@@ -1442,7 +1446,8 @@ the window's `WindowEvent::DragDrop`:
 
 - `Enter` with at least one path: emit `drag` `true`. `Leave`: emit `drag` `false`. Each only when it changes the
   dragging state, with the trace `drag: in` / `drag: out`. A drag that carries no file paths is ignored.
-- `Drop` with at least one path: the dragging state ends with no `drag` event. One path is passed to `parse_path`;
+- `Drop` with at least one path: the dragging state ends with no `drag` event. On a new thread (resolving a path on a
+  stalled network volume can block), one path is passed to `parse_path`;
   two or more give `Err("more than one file")`. `Ok(video)`: emit `video` with it, trace `video: opened <name>`.
   `Err(reason)`: emit `video-rejected` with the reason, trace `video: rejected <reason>`.
 - `Over` changes nothing.

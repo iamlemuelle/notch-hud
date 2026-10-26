@@ -107,9 +107,11 @@ pub fn window_size(layout: &Layout, mode: WindowMode) -> Size {
             width: layout.open.width + 2.0 * MARGIN,
             height: layout.open.height.max(layout.detail.height) + MARGIN,
         },
+        // Never shorter than the open window, so the spring back to the list or the card keeps its overshoot room on a
+        // narrow screen.
         WindowMode::Theater => Size {
             width: layout.theater.width + 2.0 * MARGIN,
-            height: layout.theater.height + MARGIN,
+            height: layout.theater.height.max(layout.open.height).max(layout.detail.height) + MARGIN,
         },
     }
 }
