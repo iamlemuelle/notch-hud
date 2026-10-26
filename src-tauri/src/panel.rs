@@ -137,8 +137,9 @@ pub(crate) fn focus(on: bool) -> bool {
         NSApplication::sharedApplication(mtm).deactivate();
         return false;
     }
-    KEY_WANTED.set(true);
-    let was_key = panel.isKeyWindow();
+    // A click on the panel after a give-back can make it key before this runs (measured), so `key: on` keys off the
+    // flag, which is off whenever the keyboard was given back.
+    let was_wanted = KEY_WANTED.replace(true);
     panel.makeKeyWindow();
     // wry's parent view holds one subview, the WKWebView.
     if let Some(webview) = panel.contentView().and_then(|view| view.subviews().firstObject()) {
@@ -147,7 +148,7 @@ pub(crate) fn focus(on: bool) -> bool {
     let key = panel.isKeyWindow();
     if !key {
         KEY_WANTED.set(false);
-    } else if !was_key && trace_on() {
+    } else if !was_wanted && trace_on() {
         eprintln!("key: on");
     }
     key

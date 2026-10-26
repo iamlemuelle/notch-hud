@@ -1232,6 +1232,12 @@ pub fn send(path: &Path, line: &str) -> Result<(), SendError>;
   `prompt: rejected: <reason>` when `parse_prompt`, `route` or `send`'s `Rejected` refused it, or
   `prompt: failed: <reason>` for `send`'s `Failed`. `Err` carries the reason. It never logs the text.
 - `prompt_draft` is gone.
+- `key: on` (amends section 3 "Key focus"): logged when `focus(true)` leaves the panel key and the keyboard had been
+  given back before the call (the flag was off), so a second round of typing after a send or Esc logs it again.
+  Measured: once the panel has been key, a click on it makes it key and `NSApp.isActive` true before `focus(true)`
+  runs, so "not key before the call" missed that round. Known defect, not fixed here: such a click anywhere on the
+  panel, not only on the box, takes the keyboard without typing starting, and keys typed in another app after it are
+  lost to notch-hud until a click elsewhere resigns it (measured with a TextEdit decoy).
 
 #### Page
 
