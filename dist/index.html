@@ -904,7 +904,6 @@
     if (hostResult && !showsHost(hostResult)) hostResult = null;
     $('dRows').hidden = !d;
     $('dEnded').hidden = !!d;
-    $('phint').hidden = !d;
     if (!canSend()) stopTyping();
     if (d) {
       $('dLabel').textContent = d.label;
@@ -1016,6 +1015,7 @@
   function syncPrompt() {
     const open = canSend();
     $('pbox').hidden = !detailShown || hostOnly();
+    $('phint').hidden = !detailShown;
     $('openApp').hidden = !hostOnly();
     if (hostOnly()) $('openApp').textContent = 'Open ' + appName();
     msg.disabled = !open;
