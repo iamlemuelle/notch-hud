@@ -305,6 +305,11 @@ pub fn detail(records: &[Record], id: &str, now: u64) -> Option<Detail>;
     view wry builds). When the panel is still not key afterwards, the flag is cleared again. Under `$NOTCH_TRACE`, log
     `key: on` to stderr when the panel was not key before the call and is key after it.
   - off: clear the flag, then `NSApp.deactivate()`. Nothing calls `resignKeyWindow`.
+  - off, then (amendment, 2026-10-26): `orderOut` and `orderFrontRegardless` on the panel. After a deactivate,
+    AppKit's mouse-down handling makes a panel that was key key again through `_NSShowNonActivatingKeyWindow`,
+    which never asks `canBecomeKeyWindow`; ordered out and back in, the next click goes through
+    `_changeKeyAndMainLimitedOK:`, which asks, so the flag holds (call stacks measured in a spike). The panel is
+    key only between `focus(true)` and the next give-back or resign.
   - The panel observes its own `NSWindowDidResignKeyNotification`. On every resign (`focus(false)`, a click in another
     app) it clears the flag, emits `key` with `false` and, under `$NOTCH_TRACE`, logs `key: off` to stderr.
   - No code reads `NSApp.isActive`: it reads `true` while the panel is key, though the frontmost app has not changed.
@@ -1238,6 +1243,16 @@ pub fn send(path: &Path, line: &str) -> Result<(), SendError>;
   runs, so "not key before the call" missed that round. Known defect, not fixed here: such a click anywhere on the
   panel, not only on the box, takes the keyboard without typing starting, and keys typed in another app after it are
   lost to notch-hud until a click elsewhere resigns it (measured with a TextEdit decoy).
+- Fixed (amendment, 2026-10-26): `focus(false)` orders the panel out and back in after the deactivate (section 3
+  "Key focus"), so a click after a give-back, by Esc, a send or a resign, leaves the panel not key, logs neither
+  `key: on` nor `key: off`, and keys typed afterwards reach the frontmost app. Each give-back still logs `key: off`
+  once. `tests/give_back_test.sh` checks it: type, Esc, a click on the card's Folder row, then a letter that must land
+  in a TextEdit decoy; then the same after a press on the Folder row that ends typing, after a click on Back that ends
+  typing (the card still closes, so the press's `click` reaches the page though the panel was ordered out and in
+  during the press), and after a switch to Finder and back that resigns the panel. Measured: with the plain
+  deactivate the letter after the Folder row click was lost in every run (two spike runs and the check); with the
+  fix it landed in every round. Not fixed here: in some runs, with and without the fix, `hover: out` arrives while
+  the pointer is on the card (once right after the box took the keyboard), so the panel collapses when typing ends.
 
 #### Page
 

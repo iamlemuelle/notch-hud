@@ -135,10 +135,15 @@ pub(crate) fn focus(on: bool) -> bool {
     if !on {
         KEY_WANTED.set(false);
         NSApplication::sharedApplication(mtm).deactivate();
+        // After a deactivate, AppKit's mouse-down handling makes a panel that was key key again through
+        // `_NSShowNonActivatingKeyWindow`, which never asks `canBecomeKeyWindow` (measured). Ordering the panel out
+        // and back in makes the next click ask again.
+        panel.orderOut(None);
+        panel.orderFrontRegardless();
         return false;
     }
-    // A click on the panel after a give-back can make it key before this runs (measured), so `key: on` keys off the
-    // flag, which is off whenever the keyboard was given back.
+    // `key: on` keys off the flag, which is off whenever the keyboard was given back, not off `isKeyWindow`: before
+    // the give-back ordered the panel out and in, a click could make it key before this ran (measured).
     let was_wanted = KEY_WANTED.replace(true);
     panel.makeKeyWindow();
     // wry's parent view holds one subview, the WKWebView.
