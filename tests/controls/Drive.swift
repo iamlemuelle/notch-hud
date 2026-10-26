@@ -112,7 +112,12 @@ func postKey(_ code: CGKeyCode, _ char: Character? = nil, flags: CGEventFlags = 
     for down in [true, false] {
         guard let e = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: down) else { die(2, "cannot create a key event") }
         e.flags = flags
-        if let c = char { let u = Array(String(c).utf16); e.keyboardSetUnicodeString(stringLength: u.count, unicodeString: u) }
+        // A Command chord keeps the layout's own character: with one set by hand, Command-V pasted nothing into
+        // TextEdit (measured 2026-10-26), so Command-V, -H, -W and -Q never acted.
+        if let c = char, !flags.contains(.maskCommand) {
+            let u = Array(String(c).utf16)
+            e.keyboardSetUnicodeString(stringLength: u.count, unicodeString: u)
+        }
         e.post(tap: .cghidEventTap)
         pump(0.03)
     }
