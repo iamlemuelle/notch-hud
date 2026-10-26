@@ -1167,3 +1167,85 @@ Command-W close the panel.
   off returns `false`.
 - Command `prompt_draft(text: String)`: sends nothing. Under `$NOTCH_TRACE` it logs `prompt: draft <n> chars` to
   stderr, `n` being the number of Unicode scalar values in `text` trimmed.
+
+### Sending (amendment, 2026-10-26)
+
+This amends section 11 above and section 2 "Session ids and `detail`"; where it differs, it wins. Return sends the
+draft to the session's inbox socket (`docs/PLAN-video-sessions.md` section 3.3, Phase 5). `prompt_draft` is removed.
+
+#### Model (`src-tauri/src/prompt.rs`, pure except `send`)
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", content = "host", rename_all = "snake_case")]
+pub enum Reach { Inbox, HostOnly(String), None }   // {"kind":"inbox"}, {"kind":"host_only","host":"…"}, {"kind":"none"}
+
+pub struct Prompt { pub id: String, pub text: String }
+pub enum Route { Inbox(PathBuf) }
+pub enum SendError { Rejected(String), Failed(String) }
+
+pub const MAX_CHARS: usize = 8000;
+pub const SUN_PATH_MAX: usize = 104;
+pub const TIMEOUT: Duration = Duration::from_secs(2);
+
+pub fn parse_prompt(id: &str, text: &str) -> Result<Prompt, String>;
+pub fn route(records: &[Record], id: &str) -> Result<Route, String>;
+pub fn reach(records: &[Record], id: &str) -> Reach;
+pub fn frame(text: &str) -> String;
+pub fn send(path: &Path, line: &str) -> Result<(), SendError>;
+```
+
+- `Detail` gains `pub reach: Reach`, set to `reach(records, id)`.
+- `parse_prompt(id, text)`: `Err` when `id` fails `valid_id` (section 2), or when `text` with leading and trailing
+  whitespace trimmed (`str::trim`) has fewer than 1 or more than `MAX_CHARS` Unicode scalar values, or contains NUL.
+  Otherwise `Prompt { id, text }` with `text` trimmed.
+- `route(records, id)`: the main-thread record is the record with `session_id == id` and no `agent_id` (the largest
+  `ts` if there are several). `Err` when there is none, when its `inbox` is null or empty, when the path is not
+  absolute, or when it is `SUN_PATH_MAX` bytes or longer (a `sockaddr_un` path holds 103 bytes and a NUL). The socket
+  is shared when a record of another session has the same `inbox` string: then `Err` unless the newest `ts` among
+  this session's records with that `inbox` is greater than every such record of other sessions (a tie is refused).
+  Otherwise `Route::Inbox(path)`. `records` are those of the last refresh (section 3), so each one is live: written
+  within `TTL_SECS` and not ended by `SessionEnd`.
+- `reach(records, id)`: `Inbox` when `route` is `Ok`; else `HostOnly(host)` when the main-thread record's `host` is a
+  non-empty string; else `None`.
+- `frame(text)`: exactly `{"type":"user","message":{"role":"user","content":<text>}}` followed by `\n`, `<text>` a
+  JSON string (serde_json's escaping: `"`, `\`, and control characters escaped, everything else as UTF-8). Key order
+  is as written. Phase 0 measured this line delivered to CLI and Desktop sessions; plain text is ignored.
+- `send(path, line)`: `Rejected` unless `lstat` (it does not follow a symlink) shows a socket, not a symlink, owned
+  by the app's uid. Then connects with `TIMEOUT` (a connect that has not finished by then is abandoned; it writes
+  nothing), writes `line` with a `TIMEOUT` write timeout, and closes. It reads nothing back: a delivered, a held and
+  an ignored line all close with zero bytes back (measured). `Failed` on a connect or write error or timeout.
+- No auth line. `CLAUDE_CODE_MESSAGING_TOKEN` is never read, recorded or sent: it claims the sender is the session's
+  own child, which notch-hud is not (`docs/PLAN-video-sessions.md` D4).
+
+#### Bridge
+
+- Command `prompt(id: String, text: String) -> Result<(), String>`, run off the main thread like `act`: `parse_prompt`,
+  then `route` against the last refresh's records, then `send(path, frame(text))` on a blocking task. Under
+  `$NOTCH_TRACE` it logs one line to stderr: `prompt: sent <id> <n> chars` (`n` the scalar values of the trimmed text),
+  `prompt: rejected: <reason>` when `parse_prompt`, `route` or `send`'s `Rejected` refused it, or
+  `prompt: failed: <reason>` for `send`'s `Failed`. `Err` carries the reason. It never logs the text.
+- `prompt_draft` is gone.
+
+#### Page
+
+- The box is enabled only while the card shows a session whose `reach.kind` is `inbox`. Otherwise `#msg` is disabled
+  with the placeholder `This session can't take messages` (`#6f6f6f`), the send button is disabled, a press on the box
+  starts no typing, and a `reach` that changes away from `inbox` while typing ends typing. The hint reads
+  `It has no inbox notch-hud can send to.` for `none`, and `It has no inbox notch-hud can send to. Reply in its own
+  app.` for `host_only` (Phase 6 replaces this with an `Open <app>` button).
+- The send key and a click on the send button, with a non-empty trimmed draft and no send in flight, call
+  `invoke('prompt', { id, text })` with the card's id and the trimmed draft, and end typing (section 8 "Typing").
+- Delivery states, shown in `#phint` in place of the typing line and kept when typing ends:
+
+  | State | When | Hint |
+  |---|---|---|
+  | sending | the call is in flight; the send button is disabled | `Sending…` |
+  | sent | the call resolved; the draft is cleared | `Sent. Waiting for <label> to pick it up.` |
+  | picked up | while sent, a redrawn card for that id has a different `event_ts` than at the send, or `status` `working` when it was not | `<label> picked it up.` in `#f5f5f5` |
+  | no reply | 10 s after sent with no pickup | `No reply yet. It may be waiting for approval in that session.` in amber |
+  | failed | the call rejected; the draft stays | `This session isn't reachable.` in amber |
+
+  `<label>` is the card's label at the send. The pickup check also runs on the card already drawn when the call
+  resolves. Starting to type again clears a picked up, no reply or failed state; a sending or sent state stays until it
+  resolves. Closing the card or showing another session clears the state and its timer.

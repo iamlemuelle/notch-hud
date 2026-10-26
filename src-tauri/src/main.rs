@@ -3,6 +3,7 @@ mod hover;
 mod layout;
 mod media;
 mod panel;
+mod prompt;
 mod session;
 
 use std::cell::{Cell, OnceCell, RefCell};
@@ -426,12 +427,38 @@ fn session_detail(id: String) -> Option<Detail> {
     detail
 }
 
-/// Return in the prompt box while sending does not exist yet (CONTRACT.md section 11): traces the draft's length only.
+/// Sends the prompt box's draft to the session's inbox socket, off the main thread (CONTRACT.md section 11, "Sending").
 #[tauri::command]
-fn prompt_draft(text: String) {
-    if trace_on() {
-        eprintln!("prompt: draft {} chars", text.trim().chars().count());
+async fn prompt(id: String, text: String) -> Result<(), String> {
+    let routed = prompt::parse_prompt(&id, &text).and_then(|p| {
+        let records = RECORDS.lock().unwrap_or_else(|e| e.into_inner());
+        Ok((prompt::route(&records.0, &p.id)?, p))
+    });
+    let (prompt::Route::Inbox(path), p) = match routed {
+        Ok(routed) => routed,
+        Err(reason) => return prompt_refused("rejected", reason),
+    };
+    let line = prompt::frame(&p.text);
+    let result = tauri::async_runtime::spawn_blocking(move || prompt::send(&path, &line))
+        .await
+        .unwrap_or_else(|e| Err(prompt::SendError::Failed(format!("prompt task: {e}"))));
+    match result {
+        Ok(()) => {
+            if trace_on() {
+                eprintln!("prompt: sent {} {} chars", p.id, p.text.chars().count());
+            }
+            Ok(())
+        }
+        Err(prompt::SendError::Rejected(reason)) => prompt_refused("rejected", reason),
+        Err(prompt::SendError::Failed(reason)) => prompt_refused("failed", reason),
     }
+}
+
+fn prompt_refused(how: &str, reason: String) -> Result<(), String> {
+    if trace_on() {
+        eprintln!("prompt: {how}: {reason}");
+    }
+    Err(reason)
 }
 
 fn trace_on() -> bool {
@@ -614,7 +641,7 @@ fn main() {
     }
     tauri::Builder::default()
         .menu(panel::edit_menu)
-        .invoke_handler(tauri::generate_handler![sessions, session_detail, prompt_draft, media, act, layout, surface, panel::focus, avatar, mood])
+        .invoke_handler(tauri::generate_handler![sessions, session_detail, prompt, media, act, layout, surface, panel::focus, avatar, mood])
         .setup(|app| {
             let mtm = MainThreadMarker::new().expect("main thread");
             if notched_screen(mtm).is_none() {

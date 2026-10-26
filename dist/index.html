@@ -144,12 +144,16 @@
   #msg { flex: 1; min-width: 0; height: 18px; padding: 0; border: 0; background: transparent; resize: none; outline: none;
     font: 500 12.5px/18px -apple-system, system-ui, sans-serif; color: #f5f5f5; white-space: pre; overflow: hidden; user-select: text; cursor: text; }
   #msg::placeholder { color: #8b8b8b; }
+  #msg:disabled::placeholder { color: #6f6f6f; }
+  .pbox.off, .pbox.off #msg { cursor: default; }
   .send { flex: none; width: 26px; height: 26px; border: 0; padding: 0; border-radius: 50%; background: #f5f5f5; color: #000;
     display: grid; place-items: center; cursor: default; }
   .send:disabled { background: #2a2a2a; color: #6f6f6f; }
   .send:not(:disabled):active { transform: scale(0.92); }
   .phint { height: 14px; margin-top: 6px; font: 500 11px/14px -apple-system, system-ui, sans-serif; color: #8b8b8b; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; }
+  .phint.ok { color: #f5f5f5; }
+  .phint.att { color: #f5a623; }
   @media (prefers-reduced-motion: reduce) { .pbox { transition: none; } }
 
   /* A short look at what changed, shown under the notch while the panel is closed. */
@@ -892,10 +896,9 @@
     $('dRows').hidden = !d;
     $('dEnded').hidden = !!d;
     $('pbox').hidden = $('phint').hidden = !d;
-    if (!d) stopTyping();
+    if (!canSend()) stopTyping();
     if (d) {
       $('dLabel').textContent = d.label;
-      msg.placeholder = 'Message ' + d.label;
       const folder = span(homeTilde(d.cwd));
       folder.title = d.cwd;
       $('dRows').replaceChildren(
@@ -904,6 +907,8 @@
         kv('Last event', span(eventText(d)), span(ago(d.event_ts), 'age')),
         kv('Subagents', span(d.agents ? d.agents + ' running' : 'None')));
     }
+    checkPickup();
+    syncPrompt();
     syncAge();
   }
   function drawAge() {
@@ -954,6 +959,7 @@
     detailSeq++;
     openingId = null;
     stopTyping();
+    setDelivery(null);
     clearDraft();
     if (detailId === null) return;
     detailId = null;
@@ -966,24 +972,65 @@
   });
   $('back').addEventListener('click', () => closeCard(false));
 
-  // ---- prompt box (CONTRACT.md section 11): typing only, so Return traces the draft and sends nothing ----
+  // ---- prompt box (CONTRACT.md section 11, and its "Sending" amendment) ----
   // typing: the box has the keyboard, a substate of `expanded` (section 8) in which hover-out does not collapse.
   let typing = false;
   let focusing = 0; // focus(true) calls not yet returned: a `key` false meanwhile is the previous give-back's
   let hovered = false; // the latest `hover` event
+  // The last send, or null: { state, id, label, status, ts, timer }, with the card's status and event_ts at the send.
+  // state: sending -> sent -> picked | quiet, or sending -> failed.
+  let delivery = null;
   const msg = $('msg');
   const draftText = () => msg.value.trim();
+  const canSend = () => !!detailShown && !!detailShown.reach && detailShown.reach.kind === 'inbox';
+  const TYPING_HINT = 'Return to send, Shift+Return for a new line, Esc to stop typing';
+  const NO_INBOX = 'It has no inbox notch-hud can send to.';
+  const DELIVERY_HINT = {
+    sending: () => ['Sending\u2026', ''],
+    sent: (label) => ['Sent. Waiting for ' + label + ' to pick it up.', ''],
+    picked: (label) => [label + ' picked it up.', 'ok'],
+    quiet: () => ['No reply yet. It may be waiting for approval in that session.', 'att'],
+    failed: () => ['This session isn\'t reachable.', 'att'],
+  };
+  function hint() {
+    if (detailShown && !canSend()) {
+      return [detailShown.reach && detailShown.reach.kind === 'host_only' ? NO_INBOX + ' Reply in its own app.' : NO_INBOX, ''];
+    }
+    if (delivery) return DELIVERY_HINT[delivery.state](delivery.label);
+    return [typing ? TYPING_HINT : '', ''];
+  }
   function syncPrompt() {
-    $('send').disabled = !draftText();
+    const open = canSend();
+    msg.disabled = !open;
+    if (detailShown) msg.placeholder = open ? 'Message ' + detailShown.label : 'This session can\'t take messages';
+    $('send').disabled = !open || !draftText() || (!!delivery && delivery.state === 'sending');
     $('pbox').classList.toggle('typing', typing);
-    $('phint').textContent = typing ? 'Return to send, Shift+Return for a new line, Esc to stop typing' : '';
+    $('pbox').classList.toggle('off', !open);
+    const [text, tone] = hint();
+    $('phint').textContent = text;
+    $('phint').className = 'phint' + (tone ? ' ' + tone : '');
   }
   function clearDraft() {
     msg.value = '';
     syncPrompt();
   }
+  function setDelivery(next) {
+    if (delivery) clearTimeout(delivery.timer);
+    delivery = next;
+    syncPrompt();
+  }
+  // A delivered message fires UserPromptSubmit, so the session's next hook event confirms it.
+  function checkPickup() {
+    const d = detailShown;
+    if (!delivery || delivery.state !== 'sent' || !d || d.id !== delivery.id) return;
+    if (d.event_ts !== delivery.ts || (d.status === 'working' && delivery.status !== 'working')) {
+      clearTimeout(delivery.timer);
+      delivery.state = 'picked';
+    }
+  }
   function startTyping() {
-    if (typing || phase !== 'expanded' || !detailShown) return;
+    if (typing || phase !== 'expanded' || !canSend()) return;
+    if (delivery && delivery.state !== 'sending' && delivery.state !== 'sent') setDelivery(null);
     typing = true;
     cancelTimer();
     syncPrompt();
@@ -1001,23 +1048,39 @@
     window.__TAURI__.core.invoke('focus', { on: false }).catch(() => {});
     if (phase === 'expanded' && !hovered) onLeave();
   }
-  function draft() {
-    const text = draftText();
-    if (text) window.__TAURI__.core.invoke('prompt_draft', { text }).catch(() => {});
+  function sendDraft() {
+    const text = draftText(), d = detailShown;
+    if (!text || !canSend() || (delivery && delivery.state === 'sending')) return;
+    const sent = { state: 'sending', id: d.id, label: d.label, status: d.status, ts: d.event_ts, timer: null };
+    setDelivery(sent);
+    stopTyping();
+    window.__TAURI__.core.invoke('prompt', { id: d.id, text }).then(() => {
+      if (delivery !== sent) return;
+      // A draft typed while the send was in flight is kept.
+      if (draftText() === text) msg.value = '';
+      sent.state = 'sent';
+      sent.timer = setTimeout(() => { if (delivery === sent && sent.state === 'sent') { sent.state = 'quiet'; syncPrompt(); } }, 10000);
+      checkPickup();
+      syncPrompt();
+    }, () => {
+      if (delivery !== sent) return;
+      sent.state = 'failed';
+      syncPrompt();
+    });
   }
   $('pbox').addEventListener('pointerdown', (e) => {
     // A press on the box outside the text area, the send button included, leaves DOM focus where it is.
     if (e.target !== msg) e.preventDefault();
     if (!e.target.closest('#send')) startTyping();
   });
-  $('send').addEventListener('click', draft);
+  $('send').addEventListener('click', sendDraft);
   msg.addEventListener('input', syncPrompt);
   document.addEventListener('pointerdown', (e) => { if (typing && !$('pbox').contains(e.target)) stopTyping(); }, true);
   document.addEventListener('keydown', (e) => {
     // WebKit ends a composition before the keydown that commits it, so that keydown has isComposing false and code 229.
     if (!typing || e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Escape') { e.preventDefault(); stopTyping(); }
-    else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); draft(); }
+    else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendDraft(); }
   });
 
   // Ends the pending change, if any, and shows the latest media the app sent.
