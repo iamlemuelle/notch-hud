@@ -1,11 +1,12 @@
 //! Sends the prompt box's text to a Claude Code session's inbox socket. See CONTRACT.md section 11, "Sending".
 
-use std::io::Write;
+use std::io::{ErrorKind, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::session::{valid_id, Record};
 
@@ -103,6 +104,16 @@ pub fn frame(text: &str) -> String {
 
 extern "C" {
     fn getuid() -> u32;
+    fn getpeereid(socket: i32, euid: *mut u32, egid: *mut u32) -> i32;
+}
+
+/// The uid gate, for the socket file's owner and for the listener behind it.
+pub fn check_owner(what: &str, owner: u32, me: u32) -> Result<(), SendError> {
+    if owner == me {
+        Ok(())
+    } else {
+        Err(SendError::Rejected(format!("{what} belongs to uid {owner}, not {me}")))
+    }
 }
 
 pub fn send(path: &Path, line: &str) -> Result<(), SendError> {
@@ -115,12 +126,38 @@ pub fn send(path: &Path, line: &str) -> Result<(), SendError> {
         return Err(SendError::Rejected("inbox is not a socket".into()));
     }
     // SAFETY: getuid has no preconditions and cannot fail.
-    if meta.uid() != unsafe { getuid() } {
-        return Err(SendError::Rejected("inbox belongs to another user".into()));
-    }
+    let me = unsafe { getuid() };
+    check_owner("inbox", meta.uid(), me)?;
     let mut stream = connect(path)?;
-    stream.set_write_timeout(Some(TIMEOUT)).map_err(|e| SendError::Failed(format!("write timeout: {e}")))?;
-    stream.write_all(line.as_bytes()).map_err(|e| SendError::Failed(format!("write: {e}")))
+    // The path is resolved again by connect, so the listener itself is checked too.
+    let (mut euid, mut egid) = (0, 0);
+    // SAFETY: the fd is the open stream's, and both out pointers are valid for the call.
+    if unsafe { getpeereid(stream.as_raw_fd(), &mut euid, &mut egid) } != 0 {
+        return Err(SendError::Failed(format!("getpeereid: {}", std::io::Error::last_os_error())));
+    }
+    check_owner("inbox listener", euid, me)?;
+    write_line(&mut stream, line.as_bytes())
+}
+
+/// Writes `line` within one `TIMEOUT` in all: a socket's write timeout bounds each write, not the line.
+fn write_line(stream: &mut UnixStream, line: &[u8]) -> Result<(), SendError> {
+    let fail = |why: String, sent: usize| SendError::Failed(format!("{why} after {sent} of {} bytes", line.len()));
+    let deadline = Instant::now() + TIMEOUT;
+    let mut sent = 0;
+    while sent < line.len() {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(fail("write timed out".into(), sent));
+        }
+        stream.set_write_timeout(Some(left)).map_err(|e| fail(format!("write timeout: {e}"), sent))?;
+        match stream.write(&line[sent..]) {
+            Ok(0) => return Err(fail("write: closed".into(), sent)),
+            Ok(n) => sent += n,
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => return Err(fail(format!("write: {e}"), sent)),
+        }
+    }
+    Ok(())
 }
 
 /// std has no connect timeout for Unix sockets, so the connect runs on its own thread. One that finishes after the

@@ -1192,6 +1192,7 @@ pub fn parse_prompt(id: &str, text: &str) -> Result<Prompt, String>;
 pub fn route(records: &[Record], id: &str) -> Result<Route, String>;
 pub fn reach(records: &[Record], id: &str) -> Reach;
 pub fn frame(text: &str) -> String;
+pub fn check_owner(what: &str, owner: u32, me: u32) -> Result<(), SendError>;
 pub fn send(path: &Path, line: &str) -> Result<(), SendError>;
 ```
 
@@ -1211,10 +1212,15 @@ pub fn send(path: &Path, line: &str) -> Result<(), SendError>;
 - `frame(text)`: exactly `{"type":"user","message":{"role":"user","content":<text>}}` followed by `\n`, `<text>` a
   JSON string (serde_json's escaping: `"`, `\`, and control characters escaped, everything else as UTF-8). Key order
   is as written. Phase 0 measured this line delivered to CLI and Desktop sessions; plain text is ignored.
+- `check_owner(what, owner, me)`: `Ok` when `owner == me`, else `Rejected` naming `what` and both uids.
 - `send(path, line)`: `Rejected` unless `lstat` (it does not follow a symlink) shows a socket, not a symlink, owned
-  by the app's uid. Then connects with `TIMEOUT` (a connect that has not finished by then is abandoned; it writes
-  nothing), writes `line` with a `TIMEOUT` write timeout, and closes. It reads nothing back: a delivered, a held and
-  an ignored line all close with zero bytes back (measured). `Failed` on a connect or write error or timeout.
+  by the app's uid (`check_owner`). Then connects with `TIMEOUT` (a connect that has not finished by then is
+  abandoned; it writes nothing). The connect resolves the path again, so the listener's uid (`getpeereid`) must also
+  pass `check_owner`, else `Rejected` with nothing written. Then it writes `line` within one `TIMEOUT` for the whole
+  line (each write's timeout is the time left), and closes. It reads nothing back: a delivered, a held and an ignored
+  line all close with zero bytes back (measured). `Failed` on a connect or write error or timeout; a write failure's
+  reason ends `after <sent> of <total> bytes`. A partial line has no closing brace or newline, so it is not valid
+  JSON [inferred: not measured how Claude Code treats it].
 - No auth line. `CLAUDE_CODE_MESSAGING_TOKEN` is never read, recorded or sent: it claims the sender is the session's
   own child, which notch-hud is not (`docs/PLAN-video-sessions.md` D4).
 
@@ -1247,5 +1253,10 @@ pub fn send(path: &Path, line: &str) -> Result<(), SendError>;
   | failed | the call rejected; the draft stays | `This session isn't reachable.` in amber |
 
   `<label>` is the card's label at the send. The pickup check also runs on the card already drawn when the call
-  resolves. Starting to type again clears a picked up, no reply or failed state; a sending or sent state stays until it
+  resolves. It is weak for a busy session: any hook event after the send counts, so a session already running tools
+  reads as picked up even while it holds the message.
+- Sending ends typing, but a send in flight keeps the card open: while the state is sending, hover out sets no
+  timer. When the call resolves with the latest `hover` `false`: on success the panel collapses after 250 ms, as hover
+  out does; on failure it stays open with the draft and the failed hint until the pointer comes back, and a hover out
+  after that collapses it as usual. A failure while the pointer is on the panel holds nothing. Starting to type again clears a picked up, no reply or failed state; a sending or sent state stays until it
   resolves. Closing the card or showing another session clears the state and its timer.

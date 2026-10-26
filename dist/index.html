@@ -647,7 +647,7 @@
       if (shapeAt === 'pill') { layerRest(content); layerRest(banner); setPhase('collapsed'); } else collapse();
     } else if (phase === 'banner') later(250, closeBanner);
     else if (phase === 'peek') later(250, unpeek);
-    else if (phase === 'expanded' && !typing) later(250, collapse);
+    else if (phase === 'expanded' && !typing && !holding()) later(250, collapse);
   }
   // A start that waited for the window keeps any timer a hover set meanwhile (the leave grace, or the expand).
   function toPeek() {
@@ -977,9 +977,12 @@
   let typing = false;
   let focusing = 0; // focus(true) calls not yet returned: a `key` false meanwhile is the previous give-back's
   let hovered = false; // the latest `hover` event
-  // The last send, or null: { state, id, label, status, ts, timer }, with the card's status and event_ts at the send.
-  // state: sending -> sent -> picked | quiet, or sending -> failed.
+  // The last send, or null: { state, id, label, status, ts, timer, seen }, with the card's status and event_ts at the
+  // send. state: sending -> sent -> picked | quiet, or sending -> failed. `seen`: the pointer was on the panel since
+  // the failure.
   let delivery = null;
+  // A send in flight, or a failure the pointer has not come back to, keeps the card open: collapsing would drop it.
+  const holding = () => !!delivery && (delivery.state === 'sending' || (delivery.state === 'failed' && !delivery.seen));
   const msg = $('msg');
   const draftText = () => msg.value.trim();
   const canSend = () => !!detailShown && !!detailShown.reach && detailShown.reach.kind === 'inbox';
@@ -1019,14 +1022,19 @@
     delivery = next;
     syncPrompt();
   }
+  // Moves `entry` from state `from` to `to` when it is still the current send in that state; returns whether it did.
+  function advance(entry, from, to) {
+    if (delivery !== entry || entry.state !== from) return false;
+    clearTimeout(entry.timer);
+    entry.state = to;
+    syncPrompt();
+    return true;
+  }
   // A delivered message fires UserPromptSubmit, so the session's next hook event confirms it.
   function checkPickup() {
     const d = detailShown;
-    if (!delivery || delivery.state !== 'sent' || !d || d.id !== delivery.id) return;
-    if (d.event_ts !== delivery.ts || (d.status === 'working' && delivery.status !== 'working')) {
-      clearTimeout(delivery.timer);
-      delivery.state = 'picked';
-    }
+    if (!delivery || !d || d.id !== delivery.id) return;
+    if (d.event_ts !== delivery.ts || (d.status === 'working' && delivery.status !== 'working')) advance(delivery, 'sent', 'picked');
   }
   function startTyping() {
     if (typing || phase !== 'expanded' || !canSend()) return;
@@ -1051,22 +1059,17 @@
   function sendDraft() {
     const text = draftText(), d = detailShown;
     if (!text || !canSend() || (delivery && delivery.state === 'sending')) return;
-    const sent = { state: 'sending', id: d.id, label: d.label, status: d.status, ts: d.event_ts, timer: null };
+    const sent = { state: 'sending', id: d.id, label: d.label, status: d.status, ts: d.event_ts, timer: null, seen: false };
     setDelivery(sent);
     stopTyping();
     window.__TAURI__.core.invoke('prompt', { id: d.id, text }).then(() => {
-      if (delivery !== sent) return;
       // A draft typed while the send was in flight is kept.
-      if (draftText() === text) msg.value = '';
-      sent.state = 'sent';
-      sent.timer = setTimeout(() => { if (delivery === sent && sent.state === 'sent') { sent.state = 'quiet'; syncPrompt(); } }, 10000);
+      if (delivery === sent && draftText() === text) msg.value = '';
+      if (!advance(sent, 'sending', 'sent')) return;
+      sent.timer = setTimeout(() => advance(sent, 'sent', 'quiet'), 10000);
       checkPickup();
-      syncPrompt();
-    }, () => {
-      if (delivery !== sent) return;
-      sent.state = 'failed';
-      syncPrompt();
-    });
+      if (phase === 'expanded' && !hovered) onLeave();
+    }, () => { if (delivery === sent) sent.seen = hovered; advance(sent, 'sending', 'failed'); });
   }
   $('pbox').addEventListener('pointerdown', (e) => {
     // A press on the box outside the text area, the send button included, leaves DOM focus where it is.
@@ -1179,6 +1182,7 @@
   tauri.event.listen('layout', (e) => applyLayout(e.payload));
   tauri.event.listen('hover', (e) => {
     hovered = !!e.payload;
+    if (e.payload && delivery && delivery.state === 'failed') delivery.seen = true;
     if (e.payload) onEnter();
     else {
       onLeave();
