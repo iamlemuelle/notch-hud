@@ -107,7 +107,10 @@ sleep 0.8
 # The box: card top 196, header 18, 4 pt, four 22 pt rows, 10 pt, so 316..350 pt below the panel top.
 km="$(lines "$applog")"
 "$drive" click "$app" $((x0 + 120)) 333 >/dev/null 2>&1 || flunk "click the box"
-if wait_for "$applog" 3 'key: on' "$km"; then pass "a click on the box made the panel key: key: on"; else flunk "no 'key: on' after the click on the box"; fi
+if wait_for "$applog" 3 'key: on' "$km"; then pass "a click on the box made the panel key: key: on"; else
+  # Without the keyboard, the keys below would go to whatever app is in front.
+  flunk "no 'key: on' after the click on the box; the test stops before posting keys"; exit 1
+fi
 front_is_textedit "after the panel took the keyboard"
 
 dm="$(lines "$applog")"
