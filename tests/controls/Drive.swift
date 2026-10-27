@@ -70,8 +70,10 @@ func windows() -> [Win] {
     }
 }
 
+// The panel hangs from the screen top; 600 pt covers the tallest window it takes, the video stage's (CONTRACT.md
+// section 8, "Theater").
 func panel(of pid: Int32) -> CGRect? {
-    windows().first { $0.pid == pid && $0.bounds.minY.magnitude < 1 && $0.bounds.width >= 200 && $0.bounds.height <= 400 }?.bounds
+    windows().first { $0.pid == pid && $0.bounds.minY.magnitude < 1 && $0.bounds.width >= 200 && $0.bounds.height <= 600 }?.bounds
 }
 
 // The test is only valid when the click lands on the test app's own window.
