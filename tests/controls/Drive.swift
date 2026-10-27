@@ -50,8 +50,18 @@ func restorePasteboard() {
         return it
     })
 }
+// `dragfile` runs an NSApplication, which makes this process the active app; quitting would then hand activation to
+// whichever app is next, possibly the app under test. It gives it back to the app that was frontmost instead.
+var activeBefore: NSRunningApplication? = nil
+func handBack() {
+    guard let app = activeBefore else { return }
+    activeBefore = nil
+    app.activate(options: [])
+    RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+}
 func die(_ code: Int32, _ s: String) -> Never {
     restorePasteboard()
+    handBack()
     FileHandle.standardError.write((s + "\n").data(using: .utf8)!)
     exit(code)
 }
@@ -84,7 +94,7 @@ func requireTopmost(_ pid: Int32, at p: CGPoint) {
     guard let top = windows().first(where: { $0.bounds.contains(p) && $0.layer != cursorLevel }) else { die(2, "no window under (\(p.x), \(p.y))") }
     if top.pid != pid {
         let cursor = CGEvent(source: nil)?.location ?? .zero
-        die(2, "the window under (\(Int(p.x)), \(Int(p.y))) belongs to pid \(top.pid), not the test app \(pid) (its panel: \(panel(of: pid).map { "\($0)" } ?? "none"), cursor at \(cursor)): another notch-hud on top, or the panel collapsed?")
+        die(2, "the window under (\(Int(p.x)), \(Int(p.y))) belongs to pid \(top.pid), not the test app \(pid) (its panel: \(panel(of: pid).map { "\($0)" } ?? "none"), cursor at \(cursor), front to back: \(stack(at: p))): another notch-hud on top, or the panel collapsed?")
     }
 }
 
@@ -192,6 +202,7 @@ final class FileDragSource: NSView, NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         out(operation.isEmpty ? "not dropped" : "dropped")
+        handBack()
         exit(operation.isEmpty ? 1 : 0)
     }
 }
@@ -317,6 +328,7 @@ case "dragfile":
     guard FileManager.default.fileExists(atPath: path) else { die(2, "no file at \(path)") }
     let target = CGPoint(x: num(4), y: num(5))
     let start = CGPoint(x: target.x, y: target.y + 200)
+    activeBefore = NSWorkspace.shared.frontmostApplication
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
     // A non-activating panel above the menu bar's level, so the press neither activates this process nor misses.
