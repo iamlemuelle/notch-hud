@@ -340,7 +340,12 @@ case "dragfile":
     source.contentView = FileDragSource(frame: NSRect(origin: .zero, size: frame.size), url: URL(fileURLWithPath: path))
     source.orderFrontRegardless()
     DispatchQueue.global().async {
-        Thread.sleep(forTimeInterval: 0.4)
+        // The panel can take a while to reach the screen on a loaded machine: wait up to 3 s for it to be on top.
+        let cursorLevel = Int(CGWindowLevelForKey(.cursorWindow))
+        for _ in 0..<60 {
+            if windows().first(where: { $0.bounds.contains(start) && $0.layer != cursorLevel })?.pid == getpid() { break }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
         requireTopmost(getpid(), at: start)
         requireTopmost(pid, at: target)
         post(.mouseMoved, start); Thread.sleep(forTimeInterval: 0.15)

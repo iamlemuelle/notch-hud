@@ -129,7 +129,8 @@ if ! wait_for "$applog" 15 'page: loaded'; then flunk "page loads"; echo "--- ap
 if ! wait_for "$applog" 15 '"total":1'; then flunk "the app sees the session"; echo "--- app.log"; cat "$applog"; finish 1; fi
 pass "page loaded and the app sees the session"
 
-"$drive" watch >"$watchlog" 2>&1 & watcher=$!
+# The watcher's lines also go through the timestamper, into watch-times.log, to line activations up with app.log.
+"$drive" watch > >(tee "$watchlog" | perl -MTime::HiRes=time -ne 'BEGIN { $| = 1 } printf "%.3f %s", time, $_' >"$tmp/watch-times.log") 2>&1 & watcher=$!
 wait_for "$watchlog" 5 watching || { echo "FAIL activation watcher did not start"; exit 2; }
 sleep 1.5
 away
@@ -184,5 +185,5 @@ if since "$applog" "$am" | grep -qE 'window: theater|video: opened'; then flunk 
 # e. the app was never activated.
 if grep -q "^activated $app " "$watchlog"; then flunk "the app was activated"; grep "^activated $app " "$watchlog"; else pass "no activation of the app (pid $app)"; fi
 
-if [ "$fail" -ne 0 ]; then echo "--- app.log"; cat "$applog"; echo "--- watch.log"; cat "$watchlog"; fi
+if [ "$fail" -ne 0 ]; then echo "--- app.log"; cat "$applog"; echo "--- watch.log (timed)"; cat "$tmp/watch-times.log"; fi
 finish "$fail"
