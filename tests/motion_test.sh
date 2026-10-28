@@ -35,7 +35,7 @@ read -r notch_w notch_h < <("$drive" notch) || { echo "SKIP no notched display";
 read -r screen_x screen_y screen_w screen_h < <("$drive" screen) || { echo "SKIP no notched display"; exit 2; }
 
 # Window sizes of CONTRACT.md section 8 for this notch: pill = notch + 2 * 60 ears; banner = 380 + 2 * 16 wide and
-# banner height (notch + 46) + 16 tall; open = stage 452 wide, max(open height, detail height 380) + 16 tall. The open height is
+# banner height (notch + 46) + 16 tall; open = 420 + 2 * 16 = 452 wide, max(open height, detail height 380) + 16 tall. The open height is
 # 196 + 18 + 4 + 22 * shown_rows + 14 whatever the media is (254 for one row), so the window is always 396 tall.
 pill_w=$((notch_w + 120)); pill_h=$notch_h
 banner_w=412; banner_h=$((notch_h + 62))

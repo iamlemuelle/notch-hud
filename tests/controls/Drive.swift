@@ -18,6 +18,10 @@
 //   drive screen                    prints "<x> <y> <w> <h>" of the notched screen in global top-left coordinates
 //   drive click <pid> <x> <y>       a left click
 //   drive drag <pid> <x0> <x1> <y> <steps>   press at x0, drag in <steps> moves to x1, release
+//   drive dragfile <pid> <path> <x> <y>   drags the file at <path> (as Finder does: a file URL) from a small window of
+//                                   this process 200 pt below the point onto the point, which must be on the app's
+//                                   window, holds it there 1.5 s and releases; prints "dropped" (exit 0) when the app
+//                                   took the drop, "not dropped" (exit 1) when it did not
 //   drive type <text>               posts a key down and up per character (a-z and space only), to whatever has the keyboard
 //   drive key <return|escape>       posts that key
 //   drive cmd <letter>              posts Command and that letter (a-z)
@@ -46,8 +50,18 @@ func restorePasteboard() {
         return it
     })
 }
+// `dragfile` runs an NSApplication, which makes this process the active app; quitting would then hand activation to
+// whichever app is next, possibly the app under test. It gives it back to the app that was frontmost instead.
+var activeBefore: NSRunningApplication? = nil
+func handBack() {
+    guard let app = activeBefore else { return }
+    activeBefore = nil
+    app.activate(options: [])
+    RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+}
 func die(_ code: Int32, _ s: String) -> Never {
     restorePasteboard()
+    handBack()
     FileHandle.standardError.write((s + "\n").data(using: .utf8)!)
     exit(code)
 }
@@ -66,8 +80,10 @@ func windows() -> [Win] {
     }
 }
 
+// The panel hangs from the screen top; 600 pt covers the tallest window it takes, the video stage's (CONTRACT.md
+// section 8, "Theater").
 func panel(of pid: Int32) -> CGRect? {
-    windows().first { $0.pid == pid && $0.bounds.minY.magnitude < 1 && $0.bounds.width >= 200 && $0.bounds.height <= 400 }?.bounds
+    windows().first { $0.pid == pid && $0.bounds.minY.magnitude < 1 && $0.bounds.width >= 200 && $0.bounds.height <= 600 }?.bounds
 }
 
 // The test is only valid when the click lands on the test app's own window.
@@ -78,7 +94,7 @@ func requireTopmost(_ pid: Int32, at p: CGPoint) {
     guard let top = windows().first(where: { $0.bounds.contains(p) && $0.layer != cursorLevel }) else { die(2, "no window under (\(p.x), \(p.y))") }
     if top.pid != pid {
         let cursor = CGEvent(source: nil)?.location ?? .zero
-        die(2, "the window under (\(Int(p.x)), \(Int(p.y))) belongs to pid \(top.pid), not the test app \(pid) (its panel: \(panel(of: pid).map { "\($0)" } ?? "none"), cursor at \(cursor)): another notch-hud on top, or the panel collapsed?")
+        die(2, "the window under (\(Int(p.x)), \(Int(p.y))) belongs to pid \(top.pid), not the test app \(pid) (its panel: \(panel(of: pid).map { "\($0)" } ?? "none"), cursor at \(cursor), front to back: \(stack(at: p))): another notch-hud on top, or the panel collapsed?")
     }
 }
 
@@ -100,7 +116,7 @@ func notched() -> NSScreen? { NSScreen.screens.first { $0.safeAreaInsets.top > 0
 func pump(_ s: Double) { RunLoop.current.run(until: Date().addingTimeInterval(s)) }
 
 let a = CommandLine.arguments
-guard a.count >= 2 else { die(2, "usage: drive <access|cursor|warp|move|front|watch|hover|bounds|notch|screen|click|drag|type|key|cmd|paste|axtext|axclose|quit> ...") }
+guard a.count >= 2 else { die(2, "usage: drive <access|cursor|warp|move|front|watch|hover|bounds|notch|screen|click|drag|dragfile|type|key|cmd|paste|axtext|axclose|quit> ...") }
 
 func num(_ i: Int) -> Double {
     guard a.count > i else { die(2, "missing argument \(i)") }
@@ -158,6 +174,36 @@ func pasteboardItems() -> [[NSPasteboard.PasteboardType: Data]] {
         var m: [NSPasteboard.PasteboardType: Data] = [:]
         for t in item.types { if let d = item.data(forType: t) { m[t] = d } }
         return m
+    }
+}
+
+// The drag source for `dragfile`: dragging in it starts a drag session carrying one file URL.
+final class FileDragSource: NSView, NSDraggingSource {
+    let url: URL
+    var started = false
+    init(frame: NSRect, url: URL) {
+        self.url = url
+        super.init(frame: frame)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.systemBlue.setFill()
+        dirtyRect.fill()
+    }
+    override func mouseDown(with event: NSEvent) {}
+    override func mouseDragged(with event: NSEvent) {
+        guard !started else { return }
+        started = true
+        let item = NSDraggingItem(pasteboardWriter: url as NSURL)
+        item.setDraggingFrame(bounds, contents: NSWorkspace.shared.icon(forFile: url.path))
+        beginDraggingSession(with: [item], event: event, source: self)
+    }
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        out(operation.isEmpty ? "not dropped" : "dropped")
+        handBack()
+        exit(operation.isEmpty ? 1 : 0)
     }
 }
 
@@ -274,6 +320,61 @@ case "drag":
     pump(0.08)
     FileHandle.standardError.write("drag: before up: \(stack(at: end))\n".data(using: .utf8)!)
     post(.leftMouseUp, end); pump(0.1)
+
+case "dragfile":
+    guard a.count > 5 else { die(2, "usage: drive dragfile <pid> <path> <x> <y>") }
+    let pid = pidArg()
+    let path = a[3]
+    guard FileManager.default.fileExists(atPath: path) else { die(2, "no file at \(path)") }
+    let target = CGPoint(x: num(4), y: num(5))
+    let start = CGPoint(x: target.x, y: target.y + 200)
+    activeBefore = NSWorkspace.shared.frontmostApplication
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    // A non-activating panel above the menu bar's level, so the press neither activates this process nor misses.
+    let side: CGFloat = 48
+    let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+    let frame = NSRect(x: start.x - side / 2, y: primaryHeight - start.y - side / 2, width: side, height: side)
+    let source = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    source.level = .popUpMenu
+    // On every Space, as notch-hud's panel is: activating the previous app at the end of the first drag can switch the
+    // notched screen to a full-screen Space, where a plain window would not show.
+    source.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+    source.contentView = FileDragSource(frame: NSRect(origin: .zero, size: frame.size), url: URL(fileURLWithPath: path))
+    source.orderFrontRegardless()
+    DispatchQueue.global().async {
+        // The panel can take a while to reach the screen on a loaded machine: wait up to 3 s for it to be on top.
+        let cursorLevel = Int(CGWindowLevelForKey(.cursorWindow))
+        for _ in 0..<60 {
+            if windows().first(where: { $0.bounds.contains(start) && $0.layer != cursorLevel })?.pid == getpid() { break }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if windows().first(where: { $0.bounds.contains(start) && $0.layer != cursorLevel })?.pid != getpid() {
+            let all = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+            let mine = all.filter { $0[kCGWindowOwnerPID as String] as? Int32 == getpid() }
+                .map { "\($0[kCGWindowBounds as String] ?? "?") onscreen=\($0[kCGWindowIsOnscreen as String] ?? false) layer=\($0[kCGWindowLayer as String] ?? "?")" }
+            FileHandle.standardError.write("dragfile: this process's windows: \(mine)\n".data(using: .utf8)!)
+        }
+        requireTopmost(getpid(), at: start)
+        requireTopmost(pid, at: target)
+        post(.mouseMoved, start); Thread.sleep(forTimeInterval: 0.15)
+        post(.leftMouseDown, start); Thread.sleep(forTimeInterval: 0.1)
+        let steps = 30
+        for i in 1...steps {
+            let f = Double(i) / Double(steps)
+            post(.leftMouseDragged, CGPoint(x: start.x + (target.x - start.x) * f, y: start.y + (target.y - start.y) * f))
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        // Hold while the panel opens; 1 pt moves keep the destination hearing from the drag.
+        for i in 0..<30 {
+            post(.leftMouseDragged, CGPoint(x: target.x + Double(i % 2), y: target.y))
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        post(.leftMouseUp, target)
+        Thread.sleep(forTimeInterval: 3)
+        die(1, "the drag session did not end within 3 s of the release")
+    }
+    app.run()
 
 case "type":
     guard a.count > 2 else { die(2, "missing text") }

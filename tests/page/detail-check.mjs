@@ -26,19 +26,20 @@ try {
 }
 setTimeout(() => { console.log('FAIL watchdog: the run took longer than 240 s'); process.exit(1); }, 240000).unref();
 
-// Contract numbers (section 8): stage 452 x 982, pill 305 x 32, open 420 x 254 for one row (a "N more" row adds 22),
+// Contract numbers (section 8): stage 640 x 982, pill 305 x 32, open 420 x 254 for one row (a "N more" row adds 22),
 // detail 420 x 380 (radius 22), the open window 452 x 396.
 const LAYOUT = {
-  stage: { width: 452, height: 982 },
+  stage: { width: 640, height: 982 },
   pill: { width: 305, height: 32 },
   peek: { width: 309, height: 36 },
   banner: { width: 380, height: 78 },
   open: { width: 420, height: 342 },
   detail: { width: 420, height: 380 },
+  theater: { width: 608, height: 420 },
   ear: 60,
 };
 const WINDOW = { pill: { w: 305, h: 32 }, banner: { w: 412, h: 94 }, open: { w: 452, h: 396 } };
-const STAGE = { w: 452, h: 982 };
+const STAGE = { w: 640, h: 982 };
 const AMBER = 'rgb(245, 166, 35)';
 
 const results = [];

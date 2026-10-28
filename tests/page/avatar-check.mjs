@@ -32,20 +32,21 @@ try {
 setTimeout(() => { console.log('FAIL watchdog: the run took longer than 240 s'); process.exit(1); }, 240000).unref();
 
 // ---------------------------------------------------------------------------------------------------------------
-// Contract numbers. Stage 452 wide, pill 305 x 32 (a 185 pt notch), open 420 x 254 for one row.
+// Contract numbers. Stage 640 wide, pill 305 x 32 (a 185 pt notch), open 420 x 254 for one row.
 const LAYOUT = {
-  stage: { width: 452, height: 982 },
+  stage: { width: 640, height: 982 },
   pill: { width: 305, height: 32 },
   peek: { width: 309, height: 36 },
   banner: { width: 380, height: 78 },
   open: { width: 420, height: 254 },
   detail: { width: 420, height: 380 }, // section 8, Detail: (420, DETAIL_HEIGHT 380) whatever the rows
+  theater: { width: 608, height: 420 },
   ear: 60,
 };
 // The open window is max(open, detail) + 16 = 396 high (section 8, Detail), 452 wide.
 const WINDOW = { pill: { w: 305, h: 32 }, banner: { w: 412, h: 94 }, open: { w: 452, h: 396 } };
-const PILL_L = 73.5;
-const CONTENT_L = 16;
+const PILL_L = 167.5;
+const CONTENT_L = 110;
 const AMBER = 'rgb(245, 166, 35)';
 const TEXT = 'rgb(245, 245, 245)';
 const GREEN = 'rgb(52, 208, 88)';

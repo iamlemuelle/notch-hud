@@ -1,5 +1,5 @@
 #!/bin/bash
-# Page checks for CONTRACT.md section 8 (panel motion, banners, the grow-then-shrink window) and section 10 "Page" (the
+# Page checks for CONTRACT.md section 8 (panel motion, banners, the grow-then-shrink window, the video stage) and section 10 "Page" (the
 # avatar), section 4 "Detail card" (the session detail) and section 11 (the prompt box: typing, sending and its delivery states; the Open <app> button for a session with no inbox): dist/index.html runs in
 # headless Chromium against a fake Tauri bridge. It moves no cursor and needs no display.
 #
@@ -35,6 +35,10 @@ rc=$?
 [ "$rc" -eq 1 ] && status=1
 [ "$rc" -eq 2 ] && [ "$status" -eq 0 ] && status=2
 node "$root/tests/page/open-host-check.mjs"
+rc=$?
+[ "$rc" -eq 1 ] && status=1
+[ "$rc" -eq 2 ] && [ "$status" -eq 0 ] && status=2
+node "$root/tests/page/theater-check.mjs"
 rc=$?
 [ "$rc" -eq 1 ] && status=1
 [ "$rc" -eq 2 ] && [ "$status" -eq 0 ] && status=2

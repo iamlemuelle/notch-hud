@@ -209,7 +209,7 @@ Finder drag ─▶ WryWebView (Tauri DragDrop: paths) ─▶ video::parse_path �
 - **`video.rs` (new, pure), `CONTRACT.md` new section 12 "Video".** `parse_path(p) -> Result<Video, String>`:
   canonical absolute path, a regular file, extension in `mp4 m4v mov`, size > 0. One `Video { path, name }` at a
   time. The scope is widened per file at runtime; no static `$HOME/**` scope.
-- **Config (in the Phase 8 PR, not now).** `protocol-asset` on `tauri` (`Cargo.toml:10`);
+- **Config (in the Phase 8 PR; Phase 7 needs none).** `protocol-asset` on `tauri` (`Cargo.toml:10`);
   `app.security.assetProtocol: { enable: true, scope: [] }` (`tauri.conf.json:10`).
 - **Expanded size.** `THEATER_WIDTH` = 608. Video 576 × 324 (16:9, `object-fit: contain`) at (16,
   `notch_height + 8`), then 8 pt, a 36 pt control row (play/pause, seek as in section 7, close), then 12 pt. So
@@ -224,8 +224,9 @@ Finder drag ─▶ WryWebView (Tauri DragDrop: paths) ─▶ video::parse_path �
   springs `open` → `theater` (366 ms), the music and session layers fade out in 80 ms, and the video layer fades in
   (140 ms, 80 ms delay). Close reverses it, and the window shrinks to `open` on the clip's `transitionend`, mirroring
   "shrink only after the shape is back" (`CONTRACT.md` section 8 "Window").
-- **Pinned.** In `theater`, hover-out doesn't collapse; close or Esc (while key) leaves it. Close pauses and
-  releases the `src`.
+- **Pinned.** In `theater`, hover-out doesn't collapse; close leaves it. Esc was planned "while key", but the
+  stage never takes the keyboard (it stays pinned while you type elsewhere), so Phase 7 ships without it. Close
+  pauses and releases the `src`.
 - **Now Playing loop.** WebKit may publish the panel's own video to Now Playing [unverified]; then the adapter would
   report notch-hud itself and fire a song banner. `media.rs` drops tracks whose `bundleIdentifier` is the app's own
   (`dev.lem.notchhud`, `tauri.conf.json:4`).
@@ -323,23 +324,29 @@ with a temp `NOTCH_DIR` and kills only its own pids.
 - **Check:** a seeded record with `host: "com.apple.TextEdit"` and no `inbox`; a click on `Open TextEdit` makes
   TextEdit frontmost within 2 s.
 
-### Phase 7: theater layout (#1)
+### Phase 7: theater layout and the drop route (#1)
 
 - **Outcome:** `Layout.theater`, `Shape::Theater`, `WindowMode::Theater`, the stage and open-window width change,
-  the theater phase with an empty stage.
-- **Checks:** `cargo test`: literal `theater`, `stage` and `window_size` values, and that the `Open` window stays
-  452 pt wide. `tests/motion_test.sh` extension: trace `window: theater 640x436`, then `window: open` and `window:
-  pill` after close and leave.
+  the theater phase, `video.rs` with `parse_path`, and the drop route: dropping a file on the notch opens the stage,
+  which shows the file's name and controls but plays nothing. A file dragged over the notch opens it like hover and
+  shows the drop target; a drop that isn't a video shows its error. Moved here from Phase 8 (2026-10-26) so the stage
+  has a real trigger.
+- **Checks:**
+  - `cargo test`: literal `theater`, `stage` and `window_size` values, that the `Open` window stays 452 pt wide, and
+    the half-width clamp on a 1100 pt screen; `parse_path` against temp files (good mp4, directory, `.txt`, empty
+    file, symlink canonicalized).
+  - `tests/page_test.sh`: the theater phase, the pin and the close.
+  - New `tests/video_test.sh` (Terminal panel): `Drive.swift` gains a file drag; it drags a committed fixture
+    (`tests/video/fixtures/clip.mp4`, under 50 KB) onto the pill; trace `video: opened clip.mp4`, then `window:
+    theater 640x436`, then `window: open` and `window: pill` after close and leave.
 
 ### Phase 8: local video
 
-- **Outcome:** `video.rs`, the drop route, the runtime asset scope, the `video` event, `<video>` in the theater,
-  the own-bundle Now Playing filter, and the config change.
-- **Checks:** `cargo test`: `parse_path` against temp files (good mp4, directory, `.txt`, empty file, symlink
-  canonicalized). New `tests/video_test.sh` (Terminal panel): `Drive.swift` gains a file drag; it drags a committed
-  30 KB fixture (`tests/video/fixtures/clip.mp4`) onto the pill; trace `video: playing clip.mp4`, then two
-  `video: t=` lines ≥ 1 s apart with a growing time; close → `window: open`. `scripts/perf.sh` while playing a 1080p
-  file, to measure Tauri's protocol handler serving many small ranges.
+- **Outcome:** playback: the runtime asset scope, the `<video>` element in the theater, the own-bundle Now Playing
+  filter, and the config change.
+- **Checks:** `tests/video_test.sh` extension (Terminal panel): after the drop, trace `video: playing clip.mp4`, then
+  two `video: t=` lines ≥ 1 s apart with a growing time; close → `window: open`. `scripts/perf.sh` while playing a
+  1080p file, to measure Tauri's protocol handler serving many small ranges.
 
 ## 5. Risks and decisions
 

@@ -173,6 +173,31 @@
   #bSub { margin-top: 1px; font: 500 11.5px/15px -apple-system, system-ui, sans-serif; color: rgba(245, 245, 245, 0.62);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #bannerBars { left: calc(var(--banner-l) + 344px); top: calc(var(--pill-h) + 14px); opacity: 0; }
+
+  /* The drop target over the music block while files are dragged over the notch (CONTRACT.md section 12). */
+  #drop { position: absolute; left: 16px; top: 40px; width: 388px; height: 144px; border-radius: 13px; background: #000;
+    box-shadow: inset 0 0 0 1px rgba(245, 245, 245, 0.26); display: grid; place-content: center; gap: 4px; text-align: center;
+    opacity: 0; transition: opacity 120ms linear; pointer-events: none; }
+  #drop.on { opacity: 1; }
+  #drop b { font: 600 14px/18px -apple-system, system-ui, sans-serif; }
+  #drop span { font: 500 11.5px/15px -apple-system, system-ui, sans-serif; color: #8b8b8b; }
+  #drop.bad span { color: #f5a623; }
+  @media (prefers-reduced-motion: reduce) { #drop { transition: none; } }
+
+  /* The video stage (CONTRACT.md section 8, "Theater"): a 16:9 picture under the notch, then the control row. */
+  #theater { position: absolute; left: var(--theater-l); top: 0; width: var(--theater-w); height: var(--theater-h); opacity: 0;
+    transform: translateY(4px); pointer-events: none; }
+  #tv { position: absolute; left: 16px; top: calc(var(--pill-h) + 8px); width: calc(var(--theater-w) - 32px); height: var(--picture-h);
+    border-radius: 12px; overflow: hidden; background: #0a0a0a; display: grid; place-items: center; }
+  #tv::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    pointer-events: none; }
+  #tvName { max-width: calc(100% - 64px); font: 600 14px/18px -apple-system, system-ui, sans-serif; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; }
+  #tctl { position: absolute; left: 16px; top: calc(var(--pill-h) + 16px + var(--picture-h)); width: calc(var(--theater-w) - 32px); height: 36px;
+    display: grid; grid-template-columns: 34px 46px minmax(0, 1fr) 46px 34px; align-items: center; gap: 8px; font-weight: 500; font-size: 11px;
+    line-height: 1; color: #8b8b8b; font-variant-numeric: tabular-nums; }
+  #vRem { text-align: right; }
+  #vBar { position: relative; height: 16px; }
 </style>
 </head>
 <body data-phase="collapsed">
@@ -193,6 +218,7 @@
             <button type="button" class="cb main" id="btnMain" aria-label="Pause"><svg class="i-pause" viewBox="0 0 16 16" width="16" height="16"><rect x="3.6" y="2.8" width="3" height="10.4" rx="1" fill="currentColor"/><rect x="9.4" y="2.8" width="3" height="10.4" rx="1" fill="currentColor"/></svg><svg class="i-play" viewBox="0 0 16 16" width="16" height="16"><path d="M4.4 2.9v10.2c0 .5.55.8.97.53l7.85-5.1a.62.62 0 0 0 0-1.06L5.37 2.37c-.42-.27-.97.03-.97.53z" fill="currentColor"/></svg></button>
             <button type="button" class="cb" id="btnNext" aria-label="Next track"><svg viewBox="0 0 16 16" width="16" height="16"><path d="M2.6 3.3v9.4c0 .45.5.72.88.47l7.22-4.7a.56.56 0 0 0 0-.94L3.48 2.83c-.38-.25-.88.02-.88.47z" fill="currentColor"/><rect x="12" y="3" width="2" height="10" rx=".8" fill="currentColor"/></svg></button>
           </div>
+          <div id="drop"><b>Drop to play in the notch</b><span id="dropSub">MP4, M4V or MOV</span></div>
         </div>
         <div class="sess" id="sess">
           <div class="sess-h"><span>Claude Code</span><span id="sessHead"></span></div>
@@ -208,6 +234,16 @@
           </div>
           <button type="button" class="openapp" id="openApp" hidden></button>
           <div class="phint" id="phint"></div>
+        </div>
+      </div>
+      <div id="theater">
+        <div id="tv"><div id="tvName"></div></div>
+        <div id="tctl">
+          <button type="button" class="cb" id="vPlay" aria-label="Play" disabled><svg viewBox="0 0 16 16" width="16" height="16"><path d="M4.4 2.9v10.2c0 .5.55.8.97.53l7.85-5.1a.62.62 0 0 0 0-1.06L5.37 2.37c-.42-.27-.97.03-.97.53z" fill="currentColor"/></svg></button>
+          <span id="vEl">0:00</span>
+          <div id="vBar"><div class="line"></div></div>
+          <span id="vRem"></span>
+          <button type="button" class="cb" id="vClose" aria-label="Close video"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
         </div>
       </div>
       <div id="banner">
@@ -232,7 +268,7 @@
   };
   const $ = (id) => document.getElementById(id);
   const flush = (el) => void el.getBoundingClientRect();
-  const stage = $('stage'), panel = $('panel'), content = $('content'), banner = $('banner'), artEl = $('art');
+  const stage = $('stage'), panel = $('panel'), content = $('content'), banner = $('banner'), artEl = $('art'), theater = $('theater');
   const artLayers = [...artEl.querySelectorAll('.layer')];
 
   // ---- motion (CONTRACT.md section 8, ported from the approved prototype) ----
@@ -244,7 +280,7 @@
     return { ms: Math.round(D * 1000), css: `linear(${pts.join(', ')})` };
   })();
   const EASE = { peek: 'cubic-bezier(0.2, 0, 0, 1)', collapse: 'cubic-bezier(0.4, 0, 1, 1)' };
-  const RADIUS = { pill: 14, peek: 14, banner: 20, open: 22, detail: 22 };
+  const RADIUS = { pill: 14, peek: 14, banner: 20, open: 22, detail: 22, theater: 22 };
   const reducedQuery = matchMedia('(prefers-reduced-motion: reduce)');
   let reduced = reducedQuery.matches;
   let L = null; // the Layout from Rust
@@ -270,6 +306,10 @@
     s.setProperty('--content-l', (L.stage.width - L.open.width) / 2 + 'px');
     s.setProperty('--open-w', L.open.width + 'px');
     s.setProperty('--open-h', L.open.height + 'px');
+    s.setProperty('--theater-l', (L.stage.width - L.theater.width) / 2 + 'px');
+    s.setProperty('--theater-w', L.theater.width + 'px');
+    s.setProperty('--theater-h', L.theater.height + 'px');
+    s.setProperty('--picture-h', (L.theater.width - 32) * 9 / 16 + 'px');
   }
 
   // ---- shape, layers, art ----
@@ -319,9 +359,10 @@
   }
   function artTf(where) { const a = artAt(where); return `translate(${a.x}px, ${a.y}px) scale(${a.s})`; }
   // In the ear a paused cover dims, so the pause glyph beside it reads as the state. The card shows the placeholder
-  // without a track.
+  // without a track, and nothing under the drop target. `hidden` is the card's place at opacity 0, for the stage.
   function artVis(where) {
     const t = shown && shown.track;
+    if (where === 'hidden' || (where === 'card' && dropShown)) return 0;
     if (where !== 'ear') return 1;
     return !t ? 0 : t.playing ? 1 : 0.6;
   }
@@ -590,7 +631,7 @@
   // modeCall: the call that last changed the mode, which is the one that grows the window.
   let winMode = 'pill', placedMode = 'pill', sentMode = 'pill', sentSurface = '';
   let surfaceCall = Promise.resolve(), modeCall = surfaceCall;
-  const HIT = { peek: 'peek', banner: 'banner' };
+  const HIT = { peek: 'peek', banner: 'banner', theater: 'theater' };
   // A rejected call is sent again on the next change.
   function sendSurface() {
     const hit = phase === 'expanded' ? openShape() : HIT[phase] || 'pill', key = winMode + ' ' + hit;
@@ -603,10 +644,14 @@
     sentMode = mode;
   }
   const clipRunning = () => panel.getAnimations().some((a) => a.transitionProperty === 'clip-path' && a.playState === 'running');
-  // The window shrinks to the pill only once the shape is back, so no transparent window is left over the menu bar.
+  // The window shrinks only once the shape is back, so no transparent window is left over the menu bar: to the pill
+  // once collapsed, and from the stage to the open window once the stage has closed.
   function settleWindow() {
+    const unpinned = stageClosing() && !clipRunning();
     if (phase === 'collapsed' && winMode !== 'pill' && !clipRunning()) winMode = 'pill';
+    else if (unpinned) winMode = 'open';
     sendSurface();
+    if (unpinned && phase === 'expanded' && !hovered) onLeave();
   }
   panel.addEventListener('transitionend', (e) => { if (e.target === panel && e.propertyName === 'clip-path') settleWindow(); });
 
@@ -647,14 +692,16 @@
     else if (phase === 'peek') toExpand();
     else if (phase === 'expanded') cancelTimer();
   }
+  // Files over the panel, or a rejected drop's error, hold it open whatever the pointer does.
   function onLeave() {
-    if (!L) return;
+    if (!L || dragging || dropTimer) return;
     if (phase === 'intent') {
       cancelTimer();
       if (shapeAt === 'pill') { layerRest(content); layerRest(banner); setPhase('collapsed'); } else collapse();
     } else if (phase === 'banner') later(250, closeBanner);
     else if (phase === 'peek') later(250, unpeek);
-    else if (phase === 'expanded' && !typing && !holding()) later(250, collapse);
+    else if (phase === 'expanded' && !typing && !holding() && !stageClosing()) later(250, collapse);
+    // The stage is pinned: leaving it changes nothing.
   }
   // A start that waited for the window keeps any timer a hover set meanwhile (the leave grace, or the expand).
   function toPeek() {
@@ -729,12 +776,14 @@
   function syncInstant() {
     clearTimeout(artTimer);
     artTimer = null;
-    const open = phase === 'expanded';
-    clip(open ? openShape() : phase === 'banner' ? 'banner' : phase === 'peek' ? 'peek' : 'pill');
-    if (open) { content.style.transition = 'none'; content.style.opacity = 1; content.style.transform = 'none'; content.style.pointerEvents = 'auto'; }
-    else layerRest(content);
+    const open = phase === 'expanded', staged = phase === 'theater';
+    clip(open ? openShape() : staged ? 'theater' : phase === 'banner' ? 'banner' : phase === 'peek' ? 'peek' : 'pill');
+    for (const [el, on] of [[content, open], [theater, staged]]) {
+      if (on) { el.style.transition = 'none'; el.style.opacity = 1; el.style.transform = 'none'; el.style.pointerEvents = 'auto'; }
+      else layerRest(el);
+    }
     if (phase !== 'banner') layerRest(banner);
-    moveArt(open ? 'card' : phase === 'banner' && artWhere === 'banner' ? 'banner' : 'ear');
+    moveArt(open ? 'card' : staged ? 'hidden' : phase === 'banner' && artWhere === 'banner' ? 'banner' : 'ear');
   }
   function applyLayout(next) {
     const prev = L;
@@ -742,10 +791,82 @@
     applyVars();
     if (!prev) { stage.classList.add('ready'); syncInstant(); return; }
     const moved = prev.stage.width !== next.stage.width || prev.stage.height !== next.stage.height
-      || prev.pill.width !== next.pill.width || prev.pill.height !== next.pill.height;
+      || prev.pill.width !== next.pill.width || prev.pill.height !== next.pill.height
+      || (shapeAt === 'theater' && (prev.theater.width !== next.theater.width || prev.theater.height !== next.theater.height));
     if (moved) { clip(shapeAt); if (!artTimer) moveArt(artWhere); }
     else if (phase === 'expanded' && !detailId && prev.open.height !== next.open.height) clip('open', SPRING.ms, SPRING.css);
   }
+
+  // ---- video stage (CONTRACT.md section 8, "Theater", and section 12) ----
+  // Files dragged over the notch open the panel like hover and show the drop target over the music block; a drop of a
+  // video opens the stage, pinned until it is closed. Phase 8 plays the file; here the stage shows its name.
+  let dragging = false; // files are over the panel (the `drag` event)
+  let dropShown = false;
+  let dropTimer = null; // shows a rejected drop's error, holding the panel open
+  // The stage closed and the clip is on its way back: the window is still the stage's.
+  const stageClosing = () => winMode === 'theater' && phase !== 'theater';
+  function showDrop(on, bad = false) {
+    dropShown = on;
+    $('drop').classList.toggle('on', on);
+    $('drop').classList.toggle('bad', bad);
+    $('dropSub').textContent = bad ? 'That isn\'t a video. Drop an MP4, M4V or MOV.' : 'MP4, M4V or MOV';
+    syncArtOpacity();
+  }
+  function endDropError() {
+    clearTimeout(dropTimer);
+    dropTimer = null;
+  }
+  function onDrag(on) {
+    dragging = on;
+    if (phase === 'theater') return;
+    if (on) { endDropError(); showDrop(true); onEnter(); return; }
+    if (!dropTimer) showDrop(false);
+    if (!hovered) onLeave();
+  }
+  function onRejected() {
+    dragging = false;
+    if (phase === 'theater') return;
+    showDrop(true, true);
+    clearTimeout(dropTimer);
+    dropTimer = setTimeout(() => {
+      dropTimer = null;
+      showDrop(false);
+      if (!hovered) onLeave();
+    }, 2200);
+  }
+  function openTheater(v) {
+    dragging = false;
+    endDropError();
+    // The art leaves with the stage's start; marked gone now, so hiding the drop target does not fade it back in.
+    artWhere = 'hidden';
+    syncEarGlyphs();
+    showDrop(false);
+    $('tvName').textContent = v.name;
+    cancelTimer();
+    bannerSong = null;
+    enter('theater', 'theater', () => {
+      earsBright(true);
+      clip('theater', SPRING.ms, SPRING.css);
+      moveArt('hidden', SPRING.ms, SPRING.css);
+      layerOut(content);
+      layerOut(banner);
+      layerIn(theater);
+    });
+    stopTyping();
+  }
+  // The reverse of opening. The window stays the stage's until the clip is back at the open shape (settleWindow), and
+  // only then does a pointer that is away collapse the panel.
+  function closeTheater() {
+    if (phase !== 'theater') return;
+    layerOut(theater);
+    clip(openShape(), SPRING.ms, SPRING.css);
+    moveArt('card', SPRING.ms, SPRING.css);
+    layerIn(content);
+    setPhase('expanded');
+  }
+  // The close button never takes the keyboard: the stage stays pinned while you type elsewhere, so it has no Esc.
+  $('vClose').addEventListener('pointerdown', (e) => e.preventDefault());
+  $('vClose').addEventListener('click', closeTheater);
 
   // ---- media and sessions ----
   function fmt(sec) {
@@ -1241,6 +1362,9 @@
   tauri.event.listen('records', () => refreshDetail());
   tauri.event.listen('key', (e) => { if (e.payload === false && focusing === 0) stopTyping(); });
   tauri.event.listen('media', (e) => { mediaEvent = true; onMedia(e.payload); });
+  tauri.event.listen('drag', (e) => onDrag(!!e.payload));
+  tauri.event.listen('video', (e) => { if (e.payload && typeof e.payload.name === 'string') openTheater(e.payload); });
+  tauri.event.listen('video-rejected', () => onRejected());
   tauri.core.invoke('layout').then((l) => { if (l && !L) applyLayout(l); });
   tauri.core.invoke('media').then((m) => { if (m && !mediaEvent) onMedia(m); });
   tauri.core.invoke('sessions').then((s) => { if (s && !sessionsEvent) onSessions(s); });

@@ -15,6 +15,7 @@ pub struct Layout {
     pub banner: Size,
     pub open: Size,
     pub detail: Size,
+    pub theater: Size,
     pub ear: f64,
 }
 
@@ -27,6 +28,7 @@ pub enum Shape {
     Banner,
     Open,
     Detail,
+    Theater,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
@@ -35,11 +37,14 @@ pub enum WindowMode {
     Pill,
     Banner,
     Open,
+    Theater,
 }
 
 pub const EAR: f64 = 60.0;
 pub const EXPANDED_WIDTH: f64 = 420.0;
 pub const BANNER_WIDTH: f64 = 380.0;
+/// The video stage's width on a screen at least twice as wide; narrower screens get half their width (decision D8).
+pub const THEATER_WIDTH: f64 = 608.0;
 /// Room around the banner and open shapes for the spring's overshoot.
 pub const MARGIN: f64 = 16.0;
 /// The music block (196), then the session card: header 18, 4, four 22 pt rows, 10, the prompt box 34, 6, a hint
@@ -54,15 +59,27 @@ pub fn expanded_height(rows: usize, total: usize) -> f64 {
     (196 + 18 + 4 + 22 * shown_rows + 14) as f64
 }
 
-pub fn layout(notch_width: f64, notch_height: f64, screen_height: f64, rows: usize, total: usize) -> Layout {
+pub fn layout(
+    notch_width: f64,
+    notch_height: f64,
+    screen_width: f64,
+    screen_height: f64,
+    rows: usize,
+    total: usize,
+) -> Layout {
     let pill = Size { width: notch_width + 2.0 * EAR, height: notch_height };
+    // The video stage: a 16:9 picture inset 16 pt at each side and 8 pt below the notch, then 8 pt, a 36 pt control
+    // row and 12 pt. 608 x (notch + 388) unless half the screen is narrower.
+    let theater_width = THEATER_WIDTH.min(screen_width / 2.0);
+    let picture_height = (theater_width - 32.0) * 9.0 / 16.0;
     Layout {
-        stage: Size { width: EXPANDED_WIDTH + 2.0 * MARGIN, height: screen_height },
+        stage: Size { width: THEATER_WIDTH + 2.0 * MARGIN, height: screen_height },
         pill,
         peek: Size { width: pill.width + 4.0, height: pill.height + 4.0 },
         banner: Size { width: BANNER_WIDTH, height: notch_height + 46.0 },
         open: Size { width: EXPANDED_WIDTH, height: expanded_height(rows, total) },
         detail: Size { width: EXPANDED_WIDTH, height: DETAIL_HEIGHT },
+        theater: Size { width: theater_width, height: notch_height + 8.0 + picture_height + 8.0 + 36.0 + 12.0 },
         ear: EAR,
     }
 }
@@ -74,6 +91,7 @@ pub fn shape_size(layout: &Layout, shape: Shape) -> Size {
         Shape::Banner => layout.banner,
         Shape::Open => layout.open,
         Shape::Detail => layout.detail,
+        Shape::Theater => layout.theater,
     }
 }
 
@@ -86,8 +104,14 @@ pub fn window_size(layout: &Layout, mode: WindowMode) -> Size {
         },
         // As tall as the list or the card, whichever is taller, so switching between them never resizes the window.
         WindowMode::Open => Size {
-            width: layout.stage.width,
+            width: layout.open.width + 2.0 * MARGIN,
             height: layout.open.height.max(layout.detail.height) + MARGIN,
+        },
+        // Never shorter than the open window, so the spring back to the list or the card keeps its overshoot room on a
+        // narrow screen.
+        WindowMode::Theater => Size {
+            width: layout.theater.width + 2.0 * MARGIN,
+            height: layout.theater.height.max(layout.open.height).max(layout.detail.height) + MARGIN,
         },
     }
 }

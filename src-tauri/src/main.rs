@@ -6,10 +6,12 @@ mod media;
 mod panel;
 mod prompt;
 mod session;
+mod video;
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::path::Path;
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -19,7 +21,7 @@ use objc2::{define_class, msg_send, sel, AnyThread, MainThreadOnly};
 use objc2_app_kit::{NSEvent, NSEventMask, NSEventType, NSScreen, NSTrackingArea, NSTrackingAreaOptions};
 use objc2_foundation::{MainThreadMarker, NSObject, NSPoint, NSRect, NSSize};
 use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Emitter, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, DragDropEvent, Emitter, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use avatar::{Avatar, Moods, Pose, Source};
 use hover::{Hover, Input};
@@ -66,10 +68,8 @@ impl Notch {
     }
 
     fn layout(&self) -> Layout {
-        {
         let (rows, total) = latest_counts();
-        layout::layout(self.width, self.height, self.screen.size.height, rows, total)
-    }
+        layout::layout(self.width, self.height, self.screen.size.width, self.screen.size.height, rows, total)
     }
 }
 
@@ -84,6 +84,10 @@ static SURFACE: Mutex<Surface> = Mutex::new(Surface::new());
 static LAYOUT: Mutex<Option<Layout>> = Mutex::new(None);
 static AVATAR: OnceLock<Avatar> = OnceLock::new();
 static POSE: Mutex<Option<Pose>> = Mutex::new(None);
+/// A drag that carries files is over the panel.
+static DRAGGING: AtomicBool = AtomicBool::new(false);
+/// Counts drops, so a parse that finishes after a later drop's is dropped: the newest drop wins.
+static DROPS: AtomicU64 = AtomicU64::new(0);
 /// Wakes the mood thread; the value is whether a session just finished.
 static MOOD_TX: OnceLock<mpsc::Sender<bool>> = OnceLock::new();
 
@@ -177,6 +181,7 @@ fn mode_name(mode: WindowMode) -> &'static str {
         WindowMode::Pill => "pill",
         WindowMode::Banner => "banner",
         WindowMode::Open => "open",
+        WindowMode::Theater => "theater",
     }
 }
 
@@ -402,6 +407,61 @@ fn watch_sessions(app: &AppHandle) {
             Err(_) => timeout,
         };
     }
+}
+
+/// Files dragged over the panel open it like hover; a drop opens the video stage or says why not (CONTRACT.md section
+/// 12). A drag that carries no files is ignored.
+fn on_drag_drop(app: &AppHandle, event: &DragDropEvent) {
+    match event {
+        DragDropEvent::Enter { paths, .. } if !paths.is_empty() => set_dragging(app, true),
+        DragDropEvent::Leave => set_dragging(app, false),
+        DragDropEvent::Drop { paths, .. } if !paths.is_empty() => {
+            DRAGGING.store(false, Ordering::Relaxed);
+            // Off the main thread: resolving a path on a stalled network volume can block.
+            let drop = DROPS.fetch_add(1, Ordering::Relaxed) + 1;
+            let paths = paths.clone();
+            let app = app.clone();
+            std::thread::spawn(move || dropped(&app, &paths, drop));
+        }
+        _ => {}
+    }
+}
+
+fn dropped(app: &AppHandle, paths: &[std::path::PathBuf], drop: u64) {
+    let parsed = match paths {
+        [path] => video::parse_path(path),
+        _ => Err("more than one file".into()),
+    };
+    if DROPS.load(Ordering::Relaxed) != drop {
+        if trace_on() {
+            eprintln!("video: superseded");
+        }
+        return;
+    }
+    match parsed {
+        Ok(v) => {
+            if trace_on() {
+                eprintln!("video: opened {}", v.name);
+            }
+            let _ = app.emit("video", &v);
+        }
+        Err(reason) => {
+            if trace_on() {
+                eprintln!("video: rejected {reason}");
+            }
+            let _ = app.emit("video-rejected", reason);
+        }
+    }
+}
+
+fn set_dragging(app: &AppHandle, on: bool) {
+    if DRAGGING.swap(on, Ordering::Relaxed) == on {
+        return;
+    }
+    if trace_on() {
+        eprintln!("drag: {}", if on { "in" } else { "out" });
+    }
+    let _ = app.emit("drag", on);
 }
 
 #[tauri::command]
@@ -717,6 +777,12 @@ fn main() {
                 })
                 .build()?;
             let _ = APP.set(app.handle().clone());
+            let drop_app = app.handle().clone();
+            window.on_window_event(move |event| {
+                if let WindowEvent::DragDrop(drag) = event {
+                    on_drag_drop(&drop_app, drag);
+                }
+            });
             adopt_panel(mtm, &window);
             monitor_presses(mtm);
             place(app.handle());
