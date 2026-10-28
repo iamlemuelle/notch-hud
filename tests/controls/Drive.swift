@@ -337,6 +337,9 @@ case "dragfile":
     let frame = NSRect(x: start.x - side / 2, y: primaryHeight - start.y - side / 2, width: side, height: side)
     let source = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     source.level = .popUpMenu
+    // On every Space, as notch-hud's panel is: activating the previous app at the end of the first drag can switch the
+    // notched screen to a full-screen Space, where a plain window would not show.
+    source.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
     source.contentView = FileDragSource(frame: NSRect(origin: .zero, size: frame.size), url: URL(fileURLWithPath: path))
     source.orderFrontRegardless()
     DispatchQueue.global().async {
@@ -345,6 +348,12 @@ case "dragfile":
         for _ in 0..<60 {
             if windows().first(where: { $0.bounds.contains(start) && $0.layer != cursorLevel })?.pid == getpid() { break }
             Thread.sleep(forTimeInterval: 0.05)
+        }
+        if windows().first(where: { $0.bounds.contains(start) && $0.layer != cursorLevel })?.pid != getpid() {
+            let all = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+            let mine = all.filter { $0[kCGWindowOwnerPID as String] as? Int32 == getpid() }
+                .map { "\($0[kCGWindowBounds as String] ?? "?") onscreen=\($0[kCGWindowIsOnscreen as String] ?? false) layer=\($0[kCGWindowLayer as String] ?? "?")" }
+            FileHandle.standardError.write("dragfile: this process's windows: \(mine)\n".data(using: .utf8)!)
         }
         requireTopmost(getpid(), at: start)
         requireTopmost(pid, at: target)
